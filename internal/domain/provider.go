@@ -183,12 +183,14 @@ type FetchModelsResult struct {
 
 // ModelRoute 表示单个创作环节的模型路由配置（对应 model_routes）。
 type ModelRoute struct {
-	Stage       PipelineStage `json:"stage"`
-	ProviderID  *int64        `json:"providerId,omitempty"`
-	ModelName   string        `json:"modelName"`
-	Temperature float64       `json:"temperature"`
-	MaxTokens   int           `json:"maxTokens"`
-	UpdatedAt   string        `json:"updatedAt"`
+	Stage              PipelineStage `json:"stage"`
+	ProviderID         *int64        `json:"providerId,omitempty"`
+	ModelName          string        `json:"modelName"`
+	FallbackProviderID *int64        `json:"fallbackProviderId,omitempty"`
+	FallbackModelName  string        `json:"fallbackModelName,omitempty"`
+	Temperature        float64       `json:"temperature"`
+	MaxTokens          int           `json:"maxTokens"`
+	UpdatedAt          string        `json:"updatedAt"`
 }
 
 func (r ModelRoute) Validate() error {
@@ -203,6 +205,36 @@ func (r ModelRoute) Validate() error {
 	}
 	if r.ProviderID != nil && *r.ProviderID <= 0 {
 		return newValidationError("providerId", "供应商 ID 必须大于 0")
+	}
+	if r.FallbackProviderID != nil && *r.FallbackProviderID <= 0 {
+		return newValidationError("fallbackProviderId", "备用供应商 ID 必须大于 0")
+	}
+	return nil
+}
+
+// ModelPricing 表示作者自定义的模型单价（每百万 Token，支持 CNY / USD）。
+type ModelPricing struct {
+	ProviderName    string  `json:"providerName"`
+	ModelName       string  `json:"modelName"`
+	InputPricePerM  float64 `json:"inputPricePerM"`
+	OutputPricePerM float64 `json:"outputPricePerM"`
+	Currency        string  `json:"currency"` // "CNY" | "USD"
+	UpdatedAt       string  `json:"updatedAt,omitempty"`
+}
+
+func (p ModelPricing) Validate() error {
+	if strings.TrimSpace(p.ProviderName) == "" {
+		return newValidationError("providerName", "供应商名称不能为空")
+	}
+	if strings.TrimSpace(p.ModelName) == "" {
+		return newValidationError("modelName", "模型名称不能为空")
+	}
+	if p.InputPricePerM < 0 || p.OutputPricePerM < 0 {
+		return newValidationError("price", "模型单价不能为负数")
+	}
+	cur := strings.ToUpper(strings.TrimSpace(p.Currency))
+	if cur != "" && cur != "CNY" && cur != "USD" {
+		return newValidationError("currency", "币种仅支持 CNY 或 USD")
 	}
 	return nil
 }

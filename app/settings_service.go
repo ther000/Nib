@@ -230,6 +230,43 @@ func (s *SettingsService) SaveModelRoute(ctx context.Context, route domain.Model
 	return st.SaveModelRoute(ctx, route)
 }
 
+// ListModelPricing 返回全部自定义模型单价列表。
+func (s *SettingsService) ListModelPricing(ctx context.Context) ([]domain.ModelPricing, error) {
+	st, err := s.rt.store()
+	if err != nil {
+		return nil, err
+	}
+	items, err := st.ListModelPricing(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		return []domain.ModelPricing{}, nil
+	}
+	return items, nil
+}
+
+// UpsertModelPricing 保存或更新指定供应商+模型的输入/输出单价（每百万 Token）。
+func (s *SettingsService) UpsertModelPricing(ctx context.Context, in domain.ModelPricing) (domain.ModelPricing, error) {
+	if err := in.Validate(); err != nil {
+		return domain.ModelPricing{}, err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return domain.ModelPricing{}, err
+	}
+	return st.UpsertModelPricing(ctx, in)
+}
+
+// DeleteModelPricing 删除指定模型的自定义单价配置。
+func (s *SettingsService) DeleteModelPricing(ctx context.Context, providerName, modelName string) error {
+	st, err := s.rt.store()
+	if err != nil {
+		return err
+	}
+	return st.DeleteModelPricing(ctx, providerName, modelName)
+}
+
 // PickExportDir 调起系统原生文件夹选择对话框；若用户取消则返回空字符串与 nil 错误。
 func (s *SettingsService) PickExportDir(ctx context.Context) (string, error) {
 	picker := s.rt.dirPicker()

@@ -376,7 +376,15 @@ func (s *Store) GetUsageSummary(ctx context.Context, bookID int64) (domain.Usage
 		return domain.UsageSummary{}, mapSQLiteError(err)
 	}
 
-	// 2. 按供应商 + 模型聚合
+	// 2. 先读取自定义单价表（避免在 :memory: 单连接池上与未关闭的 rows 争抢连接死锁）
+	pricingMap := make(map[string]domain.ModelPricing)
+	if pList, pErr := s.ListModelPricing(ctx); pErr == nil {
+		for _, pr := range pList {
+			pricingMap[pr.ProviderName+"\x00"+pr.ModelName] = pr
+		}
+	}
+
+	// 3. 按供应商 + 模型聚合
 	modelRows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT provider_name,
 		       model_name,
@@ -405,6 +413,16 @@ func (s *Store) GetUsageSummary(ctx context.Context, bookID int64) (domain.Usage
 			return domain.UsageSummary{}, mapSQLiteError(err)
 		}
 		ms.TotalTokens = ms.PromptTokens + ms.CompletionTokens
+		if pr, ok := pricingMap[ms.ProviderName+"\x00"+ms.ModelName]; ok {
+			cost := (float64(ms.PromptTokens)*pr.InputPricePerM + float64(ms.CompletionTokens)*pr.OutputPricePerM) / 1_000_000.0
+			ms.EstimatedCost = cost
+			ms.Currency = pr.Currency
+			if pr.Currency == "USD" {
+				summary.EstimatedCostUSD += cost
+			} else {
+				summary.EstimatedCostCNY += cost
+			}
+		}
 		summary.ByModel = append(summary.ByModel, ms)
 	}
 	if err := modelRows.Err(); err != nil {

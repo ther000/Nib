@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BookMarked, Plus, X } from "lucide-react";
+import { BookMarked, Loader2, Plus, Sparkles, X } from "lucide-react";
 import {
   MemoryService,
   type ArcSummary,
@@ -31,6 +31,7 @@ export function ArcSummaryBoard({ latestChapterSeq }: { latestChapterSeq: number
 
   const [editor, setEditor] = useState<ArcSummaryEditorState | null>(null);
   const [saving, setSaving] = useState(false);
+  const [generatingAI, setGeneratingAI] = useState(false);
 
   const volumeMap = useMemo(() => {
     const map = new Map<number, (typeof volumes)[number]>();
@@ -139,6 +140,38 @@ export function ArcSummaryBoard({ latestChapterSeq }: { latestChapterSeq: number
     }
   };
 
+  const handleAIGenerate = async () => {
+    if (!activeBook || generatingAI) return;
+    const level: ArcSummaryLevel = levelFilter === "volume" ? "volume" : "arc_10";
+    const endSeq = latestChapterSeq > 0 ? latestChapterSeq : 10;
+    const startSeq = level === "volume" ? 1 : Math.max(1, endSeq - 9);
+    const volId = level === "volume" && volumes.length > 0 ? volumes[volumes.length - 1]?.id : undefined;
+
+    setGeneratingAI(true);
+    try {
+      const created = await MemoryService.generateArcSummary({
+        bookId: activeBook.id,
+        level,
+        volumeId: volId,
+        startSeq,
+        endSeq,
+      });
+      await fetchSummaries();
+      notify({
+        tone: "ok",
+        message: `AI 已生成第 ${created.startSeq}~${created.endSeq} 章${getArcSummaryLevelLabel(created.level)}`,
+      });
+    } catch (err) {
+      notify({
+        tone: "danger",
+        message: "AI 生成摘要失败",
+        detail: formatErrorMessage(err),
+      });
+    } finally {
+      setGeneratingAI(false);
+    }
+  };
+
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5">
       <div className="mx-auto flex w-full max-w-[1160px] flex-col gap-5">
@@ -172,14 +205,29 @@ export function ArcSummaryBoard({ latestChapterSeq }: { latestChapterSeq: number
             ))}
           </div>
 
-          <button
-            type="button"
-            onClick={openCreate}
-            className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            <span>新建摘要</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={generatingAI || latestChapterSeq <= 0}
+              onClick={() => void handleAIGenerate()}
+              className="flex items-center gap-1.5 rounded-md border border-accent/40 bg-accent-soft px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:border-accent disabled:opacity-40"
+            >
+              {generatingAI ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5" />
+              )}
+              <span>{generatingAI ? "AI 汇总中…" : "AI 自动生成摘要"}</span>
+            </button>
+            <button
+              type="button"
+              onClick={openCreate}
+              className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>手写摘要</span>
+            </button>
+          </div>
         </div>
 
         {/* Summary Cards */}

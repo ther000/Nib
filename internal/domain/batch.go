@@ -411,14 +411,16 @@ type StageUsageStat struct {
 	AvgLatencyMs     int64  `json:"avgLatencyMs"`
 }
 
-// ModelUsageStat 按供应商与模型名称聚合 Token 消耗。
+// ModelUsageStat 按供应商与模型名称聚合 Token 消耗与估算费用。
 type ModelUsageStat struct {
-	ProviderName     string `json:"providerName"`
-	ModelName        string `json:"modelName"`
-	Calls            int    `json:"calls"`
-	PromptTokens     int    `json:"promptTokens"`
-	CompletionTokens int    `json:"completionTokens"`
-	TotalTokens      int    `json:"totalTokens"`
+	ProviderName     string  `json:"providerName"`
+	ModelName        string  `json:"modelName"`
+	Calls            int     `json:"calls"`
+	PromptTokens     int     `json:"promptTokens"`
+	CompletionTokens int     `json:"completionTokens"`
+	TotalTokens      int     `json:"totalTokens"`
+	EstimatedCost    float64 `json:"estimatedCost"`
+	Currency         string  `json:"currency,omitempty"`
 }
 
 // UsageSummary 汇总整本书（或全局）的 Token 消耗统计面板数据。
@@ -428,6 +430,8 @@ type UsageSummary struct {
 	TotalPromptTokens     int              `json:"totalPromptTokens"`
 	TotalCompletionTokens int              `json:"totalCompletionTokens"`
 	TotalTokens           int              `json:"totalTokens"`
+	EstimatedCostCNY      float64          `json:"estimatedCostCny"`
+	EstimatedCostUSD      float64          `json:"estimatedCostUsd"`
 	ByStage               []StageUsageStat `json:"byStage"`
 	ByModel               []ModelUsageStat `json:"byModel"`
 }

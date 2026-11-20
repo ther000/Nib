@@ -151,7 +151,7 @@ func (s *Store) DeleteProvider(ctx context.Context, id int64) error {
 // ListModelRoutes 按固定流水线顺序返回全部 5 环节模型路由。
 func (s *Store) ListModelRoutes(ctx context.Context) ([]domain.ModelRoute, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT stage, provider_id, model_name, temperature, max_tokens, updated_at
+		SELECT stage, provider_id, model_name, fallback_provider_id, fallback_model_name, temperature, max_tokens, updated_at
 		FROM model_routes
 		ORDER BY CASE stage
 			WHEN 'outline' THEN 1
@@ -200,10 +200,15 @@ func (s *Store) SaveModelRoute(ctx context.Context, route domain.ModelRoute) (do
 		maxTokens = 4096
 	}
 	modelName := strings.TrimSpace(route.ModelName)
+	fallbackModelName := strings.TrimSpace(route.FallbackModelName)
 
 	var providerID sql.NullInt64
 	if route.ProviderID != nil {
 		providerID = sql.NullInt64{Int64: *route.ProviderID, Valid: true}
+	}
+	var fallbackProviderID sql.NullInt64
+	if route.FallbackProviderID != nil {
+		fallbackProviderID = sql.NullInt64{Int64: *route.FallbackProviderID, Valid: true}
 	}
 
 	var result domain.ModelRoute
@@ -217,17 +222,28 @@ func (s *Store) SaveModelRoute(ctx context.Context, route domain.ModelRoute) (do
 				return mapSQLiteError(err)
 			}
 		}
+		if fallbackProviderID.Valid {
+			var exists int
+			if err := tx.QueryRowContext(ctx, `SELECT 1 FROM providers WHERE id = ?`, fallbackProviderID.Int64).Scan(&exists); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return fmt.Errorf("fallback provider %d: %w", fallbackProviderID.Int64, domain.ErrNotFound)
+				}
+				return mapSQLiteError(err)
+			}
+		}
 
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO model_routes (stage, provider_id, model_name, temperature, max_tokens, updated_at)
-			VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+			INSERT INTO model_routes (stage, provider_id, model_name, fallback_provider_id, fallback_model_name, temperature, max_tokens, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 			ON CONFLICT(stage) DO UPDATE SET
-				provider_id = excluded.provider_id,
-				model_name  = excluded.model_name,
-				temperature = excluded.temperature,
-				max_tokens  = excluded.max_tokens,
-				updated_at  = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-		`, string(route.Stage), providerID, modelName, route.Temperature, maxTokens); err != nil {
+				provider_id          = excluded.provider_id,
+				model_name           = excluded.model_name,
+				fallback_provider_id = excluded.fallback_provider_id,
+				fallback_model_name  = excluded.fallback_model_name,
+				temperature          = excluded.temperature,
+				max_tokens           = excluded.max_tokens,
+				updated_at           = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+		`, string(route.Stage), providerID, modelName, fallbackProviderID, fallbackModelName, route.Temperature, maxTokens); err != nil {
 			return mapSQLiteError(err)
 		}
 
@@ -281,11 +297,12 @@ func getProviderRow(ctx context.Context, q queryRower, id int64) (domain.Provide
 
 func scanModelRoute(sc rowScanner) (domain.ModelRoute, error) {
 	var (
-		r          domain.ModelRoute
-		stage      string
-		providerID sql.NullInt64
+		r                  domain.ModelRoute
+		stage              string
+		providerID         sql.NullInt64
+		fallbackProviderID sql.NullInt64
 	)
-	if err := sc.Scan(&stage, &providerID, &r.ModelName, &r.Temperature, &r.MaxTokens, &r.UpdatedAt); err != nil {
+	if err := sc.Scan(&stage, &providerID, &r.ModelName, &fallbackProviderID, &r.FallbackModelName, &r.Temperature, &r.MaxTokens, &r.UpdatedAt); err != nil {
 		return domain.ModelRoute{}, mapSQLiteError(err)
 	}
 	r.Stage = domain.PipelineStage(stage)
@@ -293,12 +310,78 @@ func scanModelRoute(sc rowScanner) (domain.ModelRoute, error) {
 		id := providerID.Int64
 		r.ProviderID = &id
 	}
+	if fallbackProviderID.Valid {
+		id := fallbackProviderID.Int64
+		r.FallbackProviderID = &id
+	}
 	return r, nil
+}
+
+// ListModelPricing 返回全部自定义模型单价配置。
+func (s *Store) ListModelPricing(ctx context.Context) ([]domain.ModelPricing, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT provider_name, model_name, input_price_per_m, output_price_per_m, currency, updated_at
+		FROM model_pricing
+		ORDER BY provider_name ASC, model_name ASC
+	`)
+	if err != nil {
+		return nil, mapSQLiteError(err)
+	}
+	defer rows.Close()
+	out := make([]domain.ModelPricing, 0)
+	for rows.Next() {
+		var p domain.ModelPricing
+		if err := rows.Scan(&p.ProviderName, &p.ModelName, &p.InputPricePerM, &p.OutputPricePerM, &p.Currency, &p.UpdatedAt); err != nil {
+			return nil, mapSQLiteError(err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// UpsertModelPricing 保存或更新指定供应商+模型的每百万 Token 单价。
+func (s *Store) UpsertModelPricing(ctx context.Context, in domain.ModelPricing) (domain.ModelPricing, error) {
+	if err := in.Validate(); err != nil {
+		return domain.ModelPricing{}, err
+	}
+	cur := strings.ToUpper(strings.TrimSpace(in.Currency))
+	if cur == "" {
+		cur = "CNY"
+	}
+	prov := strings.TrimSpace(in.ProviderName)
+	model := strings.TrimSpace(in.ModelName)
+	var saved domain.ModelPricing
+	err := s.withWriteTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO model_pricing (provider_name, model_name, input_price_per_m, output_price_per_m, currency, updated_at)
+			VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+			ON CONFLICT(provider_name, model_name) DO UPDATE SET
+				input_price_per_m  = excluded.input_price_per_m,
+				output_price_per_m = excluded.output_price_per_m,
+				currency           = excluded.currency,
+				updated_at         = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+		`, prov, model, in.InputPricePerM, in.OutputPricePerM, cur); err != nil {
+			return mapSQLiteError(err)
+		}
+		return tx.QueryRowContext(ctx, `
+			SELECT provider_name, model_name, input_price_per_m, output_price_per_m, currency, updated_at
+			FROM model_pricing WHERE provider_name = ? AND model_name = ?
+		`, prov, model).Scan(&saved.ProviderName, &saved.ModelName, &saved.InputPricePerM, &saved.OutputPricePerM, &saved.Currency, &saved.UpdatedAt)
+	})
+	return saved, err
+}
+
+// DeleteModelPricing 删除指定模型的自定义单价。
+func (s *Store) DeleteModelPricing(ctx context.Context, providerName, modelName string) error {
+	return s.withWriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `DELETE FROM model_pricing WHERE provider_name = ? AND model_name = ?`, strings.TrimSpace(providerName), strings.TrimSpace(modelName))
+		return mapSQLiteError(err)
+	})
 }
 
 func getModelRouteRow(ctx context.Context, q queryRower, stage domain.PipelineStage) (domain.ModelRoute, error) {
 	row := q.QueryRowContext(ctx, `
-		SELECT stage, provider_id, model_name, temperature, max_tokens, updated_at
+		SELECT stage, provider_id, model_name, fallback_provider_id, fallback_model_name, temperature, max_tokens, updated_at
 		FROM model_routes
 		WHERE stage = ?
 	`, string(stage))

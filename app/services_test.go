@@ -396,6 +396,18 @@ func (f *fakeStore) SaveModelRoute(_ context.Context, route domain.ModelRoute) (
 	return route, nil
 }
 
+func (f *fakeStore) ListModelPricing(_ context.Context) ([]domain.ModelPricing, error) {
+	return []domain.ModelPricing{}, nil
+}
+
+func (f *fakeStore) UpsertModelPricing(_ context.Context, in domain.ModelPricing) (domain.ModelPricing, error) {
+	return in, nil
+}
+
+func (f *fakeStore) DeleteModelPricing(_ context.Context, _, _ string) error {
+	return nil
+}
+
 func (f *fakeStore) Close() error {
 	f.closedCount++
 	return nil

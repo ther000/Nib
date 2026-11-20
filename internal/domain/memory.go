@@ -294,6 +294,34 @@ func (in UpsertArcSummaryInput) Validate() error {
 	return nil
 }
 
+// GenerateArcSummaryRequest 表示由 AI 自动汇总 10 章弧线摘要或卷级摘要的入参。
+type GenerateArcSummaryRequest struct {
+	BookID   int64           `json:"bookId"`
+	Level    ArcSummaryLevel `json:"level"`
+	VolumeID *int64          `json:"volumeId,omitempty"`
+	StartSeq int             `json:"startSeq"`
+	EndSeq   int             `json:"endSeq"`
+}
+
+func (r GenerateArcSummaryRequest) Validate() error {
+	if r.BookID <= 0 {
+		return newValidationError("bookId", "书籍 ID 必须大于 0")
+	}
+	if !r.Level.Valid() {
+		return newValidationError("level", "无效的摘要层级")
+	}
+	if r.Level == ArcSummaryLevelArc10 {
+		if r.StartSeq <= 0 || r.EndSeq < r.StartSeq {
+			return newValidationError("startSeq", "请指定有效的起止章号范围")
+		}
+	} else if r.VolumeID == nil || *r.VolumeID <= 0 {
+		if r.StartSeq <= 0 || r.EndSeq < r.StartSeq {
+			return newValidationError("volumeId", "卷级摘要需指定分卷或有效章号范围")
+		}
+	}
+	return nil
+}
+
 // DeltaNewEntity 表示完章抽取发现的新登场设定实体提案。
 type DeltaNewEntity struct {
 	ID          string            `json:"id"`

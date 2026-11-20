@@ -59,6 +59,9 @@ type Store interface {
 	DeleteProvider(ctx context.Context, id int64) error
 	ListModelRoutes(ctx context.Context) ([]domain.ModelRoute, error)
 	SaveModelRoute(ctx context.Context, route domain.ModelRoute) (domain.ModelRoute, error)
+	ListModelPricing(ctx context.Context) ([]domain.ModelPricing, error)
+	UpsertModelPricing(ctx context.Context, in domain.ModelPricing) (domain.ModelPricing, error)
+	DeleteModelPricing(ctx context.Context, providerName, modelName string) error
 
 	Close() error
 }
@@ -168,9 +171,15 @@ type GenesisEngine interface {
 // AutopilotEngine 定义全自动托管写作流水线接口（由 internal/pipeline 实现，零 MyGo 依赖）。
 type AutopilotEngine interface {
 	StartAutopilot(ctx context.Context, req domain.AutopilotRequest) (domain.AutopilotState, error)
+	ResumeAutopilot(ctx context.Context, bookID int64) (domain.AutopilotState, error)
 	GetAutopilotState(bookID int64) domain.AutopilotState
 	StopAutopilot(bookID int64) (domain.AutopilotState, error)
 	ResolveAutopilotGate(bookID int64, action domain.AutopilotDecisionAction) (domain.AutopilotState, error)
+}
+
+// ArcSummaryGenerator 定义 AI 自动生成 10 章弧线摘要与卷级摘要的接口（由 *pipeline.Runner 实现）。
+type ArcSummaryGenerator interface {
+	GenerateArcSummary(ctx context.Context, req domain.GenerateArcSummaryRequest) (domain.ArcSummary, error)
 }
 
 // DirectorEngine 定义「全局 AI 导演」多步工具操控全书接口（由 internal/pipeline 实现，零 MyGo 依赖）。
@@ -563,6 +572,24 @@ func (r *Runtime) autopilotEngine() (AutopilotEngine, error) {
 	}
 	if ae, ok := r.deps.Pipeline.(AutopilotEngine); ok {
 		return ae, nil
+	}
+	return nil, ErrRuntimeNotReady
+}
+
+func (r *Runtime) arcSummaryGenerator() (ArcSummaryGenerator, error) {
+	if r == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.ready || r.closed {
+		return nil, ErrRuntimeNotReady
+	}
+	if gen, ok := r.deps.Pipeline.(ArcSummaryGenerator); ok {
+		return gen, nil
+	}
+	if gen, ok := r.deps.AutopilotEngine.(ArcSummaryGenerator); ok {
+		return gen, nil
 	}
 	return nil, ErrRuntimeNotReady
 }

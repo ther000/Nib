@@ -22,6 +22,7 @@ import {
 import {
   LibraryService,
   SettingsService,
+  type ModelPricing,
   type ModelRoute,
   type ProviderProtocol,
   type ProviderPublic,
@@ -139,6 +140,70 @@ export function SettingsModal() {
   const [bookExportDir, setBookExportDir] = useState("");
   const [bookTargetWords, setBookTargetWords] = useState("2500");
   const [savingBookSettings, setSavingBookSettings] = useState(false);
+
+  // Model pricing state
+  const [pricingList, setPricingList] = useState<ModelPricing[]>([]);
+  const [pricingProvider, setPricingProvider] = useState("");
+  const [pricingModel, setPricingModel] = useState("");
+  const [pricingInput, setPricingInput] = useState("");
+  const [pricingOutput, setPricingOutput] = useState("");
+  const [pricingCurrency, setPricingCurrency] = useState<"CNY" | "USD">("CNY");
+  const [savingPricing, setSavingPricing] = useState(false);
+
+  const loadPricing = async () => {
+    try {
+      const list = await SettingsService.listModelPricing();
+      setPricingList(list);
+    } catch {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    if (!settingsOpen || tab !== "routes") return;
+    void loadPricing();
+  }, [settingsOpen, tab]);
+
+  const handleSavePricing = async () => {
+    if (!pricingProvider.trim() || !pricingModel.trim()) {
+      notify({ tone: "warn", message: "请填写模型服务名称与模型 ID" });
+      return;
+    }
+    const inPrice = Number.parseFloat(pricingInput) || 0;
+    const outPrice = Number.parseFloat(pricingOutput) || 0;
+    if (inPrice < 0 || outPrice < 0) {
+      notify({ tone: "warn", message: "单价不能为负数" });
+      return;
+    }
+    setSavingPricing(true);
+    try {
+      await SettingsService.upsertModelPricing({
+        providerName: pricingProvider.trim(),
+        modelName: pricingModel.trim(),
+        inputPricePerM: inPrice,
+        outputPricePerM: outPrice,
+        currency: pricingCurrency,
+      });
+      await loadPricing();
+      setPricingModel("");
+      setPricingInput("");
+      setPricingOutput("");
+      notify({ tone: "ok", message: "模型单价已保存，首页将自动计算估算花费" });
+    } catch (err) {
+      notify({ tone: "danger", message: "保存单价失败", detail: formatErrorMessage(err) });
+    } finally {
+      setSavingPricing(false);
+    }
+  };
+
+  const handleDeletePricing = async (providerName: string, modelName: string) => {
+    try {
+      await SettingsService.deleteModelPricing(providerName, modelName);
+      await loadPricing();
+    } catch (err) {
+      notify({ tone: "danger", message: "删除单价失败", detail: formatErrorMessage(err) });
+    }
+  };
 
   // Sync tab when modal opens
   useEffect(() => {
@@ -570,6 +635,11 @@ export function SettingsModal() {
         stage: draft.stage,
         providerId: draft.providerId && draft.providerId > 0 ? draft.providerId : undefined,
         modelName: draft.modelName.trim(),
+        fallbackProviderId:
+          draft.fallbackProviderId && draft.fallbackProviderId > 0
+            ? draft.fallbackProviderId
+            : undefined,
+        fallbackModelName: (draft.fallbackModelName ?? "").trim(),
         temperature: draft.temperature,
         maxTokens: draft.maxTokens,
         updatedAt: draft.updatedAt,
@@ -1431,9 +1501,190 @@ export function SettingsModal() {
                           />
                         </div>
                       </div>
+
+                      {/* Optional Fallback Provider & Model */}
+                      <div className="mt-2.5 grid grid-cols-1 gap-2.5 border-t border-border-subtle/70 pt-2.5 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-1 block text-xs text-ink-muted">
+                            备用服务（主模型限流或故障时自动切换）
+                          </label>
+                          <select
+                            value={route.fallbackProviderId ?? ""}
+                            onChange={(e) => {
+                              const nextFbProvId = e.target.value
+                                ? Number.parseInt(e.target.value, 10)
+                                : undefined;
+                              const nextFbProv = nextFbProvId
+                                ? providerMap.get(nextFbProvId)
+                                : undefined;
+                              const nextFbModel = nextFbProvId
+                                ? nextFbProv?.models?.[0] ?? route.fallbackModelName ?? ""
+                                : "";
+                              updateRouteField(stageDef.stage, {
+                                fallbackProviderId: nextFbProvId,
+                                fallbackModelName: nextFbModel,
+                              });
+                            }}
+                            className="w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                          >
+                            <option value="">不设备用</option>
+                            {providers.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs text-ink-muted">
+                            备用模型
+                          </label>
+                          {(() => {
+                            const fbProv = route.fallbackProviderId
+                              ? providerMap.get(route.fallbackProviderId)
+                              : undefined;
+                            const fbModels = fbProv?.models ?? [];
+                            if (fbModels.length > 0) {
+                              return (
+                                <select
+                                  value={route.fallbackModelName ?? ""}
+                                  onChange={(e) =>
+                                    updateRouteField(stageDef.stage, {
+                                      fallbackModelName: e.target.value,
+                                    })
+                                  }
+                                  className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                                >
+                                  <option value="">选择备用模型</option>
+                                  {fbModels.map((m) => (
+                                    <option key={m} value={m}>
+                                      {m}
+                                    </option>
+                                  ))}
+                                </select>
+                              );
+                            }
+                            return (
+                              <input
+                                type="text"
+                                disabled={!route.fallbackProviderId}
+                                value={route.fallbackModelName ?? ""}
+                                onChange={(e) =>
+                                  updateRouteField(stageDef.stage, {
+                                    fallbackModelName: e.target.value,
+                                  })
+                                }
+                                placeholder={route.fallbackProviderId ? "输入备用模型 ID" : "请先选择备用服务"}
+                                className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none disabled:opacity-50"
+                              />
+                            );
+                          })()}
+                        </div>
+                      </div>
                     </div>
                   );
                 })}
+
+                {/* Custom Model Pricing Section */}
+                <div className="mt-2 rounded-xl border border-border-subtle bg-surface/60 p-4">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-medium text-ink-primary">模型单价设置（每百万 Token）</div>
+                      <div className="text-xs text-ink-muted">按你使用的官方或中转价格填写，首页用量面板将自动换算花费</div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_92px_92px_72px_auto]">
+                    <select
+                      value={pricingProvider}
+                      onChange={(e) => {
+                        setPricingProvider(e.target.value);
+                        const p = providers.find((item) => item.name === e.target.value);
+                        if (p && p.models.length > 0 && !pricingModel) {
+                          setPricingModel(p.models[0] ?? "");
+                        }
+                      }}
+                      className="rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                    >
+                      <option value="">选择服务</option>
+                      {providers.map((p) => (
+                        <option key={p.id} value={p.name}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      value={pricingModel}
+                      onChange={(e) => setPricingModel(e.target.value)}
+                      placeholder="模型 ID"
+                      className="nib-mono rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.1}
+                      value={pricingInput}
+                      onChange={(e) => setPricingInput(e.target.value)}
+                      placeholder="输入/1M"
+                      className="nib-mono rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-right text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.1}
+                      value={pricingOutput}
+                      onChange={(e) => setPricingOutput(e.target.value)}
+                      placeholder="输出/1M"
+                      className="nib-mono rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-right text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                    />
+                    <select
+                      value={pricingCurrency}
+                      onChange={(e) => setPricingCurrency(e.target.value === "USD" ? "USD" : "CNY")}
+                      className="rounded-lg border border-border-subtle bg-canvas px-2 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                    >
+                      <option value="CNY">CNY ¥</option>
+                      <option value="USD">USD $</option>
+                    </select>
+                    <button
+                      type="button"
+                      disabled={savingPricing}
+                      onClick={() => void handleSavePricing()}
+                      className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-40"
+                    >
+                      保存单价
+                    </button>
+                  </div>
+
+                  {pricingList.length > 0 && (
+                    <div className="mt-3 divide-y divide-border-subtle rounded-lg border border-border-subtle bg-canvas">
+                      {pricingList.map((pr) => (
+                        <div
+                          key={`${pr.providerName}-${pr.modelName}`}
+                          className="flex items-center justify-between gap-2 px-3 py-2 text-xs"
+                        >
+                          <div className="flex min-w-0 items-center gap-2">
+                            <span className="font-medium text-ink-primary">{pr.providerName}</span>
+                            <span className="nib-mono truncate text-ink-secondary">{pr.modelName}</span>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-3">
+                            <span className="nib-mono text-ink-secondary">
+                              输入 {pr.currency === "USD" ? "$" : "¥"}{pr.inputPricePerM} / 输出 {pr.currency === "USD" ? "$" : "¥"}{pr.outputPricePerM}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => void handleDeletePricing(pr.providerName, pr.modelName)}
+                              className="rounded p-1 text-ink-muted hover:text-danger"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}

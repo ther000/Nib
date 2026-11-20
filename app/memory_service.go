@@ -177,6 +177,18 @@ func (s *MemoryService) UpsertArcSummary(ctx context.Context, in domain.UpsertAr
 	return ms.UpsertArcSummary(ctx, in)
 }
 
+// GenerateArcSummary 由 AI 自动汇总指定章号区间（10 章弧线）或整卷剧情摘要并写入 arc_summaries。
+func (s *MemoryService) GenerateArcSummary(ctx context.Context, req domain.GenerateArcSummaryRequest) (domain.ArcSummary, error) {
+	if err := req.Validate(); err != nil {
+		return domain.ArcSummary{}, err
+	}
+	gen, err := s.rt.arcSummaryGenerator()
+	if err != nil {
+		return domain.ArcSummary{}, err
+	}
+	return gen.GenerateArcSummary(ctx, req)
+}
+
 // ExtractChapterDelta 调用 extract 模型路由抽取本章增量状态与伏笔变更提案（写入 pending 态变更单，绝不静默入库）。
 func (s *MemoryService) ExtractChapterDelta(ctx context.Context, chapterID int64) (domain.ChapterDelta, error) {
 	if err := validatePositiveID("chapterId", chapterID); err != nil {

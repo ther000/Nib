@@ -425,6 +425,13 @@ export function HomeView() {
               <div className="nib-mono mt-1.5 text-xl font-medium text-accent">
                 {formatCompactTokens(usageSummary?.totalTokens ?? 0)}
               </div>
+              {((usageSummary?.estimatedCostCny ?? 0) > 0 || (usageSummary?.estimatedCostUsd ?? 0) > 0) && (
+                <div className="nib-mono mt-1 text-xs text-ink-secondary">
+                  估算花费：
+                  {(usageSummary?.estimatedCostCny ?? 0) > 0 && `¥${(usageSummary?.estimatedCostCny ?? 0).toFixed(2)} `}
+                  {(usageSummary?.estimatedCostUsd ?? 0) > 0 && `$${(usageSummary?.estimatedCostUsd ?? 0).toFixed(3)}`}
+                </div>
+              )}
             </div>
           </div>
 
@@ -520,6 +527,7 @@ export function HomeView() {
                       <th className="px-4 py-2.5 text-right font-medium">输入</th>
                       <th className="px-4 py-2.5 text-right font-medium">输出</th>
                       <th className="px-4 py-2.5 text-right font-medium">合计</th>
+                      <th className="px-4 py-2.5 text-right font-medium">估算花费</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border-subtle">
@@ -551,6 +559,11 @@ export function HomeView() {
                           className="nib-mono px-4 py-2.5 text-right font-medium text-ink-primary"
                         >
                           {formatCompactTokens(row.totalTokens)}
+                        </td>
+                        <td className="nib-mono px-4 py-2.5 text-right text-ink-secondary">
+                          {row.estimatedCost > 0
+                            ? `${row.currency === "USD" ? "$" : "¥"}${row.estimatedCost.toFixed(row.currency === "USD" ? 4 : 2)}`
+                            : "—"}
                         </td>
                       </tr>
                     ))}

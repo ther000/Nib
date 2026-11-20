@@ -271,8 +271,10 @@ func (r *Runner) GenerateChapter(
 	var finishReason string
 	var stoppedByCallback bool
 	draftStart := time.Now()
+	activeModel := route.ModelName
+	activeProviderName := provider.Name
 
-	streamUsage, streamErr := r.llm.Stream(ctx, provider, chatReq, func(ev llm.StreamEvent) error {
+	usedProv, usedModel, streamUsage, streamErr := r.streamWithFallback(ctx, route, provider, chatReq, func(ev llm.StreamEvent) error {
 		if ev.FinishReason != "" {
 			finishReason = ev.FinishReason
 		}
@@ -282,8 +284,8 @@ func (r *Runner) GenerateChapter(
 				ChapterID:      chapterID,
 				ReasoningDelta: ev.ReasoningDelta,
 				Status:         domain.ChapterStatusDrafting,
-				ModelName:      route.ModelName,
-				ProviderName:   provider.Name,
+				ModelName:      activeModel,
+				ProviderName:   activeProviderName,
 			}); err != nil {
 				stoppedByCallback = true
 				return err
@@ -301,8 +303,8 @@ func (r *Runner) GenerateChapter(
 				Delta:        ev.Delta,
 				WordCount:    domain.CountWords(liveText),
 				Status:       domain.ChapterStatusDrafting,
-				ModelName:    route.ModelName,
-				ProviderName: provider.Name,
+				ModelName:    activeModel,
+				ProviderName: activeProviderName,
 			}); err != nil {
 				stoppedByCallback = true
 				return err
@@ -316,8 +318,8 @@ func (r *Runner) GenerateChapter(
 				ChapterID:    chapterID,
 				Usage:        &uCopy,
 				FinishReason: finishReason,
-				ModelName:    route.ModelName,
-				ProviderName: provider.Name,
+				ModelName:    activeModel,
+				ProviderName: activeProviderName,
 			}); err != nil {
 				stoppedByCallback = true
 				return err
@@ -325,6 +327,12 @@ func (r *Runner) GenerateChapter(
 		}
 		return nil
 	})
+	if usedModel != "" {
+		route.ModelName = usedModel
+	}
+	if usedProv.Name != "" {
+		provider = usedProv
+	}
 
 	if hasUsage(streamUsage) {
 		finalUsage = streamUsage

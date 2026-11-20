@@ -109,6 +109,9 @@ func initRuntime(rt *app.Runtime, dbPath string) (func(), error) {
 	if err := st.RecoverInterruptedBatchRuns(context.Background()); err != nil {
 		log.Printf("nib: recover interrupted batch runs warning: %v", err)
 	}
+	if err := st.RecoverInterruptedAutopilotRuns(context.Background()); err != nil {
+		log.Printf("nib: recover interrupted autopilot runs warning: %v", err)
+	}
 
 	storeExp := exporter.NewStoreExporter(st)
 	pipeExp := exporter.New()

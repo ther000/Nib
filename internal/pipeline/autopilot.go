@@ -16,6 +16,13 @@ const (
 	autopilotRetryDelay    = 1200 * time.Millisecond
 )
 
+// AutopilotRunStore 定义全自动托管持久化接口（由 *store.Store 自动满足）。
+type AutopilotRunStore interface {
+	CreateAutopilotRun(ctx context.Context, state domain.AutopilotState) (int64, error)
+	UpdateAutopilotRun(ctx context.Context, state domain.AutopilotState) error
+	GetLatestAutopilotRun(ctx context.Context, bookID int64) (*domain.AutopilotState, error)
+}
+
 // AutopilotExtraStore 聚合托管流水线所需的卷、实体与记忆变更落库接口（由 *store.Store 自动满足）。
 type AutopilotExtraStore interface {
 	ListVolumes(ctx context.Context, bookID int64) ([]domain.Volume, error)
@@ -42,7 +49,7 @@ func WithAutopilotListener(fn func(domain.AutopilotState)) Option {
 	}
 }
 
-// GetAutopilotState 返回指定书籍当前或最近一次托管流水线的状态快照。
+// GetAutopilotState 返回指定书籍当前或最近一次托管流水线的状态快照（内存中不存在时自动从 SQLite 恢复）。
 func (r *Runner) GetAutopilotState(bookID int64) domain.AutopilotState {
 	if r == nil || bookID <= 0 {
 		return domain.AutopilotState{BookID: bookID, Status: domain.AutopilotStatusIdle}.Normalized()
@@ -50,12 +57,49 @@ func (r *Runner) GetAutopilotState(bookID int64) domain.AutopilotState {
 	r.autopilotMu.Lock()
 	sess := r.autopilots[bookID]
 	r.autopilotMu.Unlock()
-	if sess == nil {
-		return domain.AutopilotState{BookID: bookID, Status: domain.AutopilotStatusIdle}.Normalized()
+	if sess != nil {
+		sess.mu.Lock()
+		defer sess.mu.Unlock()
+		return cloneAutopilotState(sess.state)
 	}
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
-	return cloneAutopilotState(sess.state)
+	if rs, ok := r.store.(AutopilotRunStore); ok {
+		if persisted, err := rs.GetLatestAutopilotRun(context.Background(), bookID); err == nil && persisted != nil {
+			return persisted.Normalized()
+		}
+	}
+	return domain.AutopilotState{BookID: bookID, Status: domain.AutopilotStatusIdle}.Normalized()
+}
+
+// ResumeAutopilot 从最近一次中断或停止的托管记录继续执行剩余章节。
+func (r *Runner) ResumeAutopilot(ctx context.Context, bookID int64) (domain.AutopilotState, error) {
+	if r == nil || bookID <= 0 {
+		return domain.AutopilotState{}, fmt.Errorf("%w: bookId must be > 0", domain.ErrValidation)
+	}
+	prev := r.GetAutopilotState(bookID)
+	if prev.Status == domain.AutopilotStatusRunning || prev.Status == domain.AutopilotStatusWaitingDecision {
+		return prev, fmt.Errorf("%w: 该书托管任务正在运行中", domain.ErrConflict)
+	}
+	remaining := prev.TargetChapters - prev.CompletedChapters
+	if remaining <= 0 {
+		return domain.AutopilotState{}, fmt.Errorf("%w: 最近一次托管已完成全部目标章节，请开启新任务", domain.ErrValidation)
+	}
+	remainingBudget := 0
+	if prev.MaxTokensBudget > 0 {
+		remainingBudget = prev.MaxTokensBudget - prev.TokensUsed
+		if remainingBudget <= 0 {
+			return domain.AutopilotState{}, fmt.Errorf("%w: 原托管任务的 Token 预算已用尽，请调整预算后开启新任务", domain.ErrValidation)
+		}
+	}
+	return r.StartAutopilot(ctx, domain.AutopilotRequest{
+		BookID:           bookID,
+		VolumeID:         prev.VolumeID,
+		TargetChapters:   remaining,
+		AutoOutline:      prev.AutoOutline,
+		AutoPolish:       prev.AutoPolish,
+		AutoCommitMemory: prev.AutoCommitMemory,
+		MaxTokensBudget:  remainingBudget,
+		ArcGoal:          prev.ArcGoal,
+	})
 }
 
 // StartAutopilot 为指定书籍启动全自动托管流水线（自动补纲 → 写稿 → 质检润色 → 自动记忆入库 → 下一章）。
@@ -96,11 +140,15 @@ func (r *Runner) StartAutopilot(ctx context.Context, req domain.AutopilotRequest
 		active: true,
 		state: domain.AutopilotState{
 			BookID:           req.BookID,
+			VolumeID:         req.VolumeID,
 			Status:           domain.AutopilotStatusRunning,
 			Step:             domain.AutopilotStepPreparing,
 			TargetChapters:   req.TargetChapters,
+			AutoOutline:      req.AutoOutline,
+			AutoPolish:       req.AutoPolish,
 			MaxTokensBudget:  req.MaxTokensBudget,
 			AutoCommitMemory: req.AutoCommitMemory,
+			ArcGoal:          strings.TrimSpace(req.ArcGoal),
 			Message:          fmt.Sprintf("已启动托管，计划自动推进 %d 章", req.TargetChapters),
 			Logs: []domain.AutopilotLogEntry{
 				{
@@ -113,6 +161,11 @@ func (r *Runner) StartAutopilot(ctx context.Context, req domain.AutopilotRequest
 			StartedAt: now,
 			UpdatedAt: now,
 		},
+	}
+	if rs, ok := r.store.(AutopilotRunStore); ok {
+		if runID, cErr := rs.CreateAutopilotRun(context.Background(), sess.state); cErr == nil && runID > 0 {
+			sess.state.RunID = runID
+		}
 	}
 	r.autopilots[req.BookID] = sess
 	r.batchWG.Add(1)
@@ -203,12 +256,17 @@ func (r *Runner) ResolveAutopilotGate(bookID int64, action domain.AutopilotDecis
 func (r *Runner) runAutopilotLoop(ctx context.Context, sess *autopilotSession, req domain.AutopilotRequest) {
 	extraStore, _ := r.store.(AutopilotExtraStore)
 
+	runStore, _ := r.store.(AutopilotRunStore)
+
 	update := func(fn func(*domain.AutopilotState)) {
 		sess.mu.Lock()
 		fn(&sess.state)
 		sess.state.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		snap := cloneAutopilotState(sess.state)
 		sess.mu.Unlock()
+		if runStore != nil && snap.RunID > 0 {
+			_ = runStore.UpdateAutopilotRun(context.Background(), snap)
+		}
 		r.emitAutopilotProgress(snap)
 	}
 	addLog := func(seq int, step domain.AutopilotStep, tone, msg string) {
@@ -481,6 +539,13 @@ func (r *Runner) runAutopilotLoop(ctx context.Context, sess *autopilotSession, r
 					} else {
 						addLog(chap.GlobalSeq, domain.AutopilotStepExtracting, "ok", fmt.Sprintf("第 %d 章记忆变更已写入待审列表", chap.GlobalSeq))
 					}
+				}
+			}
+
+			// 6. 长篇记忆金字塔自动滚动：每满 10 章自动生成一次 10 章弧线摘要，防止早期剧情滑出 P5 窗口。
+			if ctx.Err() == nil && chap.GlobalSeq > 0 && chap.GlobalSeq%10 == 0 {
+				if generatedArc, arcErr := r.maybeAutoRollArcSummary(ctx, req.BookID, chap.GlobalSeq); arcErr == nil && generatedArc {
+					addLog(chap.GlobalSeq, domain.AutopilotStepCommitting, "ok", fmt.Sprintf("已自动归档第 %d~%d 章 10 章弧线摘要", chap.GlobalSeq-9, chap.GlobalSeq))
 				}
 			}
 

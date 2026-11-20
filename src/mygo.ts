@@ -92,17 +92,22 @@ export interface AutopilotRequest {
 }
 
 export interface AutopilotState {
+  runId?: number;
   bookId: number;
+  volumeId?: number;
   status: AutopilotStatus;
   step: AutopilotStep;
   targetChapters: number;
   completedChapters: number;
+  autoOutline: boolean;
+  autoPolish: boolean;
   currentChapterId: number;
   currentChapterSeq: number;
   currentChapterTitle: string;
   tokensUsed: number;
   maxTokensBudget: number;
   autoCommitMemory: boolean;
+  arcGoal?: string;
   message: string;
   error?: string;
   gate?: AutopilotGate;
@@ -541,6 +546,14 @@ export interface GenChunk {
 
 export type GenChunkKind = string;
 
+export interface GenerateArcSummaryRequest {
+  bookId: number;
+  level: ArcSummaryLevel;
+  volumeId?: number;
+  startSeq: number;
+  endSeq: number;
+}
+
 export interface GenerateChapterOptions {
   briefing: BriefingOptions;
   mode?: string;
@@ -641,10 +654,21 @@ export interface MemorySearchHit {
   score: number;
 }
 
+export interface ModelPricing {
+  providerName: string;
+  modelName: string;
+  inputPricePerM: number;
+  outputPricePerM: number;
+  currency: string;
+  updatedAt?: string;
+}
+
 export interface ModelRoute {
   stage: PipelineStage;
   providerId?: number;
   modelName: string;
+  fallbackProviderId?: number;
+  fallbackModelName?: string;
   temperature: number;
   maxTokens: number;
   updatedAt: string;
@@ -657,6 +681,8 @@ export interface ModelUsageStat {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  estimatedCost: number;
+  currency?: string;
 }
 
 export interface MoveChapterInput {
@@ -927,6 +953,8 @@ export interface UsageSummary {
   totalPromptTokens: number;
   totalCompletionTokens: number;
   totalTokens: number;
+  estimatedCostCny: number;
+  estimatedCostUsd: number;
   byStage: StageUsageStat[];
   byModel: ModelUsageStat[];
 }
@@ -1019,6 +1047,8 @@ export const AtlasService = {
 
 /** SettingsService 提供多模型供应商（脱敏透出）、5 环节路由与本地导出目录选择绑定。 */
 export const SettingsService = {
+  /** DeleteModelPricing 删除指定模型的自定义单价配置。 */
+  deleteModelPricing: bind<[string, string], void>("SettingsService.DeleteModelPricing", (providerName: string, modelName: string) => [providerName, modelName]),
   /** DeleteProvider 删除指定供应商配置。 */
   deleteProvider: bind<[number], void>("SettingsService.DeleteProvider", (id: number) => [id]),
   /**
@@ -1031,6 +1061,8 @@ export const SettingsService = {
   fetchProviderModels: bind<[number], FetchModelsResult>("SettingsService.FetchProviderModels", (id: number) => [id]),
   /** GetUsageSummary 聚合指定书籍（或 bookID=0 时全局）的各环节、各模型 Token 消耗与调用统计。 */
   getUsageSummary: bind<[number], UsageSummary>("SettingsService.GetUsageSummary", (bookID: number) => [bookID]),
+  /** ListModelPricing 返回全部自定义模型单价列表。 */
+  listModelPricing: bind<[], ModelPricing[]>("SettingsService.ListModelPricing", () => []),
   /** ListModelRoutes 返回全部 5 个创作环节的模型路由配置。 */
   listModelRoutes: bind<[], ModelRoute[]>("SettingsService.ListModelRoutes", () => []),
   /** ListProviders 返回全部供应商的脱敏视图（严禁向前端透出明文 API Key）。 */
@@ -1043,6 +1075,8 @@ export const SettingsService = {
   setWindowTheme: bind<[string], void>("SettingsService.SetWindowTheme", (theme: string) => [theme]),
   /** TestProvider 对已保存的供应商发起连通性与延迟探测（默认 10s 超时控制）。 */
   testProvider: bind<[number], ProviderTestResult>("SettingsService.TestProvider", (id: number) => [id]),
+  /** UpsertModelPricing 保存或更新指定供应商+模型的输入/输出单价（每百万 Token）。 */
+  upsertModelPricing: bind<[ModelPricing], ModelPricing>("SettingsService.UpsertModelPricing", (in_: ModelPricing) => [in_]),
   /** UpsertProvider 校验并保存供应商配置，仅返回脱敏后的 ProviderPublic。 */
   upsertProvider: bind<[UpsertProviderInput], ProviderPublic>("SettingsService.UpsertProvider", (input: UpsertProviderInput) => [input]),
 } as const;
@@ -1075,6 +1109,8 @@ export const MemoryService = {
   deleteForeshadowing: bind<[number], void>("MemoryService.DeleteForeshadowing", (id: number) => [id]),
   /** ExtractChapterDelta 调用 extract 模型路由抽取本章增量状态与伏笔变更提案（写入 pending 态变更单，绝不静默入库）。 */
   extractChapterDelta: bind<[number], ChapterDelta>("MemoryService.ExtractChapterDelta", (chapterID: number) => [chapterID]),
+  /** GenerateArcSummary 由 AI 自动汇总指定章号区间（10 章弧线）或整卷剧情摘要并写入 arc_summaries。 */
+  generateArcSummary: bind<[GenerateArcSummaryRequest], ArcSummary>("MemoryService.GenerateArcSummary", (req: GenerateArcSummaryRequest) => [req]),
   /** GetPendingDelta 查询指定章节当前待审核的记忆变更单；若不存在返回 nil。 */
   getPendingDelta: bind<[number], ChapterDelta | null>("MemoryService.GetPendingDelta", (chapterID: number) => [chapterID]),
   /** ListArcSummaries 查询分层摘要金字塔（level 可为 "" / "arc_10" / "volume"）。 */
@@ -1145,6 +1181,8 @@ export const AutopilotService = {
   getAutopilotState: bind<[number], AutopilotState>("AutopilotService.GetAutopilotState", (bookID: number) => [bookID]),
   /** ResolveAutopilotGate 提交作者在决策闸门中的选择，恢复或停止托管流水线。 */
   resolveAutopilotGate: bind<[number, AutopilotDecisionAction], AutopilotState>("AutopilotService.ResolveAutopilotGate", (bookID: number, action: AutopilotDecisionAction) => [bookID, action]),
+  /** ResumeAutopilot 从最近一次中断或暂停的持久化托管记录继续推进剩余章节。 */
+  resumeAutopilot: bind<[number], AutopilotState>("AutopilotService.ResumeAutopilot", (bookID: number) => [bookID]),
   /** StartAutopilot 启动指定书籍的全自动托管写作循环。 */
   startAutopilot: bind<[AutopilotRequest], AutopilotState>("AutopilotService.StartAutopilot", (req: AutopilotRequest) => [req]),
   /** StopAutopilot 请求平滑中止指定书籍的托管任务。 */

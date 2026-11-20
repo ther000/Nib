@@ -52,9 +52,26 @@ export function AutopilotStatusBar() {
     autopilotState.status === "completed" ||
     autopilotState.status === "stopped" ||
     autopilotState.status === "failed";
+  const canResume =
+    (autopilotState.status === "stopped" || autopilotState.status === "failed") &&
+    autopilotState.completedChapters < autopilotState.targetChapters;
 
   if (autopilotState.status === "idle") return null;
+  if (isTerminal && !canResume && dismissedAt === (autopilotState.updatedAt ?? "")) return null;
   if (isTerminal && dismissedAt === (autopilotState.updatedAt ?? "")) return null;
+
+  const handleResume = async () => {
+    setResolving(true);
+    try {
+      const next = await AutopilotService.resumeAutopilot(activeBook.id);
+      setAutopilotState(next);
+      notify({ tone: "ok", message: "已从断点继续托管" });
+    } catch (err) {
+      notify({ tone: "danger", message: "继续托管失败", detail: formatErrorMessage(err) });
+    } finally {
+      setResolving(false);
+    }
+  };
 
   const handleStop = async () => {
     try {
@@ -162,14 +179,27 @@ export function AutopilotStatusBar() {
                   <span>停止</span>
                 </button>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => setDismissedAt(autopilotState.updatedAt ?? "dismissed")}
-                  aria-label="关闭状态条"
-                  className="rounded-md p-1 text-ink-muted transition-colors hover:bg-elevated hover:text-ink-primary"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
+                <>
+                  {canResume && (
+                    <button
+                      type="button"
+                      disabled={resolving}
+                      onClick={() => void handleResume()}
+                      className="flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
+                    >
+                      <Play className="h-3 w-3 fill-current" />
+                      <span>继续剩余 {autopilotState.targetChapters - autopilotState.completedChapters} 章</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setDismissedAt(autopilotState.updatedAt ?? "dismissed")}
+                    aria-label="关闭状态条"
+                    className="rounded-md p-1 text-ink-muted transition-colors hover:bg-elevated hover:text-ink-primary"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </>
               )}
             </>
           )}

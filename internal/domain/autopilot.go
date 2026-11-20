@@ -112,19 +112,24 @@ type AutopilotLogEntry struct {
 	Message    string        `json:"message"`
 }
 
-// AutopilotState 是全自动托管流水线的实时状态快照（供前端状态条与控制台展示）。
+// AutopilotState 是全自动托管流水线的实时状态快照（供前端状态条与控制台展示，同时持久化到 autopilot_runs）。
 type AutopilotState struct {
+	RunID               int64               `json:"runId,omitempty"`
 	BookID              int64               `json:"bookId"`
+	VolumeID            int64               `json:"volumeId,omitempty"`
 	Status              AutopilotStatus     `json:"status"`
 	Step                AutopilotStep       `json:"step"`
 	TargetChapters      int                 `json:"targetChapters"`
 	CompletedChapters   int                 `json:"completedChapters"`
+	AutoOutline         bool                `json:"autoOutline"`
+	AutoPolish          bool                `json:"autoPolish"`
 	CurrentChapterID    int64               `json:"currentChapterId"`
 	CurrentChapterSeq   int                 `json:"currentChapterSeq"`
 	CurrentChapterTitle string              `json:"currentChapterTitle"`
 	TokensUsed          int                 `json:"tokensUsed"`
 	MaxTokensBudget     int                 `json:"maxTokensBudget"`
 	AutoCommitMemory    bool                `json:"autoCommitMemory"`
+	ArcGoal             string              `json:"arcGoal,omitempty"`
 	Message             string              `json:"message"`
 	Error               string              `json:"error,omitempty"`
 	Gate                *AutopilotGate      `json:"gate,omitempty"`

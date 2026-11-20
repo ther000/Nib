@@ -42,6 +42,22 @@ func (s *AutopilotService) StartAutopilot(ctx context.Context, req domain.Autopi
 	return state.Normalized(), nil
 }
 
+// ResumeAutopilot 从最近一次中断或暂停的持久化托管记录继续推进剩余章节。
+func (s *AutopilotService) ResumeAutopilot(ctx context.Context, bookID int64) (domain.AutopilotState, error) {
+	if err := validatePositiveID("bookId", bookID); err != nil {
+		return domain.AutopilotState{}, err
+	}
+	eng, err := s.rt.autopilotEngine()
+	if err != nil {
+		return domain.AutopilotState{}, err
+	}
+	state, err := eng.ResumeAutopilot(ctx, bookID)
+	if err != nil {
+		return domain.AutopilotState{}, err
+	}
+	return state.Normalized(), nil
+}
+
 // GetAutopilotState 查询指定书籍当前或最近一次托管任务状态。
 func (s *AutopilotService) GetAutopilotState(ctx context.Context, bookID int64) (domain.AutopilotState, error) {
 	if err := validatePositiveID("bookId", bookID); err != nil {
