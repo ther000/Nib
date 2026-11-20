@@ -4,11 +4,12 @@ const DefaultBriefingTokenBudget = 12000
 
 // BriefingOptions 控制上下文编译器的槽位配额与人工微调选项。
 type BriefingOptions struct {
-	TokenBudget       int     `json:"tokenBudget,omitempty"`
-	PinnedEntityIDs   []int64 `json:"pinnedEntityIds,omitempty"`
-	ExcludedEntityIDs []int64 `json:"excludedEntityIds,omitempty"`
-	ExtraInstruction  string  `json:"extraInstruction,omitempty"`
-	IncludePendingMem bool    `json:"includePendingMem,omitempty"`
+	TokenBudget       int      `json:"tokenBudget,omitempty"`
+	PinnedEntityIDs   []int64  `json:"pinnedEntityIds,omitempty"`
+	ExcludedEntityIDs []int64  `json:"excludedEntityIds,omitempty"`
+	ExtraInstruction  string   `json:"extraInstruction,omitempty"`
+	IncludePending    bool     `json:"includePending,omitempty"`
+	SearchKeywords    []string `json:"searchKeywords,omitempty"`
 }
 
 // BriefingSlot 表示作战简报中的单个优先级槽位（P0~P7）。

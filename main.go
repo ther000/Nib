@@ -36,6 +36,7 @@ func main() {
 		app.NewAtlasService(rt),
 		app.NewSettingsService(rt),
 		app.NewStudioService(rt),
+		app.NewMemoryService(rt),
 	)
 
 	var shutdownOnce sync.Once

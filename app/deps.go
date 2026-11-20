@@ -85,17 +85,38 @@ type PipelineRunner interface {
 	) (domain.Chapter, error)
 }
 
+// MemoryStore 定义 Phase 2 记忆引擎所需的持久化与检索接口（由 internal/store 实现）。
+type MemoryStore interface {
+	SnapshotAt(ctx context.Context, bookID int64, chapterSeq int, includePending bool) ([]domain.EntitySnapshot, error)
+	ListStateEvents(ctx context.Context, bookID int64, entityID int64, upToSeq int, includePending bool) ([]domain.EntityStateEvent, error)
+	ListForeshadowings(ctx context.Context, bookID int64, status domain.ForeshadowingStatus) ([]domain.Foreshadowing, error)
+	UpsertForeshadowing(ctx context.Context, in domain.UpsertForeshadowingInput) (domain.Foreshadowing, error)
+	DeleteForeshadowing(ctx context.Context, id int64) error
+	ListArcSummaries(ctx context.Context, bookID int64, level domain.ArcSummaryLevel) ([]domain.ArcSummary, error)
+	UpsertArcSummary(ctx context.Context, in domain.UpsertArcSummaryInput) (domain.ArcSummary, error)
+	GetPendingDelta(ctx context.Context, chapterID int64) (*domain.ChapterDelta, error)
+	ApplyDeltaDecisions(ctx context.Context, in domain.ApplyDeltaInput) (domain.ApplyDeltaResult, error)
+	SearchMemory(ctx context.Context, bookID int64, query string, maxChapterSeq int) ([]domain.MemorySearchHit, error)
+}
+
+// DeltaExtractor 定义完章记忆增量抽取接口（由 internal/memory 实现，零 MyGo 依赖）。
+type DeltaExtractor interface {
+	ExtractChapterDelta(ctx context.Context, chapterID int64) (domain.ChapterDelta, error)
+}
+
 // DirPickerFunc 封装原生目录选择弹窗，默认使用 mygo.Dialog.Open，可在单测中替换。
 type DirPickerFunc func(ctx context.Context) (string, error)
 
 // RuntimeDeps 汇总 WhenReady 阶段注入到 Runtime 的全部核心依赖。
 type RuntimeDeps struct {
-	Store     Store
-	Exporter  Exporter
-	LLM       LLMClient
-	Compiler  BriefingCompiler
-	Pipeline  PipelineRunner
-	DirPicker DirPickerFunc
+	Store          Store
+	Exporter       Exporter
+	LLM            LLMClient
+	Compiler       BriefingCompiler
+	Pipeline       PipelineRunner
+	MemoryStore    MemoryStore
+	DeltaExtractor DeltaExtractor
+	DirPicker      DirPickerFunc
 }
 
 // Runtime 是线程安全的延迟初始化容器。
@@ -251,6 +272,47 @@ func (r *Runtime) trackPipeline(callCtx context.Context) (PipelineRunner, contex
 		r.activeWG.Done()
 	}
 	return runner, genCtx, cancel, release, nil
+}
+
+func (r *Runtime) memoryStore() (MemoryStore, error) {
+	if r == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.ready || r.closed || r.deps.MemoryStore == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	return r.deps.MemoryStore, nil
+}
+
+func (r *Runtime) trackExtractor(callCtx context.Context) (DeltaExtractor, context.Context, func(), error) {
+	if r == nil {
+		return nil, nil, nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	if !r.ready || r.closed || r.deps.DeltaExtractor == nil {
+		r.mu.RUnlock()
+		return nil, nil, nil, ErrRuntimeNotReady
+	}
+	ext := r.deps.DeltaExtractor
+	baseCtx := r.baseCtx
+	r.activeWG.Add(1)
+	r.mu.RUnlock()
+
+	extCtx, cancel := context.WithCancel(callCtx)
+	var stopWatch func() bool
+	if baseCtx != nil {
+		stopWatch = context.AfterFunc(baseCtx, cancel)
+	}
+	release := func() {
+		if stopWatch != nil {
+			stopWatch()
+		}
+		cancel()
+		r.activeWG.Done()
+	}
+	return ext, extCtx, release, nil
 }
 
 func (r *Runtime) dirPicker() DirPickerFunc {

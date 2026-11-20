@@ -4,6 +4,33 @@ import { bind, type Channel } from "mygo-runtime";
 
 // ---- Types ----
 
+export interface ApplyDeltaInput {
+  deltaId: number;
+  applyCausalSummary: boolean;
+  causalSummaryOverride?: string;
+  decisions: DeltaDecision[];
+}
+
+export interface ApplyDeltaResult {
+  delta: ChapterDelta;
+  committedEvents: number;
+  updatedForeshadowings: number;
+  markedDirtyChapterIds: number[];
+}
+
+export interface ArcSummary {
+  id: number;
+  bookId: number;
+  level: ArcSummaryLevel;
+  volumeId?: number;
+  startSeq: number;
+  endSeq: number;
+  summary: string;
+  createdAt: string;
+}
+
+export type ArcSummaryLevel = string;
+
 export interface Beat {
   id: number;
   chapterId: number;
@@ -57,7 +84,8 @@ export interface BriefingOptions {
   pinnedEntityIds?: number[];
   excludedEntityIds?: number[];
   extraInstruction?: string;
-  includePendingMem?: boolean;
+  includePending?: boolean;
+  searchKeywords?: string[];
 }
 
 export interface BriefingSlot {
@@ -70,6 +98,8 @@ export interface BriefingSlot {
   truncated: boolean;
   required: boolean;
 }
+
+export type ChangeSeverity = string;
 
 export interface Chapter {
   id: number;
@@ -89,6 +119,19 @@ export interface Chapter {
   lastBriefingJson: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ChapterDelta {
+  id: number;
+  chapterId: number;
+  causalSummary: string;
+  newEntities: DeltaNewEntity[];
+  statePatches: DeltaStatePatch[];
+  foreshadows: DeltaForeshadowUpdate[];
+  highRiskFlags: number;
+  reviewStatus: DeltaReviewStatus;
+  createdAt: string;
+  reviewedAt: string;
 }
 
 export type ChapterStatus = string;
@@ -122,6 +165,49 @@ export interface CreateChapterInput {
   outlineSummary: string;
 }
 
+export interface DeltaDecision {
+  kind: string;
+  itemId: string;
+  accept: boolean;
+  overrideNewValue?: string;
+}
+
+export type DeltaForeshadowAction = string;
+
+export interface DeltaForeshadowUpdate {
+  id: string;
+  action: DeltaForeshadowAction;
+  foreshadowingId: number;
+  title: string;
+  description: string;
+  targetResolveSeq: number;
+  involvedEntityIds: number[];
+}
+
+export interface DeltaNewEntity {
+  id: string;
+  kind: EntityKind;
+  name: string;
+  aliases?: string[];
+  isInvariant?: boolean;
+  summary: string;
+  attributes?: Record<string, string>;
+  reason?: string;
+}
+
+export type DeltaReviewStatus = string;
+
+export interface DeltaStatePatch {
+  id: string;
+  entityId: number;
+  entityName: string;
+  attrKey: string;
+  prevValue: string;
+  newValue: string;
+  severity: ChangeSeverity;
+  reason: string;
+}
+
 export type EmotionTag = string;
 
 export interface Entity {
@@ -145,12 +231,51 @@ export interface EntityFilter {
 
 export type EntityKind = string;
 
+export interface EntitySnapshot {
+  entity: Entity;
+  effectiveAttributes: Record<string, string>;
+  appliedEventCount: number;
+  pendingEventCount: number;
+}
+
+export interface EntityStateEvent {
+  id: number;
+  bookId: number;
+  entityId: number;
+  chapterId: number;
+  chapterSeq: number;
+  attrKey: string;
+  prevValue: string;
+  newValue: string;
+  changeSeverity: ChangeSeverity;
+  reason: string;
+  status: StateEventStatus;
+  createdAt: string;
+}
+
 export interface ExportResult {
   exportDir: string;
   bookDir: string;
   filesWritten: string[];
   chapterCount: number;
 }
+
+export interface Foreshadowing {
+  id: number;
+  bookId: number;
+  title: string;
+  description: string;
+  plantedChapterSeq: number;
+  lastHintSeq: number;
+  targetResolveSeq: number;
+  resolvedChapterSeq: number;
+  status: ForeshadowingStatus;
+  involvedEntityIds: number[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ForeshadowingStatus = string;
 
 export interface GenChunk {
   kind: GenChunkKind;
@@ -202,6 +327,16 @@ export interface GenrePreset {
 
 export type HookType = string;
 
+export interface MemorySearchHit {
+  source: string;
+  chapterId: number;
+  chapterSeq: number;
+  entityId: number;
+  title: string;
+  snippet: string;
+  score: number;
+}
+
 export interface ModelRoute {
   stage: PipelineStage;
   providerId?: number;
@@ -244,6 +379,8 @@ export interface SaveChapterDraftInput {
   modelName?: string;
 }
 
+export type StateEventStatus = string;
+
 export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
@@ -271,6 +408,16 @@ export interface UpdateChapterMetaInput {
   causalSummary: string;
 }
 
+export interface UpsertArcSummaryInput {
+  id: number;
+  bookId: number;
+  level: ArcSummaryLevel;
+  volumeId?: number;
+  startSeq: number;
+  endSeq: number;
+  summary: string;
+}
+
 export interface UpsertEntityInput {
   id: number;
   bookId: number;
@@ -280,6 +427,19 @@ export interface UpsertEntityInput {
   isInvariant: boolean;
   summary: string;
   attributes: Record<string, string>;
+}
+
+export interface UpsertForeshadowingInput {
+  id: number;
+  bookId: number;
+  title: string;
+  description: string;
+  plantedChapterSeq: number;
+  lastHintSeq: number;
+  targetResolveSeq: number;
+  resolvedChapterSeq: number;
+  status: ForeshadowingStatus;
+  involvedEntityIds: number[];
 }
 
 export interface UpsertProviderInput {
@@ -399,4 +559,30 @@ export const StudioService = {
    * 并在书籍配置了导出目录时同步更新单向 Markdown 镜像。
    */
   restoreVersion: bind<[number], Chapter>("StudioService.RestoreVersion", (versionID: number) => [versionID]),
+} as const;
+
+/** MemoryService 提供 Phase 2 防吃书记忆账本、伏笔追踪、摘要金字塔、变更单审阅与混合检索的桌面 RPC 绑定。 */
+export const MemoryService = {
+  /** ApplyDeltaDecisions 在事务内应用作者对记忆变更单的逐条审定结论，提交选定项为 committed 并对下游受影响章节标脏。 */
+  applyDeltaDecisions: bind<[ApplyDeltaInput], ApplyDeltaResult>("MemoryService.ApplyDeltaDecisions", (in_: ApplyDeltaInput) => [in_]),
+  /** DeleteForeshadowing 删除指定伏笔记录。 */
+  deleteForeshadowing: bind<[number], void>("MemoryService.DeleteForeshadowing", (id: number) => [id]),
+  /** ExtractChapterDelta 调用 extract 模型路由抽取本章增量状态与伏笔变更提案（写入 pending 态变更单，绝不静默入库）。 */
+  extractChapterDelta: bind<[number], ChapterDelta>("MemoryService.ExtractChapterDelta", (chapterID: number) => [chapterID]),
+  /** GetPendingDelta 查询指定章节当前待审核的记忆变更单；若不存在返回 nil。 */
+  getPendingDelta: bind<[number], ChapterDelta | null>("MemoryService.GetPendingDelta", (chapterID: number) => [chapterID]),
+  /** ListArcSummaries 查询分层摘要金字塔（level 可为 "" / "arc_10" / "volume"）。 */
+  listArcSummaries: bind<[number, string], ArcSummary[]>("MemoryService.ListArcSummaries", (bookID: number, level: string) => [bookID, level]),
+  /** ListForeshadowings 按书籍与可选状态筛选伏笔列表（status 留空返回全部状态）。 */
+  listForeshadowings: bind<[number, string], Foreshadowing[]>("MemoryService.ListForeshadowings", (bookID: number, status: string) => [bookID, status]),
+  /** ListStateEvents 查询实体状态变更事件流水；entityID=0 表示查询全书，upToSeq=0 表示不限截止章号。 */
+  listStateEvents: bind<[number, number, number, boolean], EntityStateEvent[]>("MemoryService.ListStateEvents", (bookID: number, entityID: number, upToSeq: number, includePending: boolean) => [bookID, entityID, upToSeq, includePending]),
+  /** SearchMemory 执行 FTS5 trigram + 双字 LIKE 回退混合记忆检索（maxChapterSeq=0 表示不限章号上限）。 */
+  searchMemory: bind<[number, string, number], MemorySearchHit[]>("MemoryService.SearchMemory", (bookID: number, query: string, maxChapterSeq: number) => [bookID, query, maxChapterSeq]),
+  /** SnapshotAt 按时间轴折算截至 chapterSeq（含）时的全书实体状态快照（严禁透漏未来章节事件）。 */
+  snapshotAt: bind<[number, number, boolean], EntitySnapshot[]>("MemoryService.SnapshotAt", (bookID: number, chapterSeq: number, includePending: boolean) => [bookID, chapterSeq, includePending]),
+  /** UpsertArcSummary 新增或更新 10 章弧线摘要或卷摘要。 */
+  upsertArcSummary: bind<[UpsertArcSummaryInput], ArcSummary>("MemoryService.UpsertArcSummary", (in_: UpsertArcSummaryInput) => [in_]),
+  /** UpsertForeshadowing 创建或更新单条伏笔记录。 */
+  upsertForeshadowing: bind<[UpsertForeshadowingInput], Foreshadowing>("MemoryService.UpsertForeshadowing", (in_: UpsertForeshadowingInput) => [in_]),
 } as const;
