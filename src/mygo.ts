@@ -368,6 +368,7 @@ export interface ExportResult {
 
 export interface FetchModelsResult {
   models: string[];
+  enabledModels: string[];
   count: number;
   message: string;
 }
@@ -535,6 +536,7 @@ export interface ProviderPublic {
   hasApiKey: boolean;
   apiKeyMasked: string;
   models: string[];
+  fetchedModels: string[];
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -681,6 +683,7 @@ export interface UpsertProviderInput {
   baseUrl: string;
   apiKey: string;
   models: string[];
+  fetchedModels?: string[];
   enabled: boolean;
 }
 
@@ -800,7 +803,13 @@ export const AtlasService = {
 export const SettingsService = {
   /** DeleteProvider 删除指定供应商配置。 */
   deleteProvider: bind<[number], void>("SettingsService.DeleteProvider", (id: number) => [id]),
-  /** FetchProviderModels 自动向已保存的供应商拉取可用模型列表，并在拉取到非空列表时持久化回供应商配置。 */
+  /**
+   * FetchProviderModels 自动向已保存的供应商拉取上游模型目录：
+   * - 全量候选模型存入 FetchedModels；
+   * - 若供应商已有已启用模型，严格保留原有勾选；
+   * - 若尚未启用任何模型且上游返回 <= 5 个模型，默认全部启用以便立即可用；
+   * - 若上游返回 > 5 个模型且尚未启用任何模型，保持待用户按需勾选。
+   */
   fetchProviderModels: bind<[number], FetchModelsResult>("SettingsService.FetchProviderModels", (id: number) => [id]),
   /** GetUsageSummary 聚合指定书籍（或 bookID=0 时全局）的各环节、各模型 Token 消耗与调用统计。 */
   getUsageSummary: bind<[number], UsageSummary>("SettingsService.GetUsageSummary", (bookID: number) => [bookID]),

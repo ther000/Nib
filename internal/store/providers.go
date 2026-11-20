@@ -15,7 +15,7 @@ import (
 // 向前端返回前必须在 app 层转换为 ProviderPublic）。
 func (s *Store) ListProviders(ctx context.Context) ([]domain.Provider, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, protocol, base_url, api_key, models_json, enabled, created_at, updated_at
+		SELECT id, name, protocol, base_url, api_key, models_json, fetched_models_json, enabled, created_at, updated_at
 		FROM providers
 		ORDER BY id ASC
 	`)
@@ -61,14 +61,24 @@ func (s *Store) UpsertProvider(ctx context.Context, in domain.UpsertProviderInpu
 	if err != nil {
 		return domain.Provider{}, fmt.Errorf("marshal provider models: %w", err)
 	}
+	var fetchedJSON string
+	hasFetchedUpdate := in.FetchedModels != nil
+	if hasFetchedUpdate {
+		fetchedJSON, err = marshalStringSlice(in.FetchedModels)
+		if err != nil {
+			return domain.Provider{}, fmt.Errorf("marshal provider fetched models: %w", err)
+		}
+	} else {
+		fetchedJSON = "[]"
+	}
 
 	var result domain.Provider
 	err = s.withWriteTx(ctx, func(tx *sql.Tx) error {
 		if in.ID <= 0 {
 			res, err := tx.ExecContext(ctx, `
-				INSERT INTO providers (name, protocol, base_url, api_key, models_json, enabled)
-				VALUES (?, ?, ?, ?, ?, ?)
-			`, name, string(in.Protocol), baseURL, apiKey, modelsJSON, boolToInt(in.Enabled))
+				INSERT INTO providers (name, protocol, base_url, api_key, models_json, fetched_models_json, enabled)
+				VALUES (?, ?, ?, ?, ?, ?, ?)
+			`, name, string(in.Protocol), baseURL, apiKey, modelsJSON, fetchedJSON, boolToInt(in.Enabled))
 			if err != nil {
 				return mapSQLiteError(err)
 			}
@@ -88,6 +98,13 @@ func (s *Store) UpsertProvider(ctx context.Context, in domain.UpsertProviderInpu
 		if effectiveKey == "" {
 			effectiveKey = existing.APIKey
 		}
+		effectiveFetchedJSON := fetchedJSON
+		if !hasFetchedUpdate {
+			effectiveFetchedJSON, err = marshalStringSlice(existing.FetchedModels)
+			if err != nil {
+				return fmt.Errorf("marshal existing fetched models: %w", err)
+			}
+		}
 
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE providers
@@ -96,10 +113,11 @@ func (s *Store) UpsertProvider(ctx context.Context, in domain.UpsertProviderInpu
 			    base_url = ?,
 			    api_key = ?,
 			    models_json = ?,
+			    fetched_models_json = ?,
 			    enabled = ?,
 			    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			WHERE id = ?
-		`, name, string(in.Protocol), baseURL, effectiveKey, modelsJSON, boolToInt(in.Enabled), in.ID); err != nil {
+		`, name, string(in.Protocol), baseURL, effectiveKey, modelsJSON, effectiveFetchedJSON, boolToInt(in.Enabled), in.ID); err != nil {
 			return mapSQLiteError(err)
 		}
 
@@ -229,23 +247,25 @@ type rowScanner interface {
 
 func scanProvider(sc rowScanner) (domain.Provider, error) {
 	var (
-		p          domain.Provider
-		protocol   string
-		modelsJSON string
-		enabled    int
+		p           domain.Provider
+		protocol    string
+		modelsJSON  string
+		fetchedJSON string
+		enabled     int
 	)
-	if err := sc.Scan(&p.ID, &p.Name, &protocol, &p.BaseURL, &p.APIKey, &modelsJSON, &enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
+	if err := sc.Scan(&p.ID, &p.Name, &protocol, &p.BaseURL, &p.APIKey, &modelsJSON, &fetchedJSON, &enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return domain.Provider{}, mapSQLiteError(err)
 	}
 	p.Protocol = domain.ProviderProtocol(protocol)
 	p.Enabled = enabled != 0
 	p.Models = unmarshalStringSlice(modelsJSON)
+	p.FetchedModels = unmarshalStringSlice(fetchedJSON)
 	return p, nil
 }
 
 func getProviderRow(ctx context.Context, q queryRower, id int64) (domain.Provider, error) {
 	row := q.QueryRowContext(ctx, `
-		SELECT id, name, protocol, base_url, api_key, models_json, enabled, created_at, updated_at
+		SELECT id, name, protocol, base_url, api_key, models_json, fetched_models_json, enabled, created_at, updated_at
 		FROM providers
 		WHERE id = ?
 	`, id)

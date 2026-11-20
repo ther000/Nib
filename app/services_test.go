@@ -304,17 +304,27 @@ func (f *fakeStore) UpsertProvider(_ context.Context, in domain.UpsertProviderIn
 		id = f.allocID()
 	}
 	key := in.APIKey
-	if existing, ok := f.providers[id]; ok && key == "" {
-		key = existing.APIKey
+	fetched := in.FetchedModels
+	if existing, ok := f.providers[id]; ok {
+		if key == "" {
+			key = existing.APIKey
+		}
+		if fetched == nil {
+			fetched = existing.FetchedModels
+		}
+	}
+	if fetched == nil {
+		fetched = []string{}
 	}
 	p := domain.Provider{
-		ID:       id,
-		Name:     in.Name,
-		Protocol: in.Protocol,
-		BaseURL:  in.BaseURL,
-		APIKey:   key,
-		Models:   in.Models,
-		Enabled:  in.Enabled,
+		ID:            id,
+		Name:          in.Name,
+		Protocol:      in.Protocol,
+		BaseURL:       in.BaseURL,
+		APIKey:        key,
+		Models:        in.Models,
+		FetchedModels: fetched,
+		Enabled:       in.Enabled,
 	}
 	f.providers[id] = p
 	return p, nil
@@ -660,11 +670,12 @@ func TestSettingsServiceFetchProviderModels(t *testing.T) {
 		t.Fatalf("UpsertProvider failed: %v", err)
 	}
 
+	// 1) 少量模型（<=5）首次拉取默认全部启用
 	res, err := settings.FetchProviderModels(ctx, saved.ID)
 	if err != nil {
 		t.Fatalf("FetchProviderModels failed: %v", err)
 	}
-	if res.Count != 2 || len(res.Models) != 2 {
+	if res.Count != 2 || len(res.Models) != 2 || len(res.EnabledModels) != 2 {
 		t.Fatalf("unexpected FetchModelsResult: %+v", res)
 	}
 	if !llmMock.hadDeadline {
@@ -679,8 +690,49 @@ func TestSettingsServiceFetchProviderModels(t *testing.T) {
 	if stored.APIKey != "sk-keep-me-1234567890" {
 		t.Fatalf("API key was overwritten: %q", stored.APIKey)
 	}
-	if len(stored.Models) != 2 || stored.Models[0] != "deepseek-chat" {
-		t.Fatalf("stored models not updated: %v", stored.Models)
+	if len(stored.Models) != 2 || stored.Models[0] != "deepseek-chat" || len(stored.FetchedModels) != 2 {
+		t.Fatalf("stored models/fetched not updated: models=%v fetched=%v", stored.Models, stored.FetchedModels)
+	}
+
+	// 2) 用户勾选仅启用 1 个模型后再次拉取，应保留用户的勾选，仅更新 FetchedModels
+	if _, err := settings.UpsertProvider(ctx, domain.UpsertProviderInput{
+		ID:       saved.ID,
+		Name:     saved.Name,
+		Protocol: saved.Protocol,
+		BaseURL:  saved.BaseURL,
+		Models:   []string{"deepseek-chat"},
+		Enabled:  true,
+	}); err != nil {
+		t.Fatalf("UpsertProvider toggle models failed: %v", err)
+	}
+	llmMock.models = []string{"deepseek-chat", "deepseek-reasoner", "deepseek-v3"}
+	res2, err := settings.FetchProviderModels(ctx, saved.ID)
+	if err != nil {
+		t.Fatalf("second FetchProviderModels failed: %v", err)
+	}
+	if len(res2.Models) != 3 || len(res2.EnabledModels) != 1 || res2.EnabledModels[0] != "deepseek-chat" {
+		t.Fatalf("expected existing enabled models preserved, got %+v", res2)
+	}
+
+	// 3) 大量模型（>5）首次拉取仅存入候选目录，保持 EnabledModels 为空待用户勾选
+	savedMany, err := settings.UpsertProvider(ctx, domain.UpsertProviderInput{
+		Name:     "OpenRouter",
+		Protocol: domain.ProtocolOpenAICompat,
+		BaseURL:  "https://openrouter.ai/api/v1",
+		APIKey:   "sk-or-1234567890",
+		Models:   []string{},
+		Enabled:  true,
+	})
+	if err != nil {
+		t.Fatalf("UpsertProvider OpenRouter failed: %v", err)
+	}
+	llmMock.models = []string{"m1", "m2", "m3", "m4", "m5", "m6"}
+	resMany, err := settings.FetchProviderModels(ctx, savedMany.ID)
+	if err != nil {
+		t.Fatalf("FetchProviderModels many failed: %v", err)
+	}
+	if resMany.Count != 6 || len(resMany.Models) != 6 || len(resMany.EnabledModels) != 0 {
+		t.Fatalf("expected >5 models not auto-enabled, got %+v", resMany)
 	}
 
 	// 无窗口上下文下 SetWindowTheme 应安全返回 nil

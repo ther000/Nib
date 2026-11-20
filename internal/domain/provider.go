@@ -8,47 +8,52 @@ import (
 // Provider 是本地 SQLite 持久化的供应商完整记录。
 // APIKey 标记 json:"-" 防止意外序列化泄露给前端或日志；对外返回必须调用 ToPublic()。
 type Provider struct {
-	ID        int64            `json:"id"`
-	Name      string           `json:"name"`
-	Protocol  ProviderProtocol `json:"protocol"`
-	BaseURL   string           `json:"baseUrl"`
-	APIKey    string           `json:"-"`
-	Models    []string         `json:"models"`
-	Enabled   bool             `json:"enabled"`
-	CreatedAt string           `json:"createdAt"`
-	UpdatedAt string           `json:"updatedAt"`
+	ID            int64            `json:"id"`
+	Name          string           `json:"name"`
+	Protocol      ProviderProtocol `json:"protocol"`
+	BaseURL       string           `json:"baseUrl"`
+	APIKey        string           `json:"-"`
+	Models        []string         `json:"models"`
+	FetchedModels []string         `json:"fetchedModels"`
+	Enabled       bool             `json:"enabled"`
+	CreatedAt     string           `json:"createdAt"`
+	UpdatedAt     string           `json:"updatedAt"`
 }
 
 // ProviderPublic 是向前端透出的脱敏供应商视图，仅暴露 HasAPIKey 与尾号掩码。
 type ProviderPublic struct {
-	ID           int64            `json:"id"`
-	Name         string           `json:"name"`
-	Protocol     ProviderProtocol `json:"protocol"`
-	BaseURL      string           `json:"baseUrl"`
-	HasAPIKey    bool             `json:"hasApiKey"`
-	APIKeyMasked string           `json:"apiKeyMasked"`
-	Models       []string         `json:"models"`
-	Enabled      bool             `json:"enabled"`
-	CreatedAt    string           `json:"createdAt"`
-	UpdatedAt    string           `json:"updatedAt"`
+	ID            int64            `json:"id"`
+	Name          string           `json:"name"`
+	Protocol      ProviderProtocol `json:"protocol"`
+	BaseURL       string           `json:"baseUrl"`
+	HasAPIKey     bool             `json:"hasApiKey"`
+	APIKeyMasked  string           `json:"apiKeyMasked"`
+	Models        []string         `json:"models"`
+	FetchedModels []string         `json:"fetchedModels"`
+	Enabled       bool             `json:"enabled"`
+	CreatedAt     string           `json:"createdAt"`
+	UpdatedAt     string           `json:"updatedAt"`
 }
 
 // ToPublic 将完整 Provider 转为安全脱敏的 ProviderPublic。
 func (p Provider) ToPublic() ProviderPublic {
 	models := make([]string, len(p.Models))
 	copy(models, p.Models)
+	fetched := make([]string, len(p.FetchedModels))
+	copy(fetched, p.FetchedModels)
 	trimmedKey := strings.TrimSpace(p.APIKey)
 	return ProviderPublic{
-		ID:           p.ID,
-		Name:         p.Name,
-		Protocol:     p.Protocol,
-		BaseURL:      p.BaseURL,
-		HasAPIKey:    trimmedKey != "",
-		APIKeyMasked: MaskAPIKey(trimmedKey),
-		Models:       models,
-		Enabled:      p.Enabled,
-		CreatedAt:    p.CreatedAt,
-		UpdatedAt:    p.UpdatedAt,
+		ID:            p.ID,
+		Name:          p.Name,
+		Protocol:      p.Protocol,
+		BaseURL:       p.BaseURL,
+		HasAPIKey:     trimmedKey != "",
+		APIKeyMasked:  MaskAPIKey(trimmedKey),
+		Models:        models,
+		FetchedModels: fetched,
+		Enabled:       p.Enabled,
+		CreatedAt:     p.CreatedAt,
+		UpdatedAt:     p.UpdatedAt,
 	}
 }
 
@@ -132,13 +137,14 @@ func maskHeaderValue(val string) string {
 // UpsertProviderInput 是新增/更新供应商的入参 DTO。
 // 更新既有供应商（ID > 0）时，APIKey 留空表示沿用数据库中已保存的密钥。
 type UpsertProviderInput struct {
-	ID       int64            `json:"id"`
-	Name     string           `json:"name"`
-	Protocol ProviderProtocol `json:"protocol"`
-	BaseURL  string           `json:"baseUrl"`
-	APIKey   string           `json:"apiKey"`
-	Models   []string         `json:"models"`
-	Enabled  bool             `json:"enabled"`
+	ID            int64            `json:"id"`
+	Name          string           `json:"name"`
+	Protocol      ProviderProtocol `json:"protocol"`
+	BaseURL       string           `json:"baseUrl"`
+	APIKey        string           `json:"apiKey"`
+	Models        []string         `json:"models"`
+	FetchedModels []string         `json:"fetchedModels,omitempty"`
+	Enabled       bool             `json:"enabled"`
 }
 
 func (in UpsertProviderInput) Validate() error {
@@ -169,9 +175,10 @@ type ProviderTestResult struct {
 
 // FetchModelsResult 表示自动拉取供应商可用模型列表的结果。
 type FetchModelsResult struct {
-	Models  []string `json:"models"`
-	Count   int      `json:"count"`
-	Message string   `json:"message"`
+	Models        []string `json:"models"`
+	EnabledModels []string `json:"enabledModels"`
+	Count         int      `json:"count"`
+	Message       string   `json:"message"`
 }
 
 // ModelRoute 表示单个创作环节的模型路由配置（对应 model_routes）。

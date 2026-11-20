@@ -12,6 +12,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Search,
   Sliders,
   Sun,
   Trash2,
@@ -34,7 +35,6 @@ import {
   PROVIDER_PROTOCOLS,
   formatErrorMessage,
   formatNumber,
-  parseModelList,
 } from "../lib/constants";
 
 interface ProviderFormState {
@@ -45,8 +45,21 @@ interface ProviderFormState {
   apiKey: string;
   hasApiKey: boolean;
   apiKeyMasked: string;
-  modelsText: string;
+  enabledModels: string[];
+  fetchedModels: string[];
   enabled: boolean;
+}
+
+function dedupeModels(list: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of list) {
+    const item = raw.trim();
+    if (!item || seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+  }
+  return out;
 }
 
 function createBlankProvider(): ProviderFormState {
@@ -59,7 +72,8 @@ function createBlankProvider(): ProviderFormState {
     apiKey: "",
     hasApiKey: false,
     apiKeyMasked: "",
-    modelsText: "",
+    enabledModels: [],
+    fetchedModels: [],
     enabled: true,
   };
 }
@@ -73,7 +87,8 @@ function providerToForm(p: ProviderPublic): ProviderFormState {
     apiKey: "",
     hasApiKey: p.hasApiKey,
     apiKeyMasked: p.apiKeyMasked,
-    modelsText: (p.models ?? []).join("\n"),
+    enabledModels: dedupeModels(p.models ?? []),
+    fetchedModels: dedupeModels(p.fetchedModels ?? []),
     enabled: p.enabled,
   };
 }
@@ -105,6 +120,10 @@ export function SettingsModal() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [savingProv, setSavingProv] = useState(false);
   const [fetchingModelsId, setFetchingModelsId] = useState<number | null>(null);
+  const [syncingModels, setSyncingModels] = useState(false);
+  const [modelQuery, setModelQuery] = useState("");
+  const [onlyEnabledModels, setOnlyEnabledModels] = useState(false);
+  const [customModelInput, setCustomModelInput] = useState("");
   const [confirmDeleteProv, setConfirmDeleteProv] = useState(false);
   const [testingId, setTestingId] = useState<number | null>(null);
   const [testResults, setTestResults] = useState<Record<number, ProviderTestResult>>({});
@@ -160,7 +179,7 @@ export function SettingsModal() {
     setShowApiKey(false);
   }, [settingsOpen, settingsTab]);
 
-  // Sync provider form when opening or when providers list refreshes
+  // Sync provider form when providers list changes (without clobbering unsaved edits on same provider)
   useEffect(() => {
     if (!settingsOpen) return;
     if (providers.length === 0) {
@@ -169,12 +188,21 @@ export function SettingsModal() {
       return;
     }
     if (selectedProviderId === "new") {
-      // Keep new form if user explicitly clicked "新增", otherwise select first on fresh open
       return;
     }
     const found = providers.find((p) => p.id === selectedProviderId);
     if (found) {
-      setProvForm(providerToForm(found));
+      setProvForm((prev) =>
+        prev.id === found.id
+          ? {
+              ...prev,
+              hasApiKey: found.hasApiKey,
+              apiKeyMasked: found.apiKeyMasked,
+              enabledModels: dedupeModels(found.models ?? []),
+              fetchedModels: dedupeModels(found.fetchedModels ?? []),
+            }
+          : providerToForm(found)
+      );
     } else if (providers[0]) {
       setSelectedProviderId(providers[0].id);
       setProvForm(providerToForm(providers[0]));
@@ -184,6 +212,9 @@ export function SettingsModal() {
   // On modal open, select first provider if any exist
   useEffect(() => {
     if (!settingsOpen) return;
+    setModelQuery("");
+    setOnlyEnabledModels(false);
+    setCustomModelInput("");
     if (providers[0]) {
       setSelectedProviderId(providers[0].id);
       setProvForm(providerToForm(providers[0]));
@@ -270,6 +301,9 @@ export function SettingsModal() {
     setProvForm(providerToForm(p));
     setShowApiKey(false);
     setConfirmDeleteProv(false);
+    setModelQuery("");
+    setOnlyEnabledModels(false);
+    setCustomModelInput("");
   };
 
   const startNewProvider = () => {
@@ -277,6 +311,9 @@ export function SettingsModal() {
     setProvForm(createBlankProvider());
     setShowApiKey(false);
     setConfirmDeleteProv(false);
+    setModelQuery("");
+    setOnlyEnabledModels(false);
+    setCustomModelInput("");
   };
 
   const handleProtocolChange = (nextProto: ProviderProtocol) => {
@@ -292,36 +329,94 @@ export function SettingsModal() {
     });
   };
 
+  const persistEnabledModels = async (nextEnabled: string[]) => {
+    const cleaned = dedupeModels(nextEnabled);
+    setProvForm((prev) => ({ ...prev, enabledModels: cleaned }));
+
+    if (provForm.id <= 0) return;
+    const savedRecord = providerMap.get(provForm.id);
+    if (!savedRecord) return;
+
+    setSyncingModels(true);
+    try {
+      await SettingsService.upsertProvider({
+        id: savedRecord.id,
+        name: savedRecord.name,
+        protocol: savedRecord.protocol,
+        baseUrl: savedRecord.baseUrl,
+        apiKey: "",
+        models: cleaned,
+        fetchedModels: provForm.fetchedModels,
+        enabled: savedRecord.enabled,
+      });
+      await refreshSettingsData();
+    } catch (err) {
+      notify({
+        tone: "danger",
+        message: "同步启用模型失败",
+        detail: formatErrorMessage(err),
+      });
+    } finally {
+      setSyncingModels(false);
+    }
+  };
+
+  const handleToggleModel = (modelId: string) => {
+    const exists = provForm.enabledModels.includes(modelId);
+    const next = exists
+      ? provForm.enabledModels.filter((m) => m !== modelId)
+      : [...provForm.enabledModels, modelId];
+    void persistEnabledModels(next);
+  };
+
+  const handleAddCustomModel = () => {
+    const raw = customModelInput.trim();
+    if (!raw) return;
+    const parts = raw
+      .split(/[\n,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (parts.length === 0) return;
+    setCustomModelInput("");
+    const next = dedupeModels([...provForm.enabledModels, ...parts]);
+    void persistEnabledModels(next);
+  };
+
   const handleFetchModels = async (providerId: number, autoTriggered = false) => {
     setFetchingModelsId(providerId);
     try {
       const res = await SettingsService.fetchProviderModels(providerId);
       await refreshSettingsData();
-      if (res.models && res.models.length > 0) {
-        setProvForm((prev) =>
-          prev.id === providerId
-            ? { ...prev, modelsText: res.models.join("\n") }
-            : prev
-        );
-      }
+      setProvForm((prev) =>
+        prev.id === providerId
+          ? {
+              ...prev,
+              fetchedModels: dedupeModels(res.models ?? []),
+              enabledModels: dedupeModels(res.enabledModels ?? prev.enabledModels),
+            }
+          : prev
+      );
       if (res.count > 0) {
+        const enabledCount = (res.enabledModels ?? []).length;
         notify({
           tone: "ok",
           message: autoTriggered
-            ? `已保存并自动拉取 ${res.count} 个模型`
-            : `已拉取 ${res.count} 个可用模型`,
+            ? enabledCount > 0
+              ? `已保存并默认启用 ${enabledCount} 个模型`
+              : `已保存并拉取 ${res.count} 个模型，请勾选需要启用的模型`
+            : res.message || `已拉取 ${res.count} 个模型`,
         });
       } else {
         notify({
           tone: "warn",
-          message: res.message || "未拉取到可用模型，请手动填写",
+          message: res.message || "未拉取到可用模型，请手动添加",
         });
       }
     } catch (err) {
       notify({
         tone: autoTriggered ? "warn" : "danger",
         message: autoTriggered
-          ? "供应商已保存，但自动拉取模型列表失败（可手动填写）"
+          ? "供应商已保存，但自动拉取模型列表失败（可手动添加）"
           : "拉取模型列表失败",
         detail: formatErrorMessage(err),
       });
@@ -342,7 +437,7 @@ export function SettingsModal() {
       return;
     }
     const isNew = provForm.id <= 0;
-    const models = parseModelList(provForm.modelsText);
+    const models = dedupeModels(provForm.enabledModels);
 
     setSavingProv(true);
     try {
@@ -353,6 +448,7 @@ export function SettingsModal() {
         baseUrl,
         apiKey: provForm.apiKey.trim(),
         models,
+        fetchedModels: provForm.fetchedModels,
         enabled: provForm.enabled,
       });
       await refreshSettingsData();
@@ -360,7 +456,7 @@ export function SettingsModal() {
       setProvForm(providerToForm(saved));
       setShowApiKey(false);
 
-      if (isNew || models.length === 0) {
+      if (isNew || (models.length === 0 && (saved.fetchedModels ?? []).length === 0)) {
         setSavingProv(false);
         await handleFetchModels(saved.id, true);
         return;
@@ -507,6 +603,28 @@ export function SettingsModal() {
 
   const currentTest = provForm.id > 0 ? testResults[provForm.id] : undefined;
 
+  // Model catalog derived state (custom enabled models on top, fetched models in stable order below)
+  const fetchedSet = new Set(provForm.fetchedModels);
+  const enabledSet = new Set(provForm.enabledModels);
+  const customModels = provForm.enabledModels.filter((m) => !fetchedSet.has(m));
+  const allCandidateModels = [...customModels, ...provForm.fetchedModels];
+  const normalizedQuery = modelQuery.trim().toLowerCase();
+  const visibleModels = allCandidateModels.filter((m) => {
+    if (onlyEnabledModels && !enabledSet.has(m)) return false;
+    if (normalizedQuery && !m.toLowerCase().includes(normalizedQuery)) return false;
+    return true;
+  });
+
+  const handleEnableVisible = () => {
+    if (visibleModels.length === 0) return;
+    void persistEnabledModels([...provForm.enabledModels, ...visibleModels]);
+  };
+
+  const handleClearEnabled = () => {
+    if (provForm.enabledModels.length === 0) return;
+    void persistEnabledModels([]);
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-[2px]"
@@ -645,6 +763,7 @@ export function SettingsModal() {
                           <span className="truncate">
                             {PROVIDER_PROTOCOLS.find((x) => x.value === p.protocol)
                               ?.label ?? p.protocol}
+                            {(p.models?.length ?? 0) > 0 && ` · ${p.models.length} 模型`}
                           </span>
                           {tr && (
                             <span
@@ -752,42 +871,204 @@ export function SettingsModal() {
                     </div>
                   </div>
 
-                  <div>
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <label className="text-xs text-ink-secondary">
-                        可用模型列表（每行或逗号分隔）
-                      </label>
-                      {provForm.id > 0 && (
+                  {/* Model Enablement Picker */}
+                  <div className="overflow-hidden rounded-lg border border-border-subtle bg-canvas/60">
+                    {/* Header */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border-subtle bg-surface/65 px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-medium text-ink-primary">模型</span>
                         <button
                           type="button"
-                          disabled={fetchingModelsId === provForm.id}
-                          onClick={() => void handleFetchModels(provForm.id, false)}
-                          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-accent transition-colors hover:bg-accent-soft disabled:opacity-50"
+                          onClick={() => setOnlyEnabledModels((v) => !v)}
+                          title="点击切换仅显示已启用模型"
+                          className={`nib-mono rounded-full px-2 py-0.5 text-[10.5px] transition-colors ${
+                            onlyEnabledModels
+                              ? "bg-accent text-canvas font-medium"
+                              : provForm.enabledModels.length > 0
+                              ? "bg-accent-soft text-accent hover:bg-accent/20"
+                              : "bg-elevated text-ink-muted hover:text-ink-primary"
+                          }`}
                         >
-                          <RefreshCw
-                            className={`h-3 w-3 ${
-                              fetchingModelsId === provForm.id ? "animate-spin" : ""
-                            }`}
-                          />
-                          <span>
-                            {fetchingModelsId === provForm.id ? "拉取中…" : "拉取模型"}
-                          </span>
+                          已启用 {provForm.enabledModels.length}
+                          {allCandidateModels.length > 0
+                            ? ` / ${allCandidateModels.length}`
+                            : ""}
                         </button>
+                        {syncingModels && (
+                          <Loader2 className="h-3 w-3 animate-spin text-ink-muted" />
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        {visibleModels.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={handleEnableVisible}
+                            className="rounded px-1.5 py-0.5 text-[11px] text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+                          >
+                            {normalizedQuery ? "全选筛选" : "全选"}
+                          </button>
+                        )}
+                        {provForm.enabledModels.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={handleClearEnabled}
+                            className="rounded px-1.5 py-0.5 text-[11px] text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+                          >
+                            清空
+                          </button>
+                        )}
+                        {provForm.id > 0 && (
+                          <button
+                            type="button"
+                            disabled={fetchingModelsId === provForm.id}
+                            onClick={() => void handleFetchModels(provForm.id, false)}
+                            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-accent transition-colors hover:bg-accent-soft disabled:opacity-50"
+                          >
+                            <RefreshCw
+                              className={`h-3 w-3 ${
+                                fetchingModelsId === provForm.id ? "animate-spin" : ""
+                              }`}
+                            />
+                            <span>
+                              {fetchingModelsId === provForm.id ? "拉取中…" : "拉取模型"}
+                            </span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Search Bar (shown when catalog has >= 6 models) */}
+                    {allCandidateModels.length >= 6 && (
+                      <div className="relative border-b border-border-subtle bg-canvas/80 px-2.5 py-1.5">
+                        <Search className="pointer-events-none absolute top-1/2 left-4 h-3.5 w-3.5 -translate-y-1/2 text-ink-muted" />
+                        <input
+                          type="text"
+                          value={modelQuery}
+                          onChange={(e) => setModelQuery(e.target.value)}
+                          placeholder="搜索模型 ID…"
+                          className="nib-mono w-full rounded border border-border-subtle bg-surface/60 py-1 pr-7 pl-7 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                        />
+                        {modelQuery && (
+                          <button
+                            type="button"
+                            onClick={() => setModelQuery("")}
+                            aria-label="清除搜索"
+                            className="absolute top-1/2 right-4 -translate-y-1/2 rounded p-0.5 text-ink-muted hover:text-ink-primary"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Hint when catalog fetched but none enabled yet */}
+                    {provForm.id > 0 &&
+                      allCandidateModels.length > 0 &&
+                      provForm.enabledModels.length === 0 && (
+                        <div className="border-b border-warn/25 bg-warn-soft/70 px-3 py-1.5 text-[11px] text-warn">
+                          开启下方开关以启用模型，已启用的模型会同步至「模型路由」下拉列表。
+                        </div>
+                      )}
+
+                    {/* Candidate Model Rows */}
+                    <div className="max-h-52 overflow-y-auto divide-y divide-border-subtle/50">
+                      {fetchingModelsId === provForm.id && allCandidateModels.length === 0 ? (
+                        <div className="flex items-center justify-center gap-2 py-6 text-xs text-ink-muted">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
+                          <span>正在拉取上游模型列表…</span>
+                        </div>
+                      ) : visibleModels.length === 0 ? (
+                        <div className="px-3 py-5 text-center text-xs text-ink-muted">
+                          {allCandidateModels.length === 0
+                            ? provForm.id > 0
+                              ? "暂无候选模型，点击右上角「拉取模型」或在下方手动添加"
+                              : "保存供应商后将自动拉取可用模型，也可先在下方手动添加"
+                            : onlyEnabledModels
+                            ? "当前未启用任何模型"
+                            : "无匹配模型"}
+                        </div>
+                      ) : (
+                        visibleModels.map((modelId) => {
+                          const isEnabled = enabledSet.has(modelId);
+                          const isCustom = !fetchedSet.has(modelId);
+                          return (
+                            <div
+                              key={modelId}
+                              onClick={() => handleToggleModel(modelId)}
+                              className={`flex cursor-pointer items-center justify-between gap-2 px-3 py-1.5 transition-colors ${
+                                isEnabled
+                                  ? "bg-accent-soft/35 hover:bg-accent-soft/55"
+                                  : "hover:bg-surface/70"
+                              }`}
+                            >
+                              <div className="flex min-w-0 items-center gap-2">
+                                <span
+                                  className={`nib-mono truncate text-xs ${
+                                    isEnabled
+                                      ? "font-medium text-ink-primary"
+                                      : "text-ink-secondary"
+                                  }`}
+                                >
+                                  {modelId}
+                                </span>
+                                {isCustom && (
+                                  <span className="shrink-0 rounded bg-elevated px-1.5 py-0.2 text-[10px] text-ink-muted">
+                                    自定义
+                                  </span>
+                                )}
+                              </div>
+
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={isEnabled}
+                                aria-label={`启用模型 ${modelId}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleModel(modelId);
+                                }}
+                                className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${
+                                  isEnabled ? "bg-accent" : "bg-border-strong"
+                                }`}
+                              >
+                                <span
+                                  className={`inline-block h-3 w-3 rounded-full bg-canvas shadow-sm transition-transform ${
+                                    isEnabled ? "translate-x-3.5" : "translate-x-0.5"
+                                  }`}
+                                />
+                              </button>
+                            </div>
+                          );
+                        })
                       )}
                     </div>
-                    <textarea
-                      rows={4}
-                      value={provForm.modelsText}
-                      onChange={(e) =>
-                        setProvForm({ ...provForm, modelsText: e.target.value })
-                      }
-                      placeholder={
-                        provForm.id > 0
-                          ? "点击右上角「拉取模型」自动获取，或手动每行填写一个模型 ID"
-                          : "保存后将自动拉取可用模型，也可提前手动填写"
-                      }
-                      className="nib-mono w-full resize-y rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs leading-relaxed text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
-                    />
+
+                    {/* Manual Add Custom Model */}
+                    <div className="flex items-center gap-1.5 border-t border-border-subtle bg-surface/40 px-2.5 py-1.5">
+                      <input
+                        type="text"
+                        value={customModelInput}
+                        onChange={(e) => setCustomModelInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            handleAddCustomModel();
+                          }
+                        }}
+                        placeholder="手动添加模型 ID（回车加入并启用）"
+                        className="nib-mono min-w-0 flex-1 rounded border border-border-subtle bg-canvas px-2.5 py-1 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        disabled={!customModelInput.trim()}
+                        onClick={handleAddCustomModel}
+                        className="flex shrink-0 items-center gap-1 rounded border border-border-subtle bg-elevated px-2.5 py-1 text-xs text-ink-primary transition-colors hover:border-accent hover:text-accent disabled:opacity-40"
+                      >
+                        <Plus className="h-3 w-3" />
+                        <span>添加</span>
+                      </button>
+                    </div>
                   </div>
 
                   <label className="flex cursor-pointer items-center justify-between rounded-md border border-border-subtle bg-canvas/60 px-3 py-2">

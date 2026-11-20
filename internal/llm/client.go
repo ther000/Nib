@@ -149,9 +149,12 @@ func (c *Client) TestConnection(ctx context.Context, provider domain.Provider) (
 
 	model := firstNonEmptyModel(provider.Models)
 	if model == "" {
+		model = firstNonEmptyModel(provider.FetchedModels)
+	}
+	if model == "" {
 		return domain.ProviderTestResult{
 			OK:      false,
-			Message: "供应商未配置可用模型，请先添加至少一个模型名称",
+			Message: "供应商未配置可用模型，请先拉取或添加至少一个模型",
 		}, nil
 	}
 

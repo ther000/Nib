@@ -14,6 +14,7 @@ import (
 const (
 	providerTestTimeout        = 10 * time.Second
 	providerFetchModelsTimeout = 15 * time.Second
+	autoEnableModelLimit       = 5
 )
 
 // SettingsService 提供多模型供应商（脱敏透出）、5 环节路由与本地导出目录选择绑定。
@@ -101,7 +102,11 @@ func (s *SettingsService) TestProvider(ctx context.Context, id int64) (domain.Pr
 	return client.TestConnection(callCtx, provider)
 }
 
-// FetchProviderModels 自动向已保存的供应商拉取可用模型列表，并在拉取到非空列表时持久化回供应商配置。
+// FetchProviderModels 自动向已保存的供应商拉取上游模型目录：
+// - 全量候选模型存入 FetchedModels；
+// - 若供应商已有已启用模型，严格保留原有勾选；
+// - 若尚未启用任何模型且上游返回 <= 5 个模型，默认全部启用以便立即可用；
+// - 若上游返回 > 5 个模型且尚未启用任何模型，保持待用户按需勾选。
 func (s *SettingsService) FetchProviderModels(ctx context.Context, id int64) (domain.FetchModelsResult, error) {
 	if err := validatePositiveID("id", id); err != nil {
 		return domain.FetchModelsResult{}, err
@@ -130,34 +135,53 @@ func (s *SettingsService) FetchProviderModels(ctx context.Context, id int64) (do
 	if err != nil {
 		return domain.FetchModelsResult{}, err
 	}
+	existingEnabled := provider.Models
+	if existingEnabled == nil {
+		existingEnabled = []string{}
+	}
 	if len(models) == 0 {
-		existing := provider.Models
-		if existing == nil {
-			existing = []string{}
+		existingFetched := provider.FetchedModels
+		if existingFetched == nil {
+			existingFetched = []string{}
 		}
 		return domain.FetchModelsResult{
-			Models:  existing,
-			Count:   0,
-			Message: "上游未返回可用模型，已保留原列表",
+			Models:        existingFetched,
+			EnabledModels: existingEnabled,
+			Count:         0,
+			Message:       "上游未返回可用模型，已保留原列表",
 		}, nil
 	}
 
+	nextEnabled := existingEnabled
+	msg := fmt.Sprintf("已拉取 %d 个模型，保留已启用的 %d 个", len(models), len(nextEnabled))
+	if len(existingEnabled) == 0 {
+		if len(models) <= autoEnableModelLimit {
+			nextEnabled = append([]string(nil), models...)
+			msg = fmt.Sprintf("已拉取并默认启用 %d 个模型", len(models))
+		} else {
+			nextEnabled = []string{}
+			msg = fmt.Sprintf("已拉取 %d 个模型，请勾选需要启用的模型", len(models))
+		}
+	}
+
 	_, err = st.UpsertProvider(ctx, domain.UpsertProviderInput{
-		ID:       provider.ID,
-		Name:     provider.Name,
-		Protocol: provider.Protocol,
-		BaseURL:  provider.BaseURL,
-		APIKey:   "", // 留空以保留数据库中已保存的密钥
-		Models:   models,
-		Enabled:  provider.Enabled,
+		ID:            provider.ID,
+		Name:          provider.Name,
+		Protocol:      provider.Protocol,
+		BaseURL:       provider.BaseURL,
+		APIKey:        "", // 留空以保留数据库中已保存的密钥
+		Models:        nextEnabled,
+		FetchedModels: models,
+		Enabled:       provider.Enabled,
 	})
 	if err != nil {
 		return domain.FetchModelsResult{}, err
 	}
 	return domain.FetchModelsResult{
-		Models:  models,
-		Count:   len(models),
-		Message: fmt.Sprintf("已拉取 %d 个可用模型", len(models)),
+		Models:        models,
+		EnabledModels: nextEnabled,
+		Count:         len(models),
+		Message:       msg,
 	}, nil
 }
 
