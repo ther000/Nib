@@ -66,9 +66,9 @@ export function TopBar() {
     <header
       className="nib-drag-region relative z-30 flex shrink-0 items-center justify-between border-b border-border-subtle bg-surface select-none"
       style={{
-        height: "var(--topbar-height)",
-        paddingLeft: "calc(12px + var(--mygo-titlebar-left, 0px))",
-        paddingRight: "calc(12px + var(--mygo-titlebar-right, 0px))",
+        height: "var(--mygo-titlebar-height, var(--topbar-height))",
+        paddingLeft: "calc(12px + var(--mygo-titlebar-inset-left, 0px))",
+        paddingRight: "calc(12px + var(--mygo-titlebar-inset-right, 0px))",
       }}
     >
       {/* Left: Brand or Home + Book switcher */}
