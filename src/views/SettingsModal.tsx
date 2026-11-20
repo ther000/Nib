@@ -59,7 +59,7 @@ function createBlankProvider(): ProviderFormState {
     apiKey: "",
     hasApiKey: false,
     apiKeyMasked: "",
-    modelsText: defaultProto?.sampleModels ?? "deepseek-chat",
+    modelsText: "",
     enabled: true,
   };
 }
@@ -104,6 +104,7 @@ export function SettingsModal() {
   const [provForm, setProvForm] = useState<ProviderFormState>(createBlankProvider);
   const [showApiKey, setShowApiKey] = useState(false);
   const [savingProv, setSavingProv] = useState(false);
+  const [fetchingModelsId, setFetchingModelsId] = useState<number | null>(null);
   const [confirmDeleteProv, setConfirmDeleteProv] = useState(false);
   const [testingId, setTestingId] = useState<number | null>(null);
   const [testResults, setTestResults] = useState<Record<number, ProviderTestResult>>({});
@@ -283,17 +284,50 @@ export function SettingsModal() {
     const nextDef = PROVIDER_PROTOCOLS.find((p) => p.value === nextProto);
     const shouldReplaceUrl =
       !provForm.baseUrl.trim() || provForm.baseUrl === prevDef?.defaultBaseUrl;
-    const shouldReplaceModels =
-      !provForm.modelsText.trim() || provForm.modelsText === prevDef?.sampleModels;
 
     setProvForm({
       ...provForm,
       protocol: nextProto,
       baseUrl: shouldReplaceUrl ? nextDef?.defaultBaseUrl ?? provForm.baseUrl : provForm.baseUrl,
-      modelsText: shouldReplaceModels
-        ? nextDef?.sampleModels ?? provForm.modelsText
-        : provForm.modelsText,
     });
+  };
+
+  const handleFetchModels = async (providerId: number, autoTriggered = false) => {
+    setFetchingModelsId(providerId);
+    try {
+      const res = await SettingsService.fetchProviderModels(providerId);
+      await refreshSettingsData();
+      if (res.models && res.models.length > 0) {
+        setProvForm((prev) =>
+          prev.id === providerId
+            ? { ...prev, modelsText: res.models.join("\n") }
+            : prev
+        );
+      }
+      if (res.count > 0) {
+        notify({
+          tone: "ok",
+          message: autoTriggered
+            ? `已保存并自动拉取 ${res.count} 个模型`
+            : `已拉取 ${res.count} 个可用模型`,
+        });
+      } else {
+        notify({
+          tone: "warn",
+          message: res.message || "未拉取到可用模型，请手动填写",
+        });
+      }
+    } catch (err) {
+      notify({
+        tone: autoTriggered ? "warn" : "danger",
+        message: autoTriggered
+          ? "供应商已保存，但自动拉取模型列表失败（可手动填写）"
+          : "拉取模型列表失败",
+        detail: formatErrorMessage(err),
+      });
+    } finally {
+      setFetchingModelsId(null);
+    }
   };
 
   const handleSaveProvider = async () => {
@@ -307,6 +341,7 @@ export function SettingsModal() {
       notify({ tone: "warn", message: "请填写 Base URL" });
       return;
     }
+    const isNew = provForm.id <= 0;
     const models = parseModelList(provForm.modelsText);
 
     setSavingProv(true);
@@ -324,6 +359,13 @@ export function SettingsModal() {
       setSelectedProviderId(saved.id);
       setProvForm(providerToForm(saved));
       setShowApiKey(false);
+
+      if (isNew || models.length === 0) {
+        setSavingProv(false);
+        await handleFetchModels(saved.id, true);
+        return;
+      }
+
       notify({ tone: "ok", message: `已保存供应商「${saved.name}」` });
     } catch (err) {
       notify({ tone: "danger", message: "保存供应商失败", detail: formatErrorMessage(err) });
@@ -711,17 +753,40 @@ export function SettingsModal() {
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-xs text-ink-secondary">
-                      可用模型列表（每行或逗号分隔）
-                    </label>
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <label className="text-xs text-ink-secondary">
+                        可用模型列表（每行或逗号分隔）
+                      </label>
+                      {provForm.id > 0 && (
+                        <button
+                          type="button"
+                          disabled={fetchingModelsId === provForm.id}
+                          onClick={() => void handleFetchModels(provForm.id, false)}
+                          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-accent transition-colors hover:bg-accent-soft disabled:opacity-50"
+                        >
+                          <RefreshCw
+                            className={`h-3 w-3 ${
+                              fetchingModelsId === provForm.id ? "animate-spin" : ""
+                            }`}
+                          />
+                          <span>
+                            {fetchingModelsId === provForm.id ? "拉取中…" : "拉取模型"}
+                          </span>
+                        </button>
+                      )}
+                    </div>
                     <textarea
-                      rows={3}
+                      rows={4}
                       value={provForm.modelsText}
                       onChange={(e) =>
                         setProvForm({ ...provForm, modelsText: e.target.value })
                       }
-                      placeholder={"deepseek-chat\ndeepseek-reasoner"}
-                      className="nib-mono w-full resize-y rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                      placeholder={
+                        provForm.id > 0
+                          ? "点击右上角「拉取模型」自动获取，或手动每行填写一个模型 ID"
+                          : "保存后将自动拉取可用模型，也可提前手动填写"
+                      }
+                      className="nib-mono w-full resize-y rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs leading-relaxed text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
                     />
                   </div>
 
@@ -830,12 +895,18 @@ export function SettingsModal() {
 
                       <button
                         type="button"
-                        disabled={savingProv}
+                        disabled={savingProv || (provForm.id > 0 && fetchingModelsId === provForm.id)}
                         onClick={() => void handleSaveProvider()}
                         className="flex items-center gap-1.5 rounded-md bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
                       >
                         <Save className="h-3.5 w-3.5" />
-                        <span>{savingProv ? "保存中…" : "保存供应商"}</span>
+                        <span>
+                          {savingProv
+                            ? "保存中…"
+                            : provForm.id > 0 && fetchingModelsId === provForm.id
+                            ? "拉取模型中…"
+                            : "保存供应商"}
+                        </span>
                       </button>
                     </div>
                   </div>

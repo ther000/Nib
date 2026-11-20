@@ -167,6 +167,13 @@ type ProviderTestResult struct {
 	Message   string `json:"message"`
 }
 
+// FetchModelsResult 表示自动拉取供应商可用模型列表的结果。
+type FetchModelsResult struct {
+	Models  []string `json:"models"`
+	Count   int      `json:"count"`
+	Message string   `json:"message"`
+}
+
 // ModelRoute 表示单个创作环节的模型路由配置（对应 model_routes）。
 type ModelRoute struct {
 	Stage       PipelineStage `json:"stage"`

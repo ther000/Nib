@@ -79,8 +79,11 @@ func main() {
 			MinHeight:       640,
 			StateKey:        "main",
 			Hidden:          true,
+			TitleBarStyle:   mygo.TitleBarHidden,
+			TitleBarHeight:  44,
 			BackgroundColor: "light-dark(#F6F3EC, #141416)",
 		})
+		mainWin.SetWindowButtonsTheme(mygo.ThemeDark)
 		mainWin.OnReadyToShow(mainWin.Show)
 	})
 

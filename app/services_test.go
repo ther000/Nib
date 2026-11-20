@@ -361,12 +361,28 @@ func (e *fakeExporter) ExportChapter(_ context.Context, chapterID int64) (string
 type fakeLLM struct {
 	lastProvider domain.Provider
 	hadDeadline  bool
+	models       []string
+	listErr      error
 }
 
 func (l *fakeLLM) TestConnection(ctx context.Context, p domain.Provider) (domain.ProviderTestResult, error) {
 	l.lastProvider = p
 	_, l.hadDeadline = ctx.Deadline()
 	return domain.ProviderTestResult{OK: true, LatencyMs: 42, ModelUsed: "deepseek-chat", Message: "ok"}, nil
+}
+
+func (l *fakeLLM) ListModels(ctx context.Context, p domain.Provider) ([]string, error) {
+	l.lastProvider = p
+	_, l.hadDeadline = ctx.Deadline()
+	if l.listErr != nil {
+		return nil, l.listErr
+	}
+	if len(l.models) > 0 {
+		out := make([]string, len(l.models))
+		copy(out, l.models)
+		return out, nil
+	}
+	return []string{"deepseek-chat", "deepseek-reasoner"}, nil
 }
 
 type fakeCompiler struct{}
@@ -617,5 +633,58 @@ func TestSaveDraftAndFinalizeTriggerExporterOnlyWhenExportDirSet(t *testing.T) {
 	}
 	if rt.Ready() {
 		t.Fatalf("Runtime should not be ready after Close")
+	}
+}
+
+func TestSettingsServiceFetchProviderModels(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeStore()
+	llmMock := &fakeLLM{models: []string{"deepseek-chat", "deepseek-reasoner"}}
+
+	rt := NewRuntime()
+	rt.Init(RuntimeDeps{
+		Store: st,
+		LLM:   llmMock,
+	})
+	settings := NewSettingsService(rt)
+
+	saved, err := settings.UpsertProvider(ctx, domain.UpsertProviderInput{
+		Name:     "DeepSeek",
+		Protocol: domain.ProtocolOpenAICompat,
+		BaseURL:  "https://api.deepseek.com/v1",
+		APIKey:   "sk-keep-me-1234567890",
+		Models:   []string{},
+		Enabled:  true,
+	})
+	if err != nil {
+		t.Fatalf("UpsertProvider failed: %v", err)
+	}
+
+	res, err := settings.FetchProviderModels(ctx, saved.ID)
+	if err != nil {
+		t.Fatalf("FetchProviderModels failed: %v", err)
+	}
+	if res.Count != 2 || len(res.Models) != 2 {
+		t.Fatalf("unexpected FetchModelsResult: %+v", res)
+	}
+	if !llmMock.hadDeadline {
+		t.Fatalf("expected FetchProviderModels to attach timeout deadline")
+	}
+
+	// 验证模型列表已持久化且原 API Key 未被清空
+	stored, err := st.GetProvider(ctx, saved.ID)
+	if err != nil {
+		t.Fatalf("GetProvider failed: %v", err)
+	}
+	if stored.APIKey != "sk-keep-me-1234567890" {
+		t.Fatalf("API key was overwritten: %q", stored.APIKey)
+	}
+	if len(stored.Models) != 2 || stored.Models[0] != "deepseek-chat" {
+		t.Fatalf("stored models not updated: %v", stored.Models)
+	}
+
+	// 无窗口上下文下 SetWindowTheme 应安全返回 nil
+	if err := settings.SetWindowTheme(ctx, "light"); err != nil {
+		t.Fatalf("SetWindowTheme failed: %v", err)
 	}
 }

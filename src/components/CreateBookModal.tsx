@@ -10,7 +10,7 @@ export function CreateBookModal() {
     closeCreateBook,
     genrePresets,
     refreshBooks,
-    setActiveTab,
+    openBook,
     notify,
   } = useApp();
 
@@ -74,7 +74,7 @@ export function CreateBookModal() {
         exportDir: exportDir.trim(),
       });
       await refreshBooks(created.id);
-      setActiveTab("architect");
+      await openBook(created.id, "architect");
       closeCreateBook();
       notify({ tone: "ok", message: `已创建《${created.title}》` });
     } catch (err) {

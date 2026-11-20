@@ -65,9 +65,10 @@ type Exporter interface {
 	ExportChapter(ctx context.Context, chapterID int64) (string, error)
 }
 
-// LLMClient 定义多协议供应商连通性探测接口（由 internal/llm 实现）。
+// LLMClient 定义多协议供应商连通性探测与模型列表拉取接口（由 internal/llm 实现）。
 type LLMClient interface {
 	TestConnection(ctx context.Context, provider domain.Provider) (domain.ProviderTestResult, error)
+	ListModels(ctx context.Context, provider domain.Provider) ([]string, error)
 }
 
 // BriefingCompiler 定义上下文作战简报编译接口（由 internal/compiler 实现）。

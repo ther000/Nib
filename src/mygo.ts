@@ -366,6 +366,12 @@ export interface ExportResult {
   chapterCount: number;
 }
 
+export interface FetchModelsResult {
+  models: string[];
+  count: number;
+  message: string;
+}
+
 export interface Foreshadowing {
   id: number;
   bookId: number;
@@ -794,6 +800,8 @@ export const AtlasService = {
 export const SettingsService = {
   /** DeleteProvider 删除指定供应商配置。 */
   deleteProvider: bind<[number], void>("SettingsService.DeleteProvider", (id: number) => [id]),
+  /** FetchProviderModels 自动向已保存的供应商拉取可用模型列表，并在拉取到非空列表时持久化回供应商配置。 */
+  fetchProviderModels: bind<[number], FetchModelsResult>("SettingsService.FetchProviderModels", (id: number) => [id]),
   /** GetUsageSummary 聚合指定书籍（或 bookID=0 时全局）的各环节、各模型 Token 消耗与调用统计。 */
   getUsageSummary: bind<[number], UsageSummary>("SettingsService.GetUsageSummary", (bookID: number) => [bookID]),
   /** ListModelRoutes 返回全部 5 个创作环节的模型路由配置。 */
@@ -804,6 +812,8 @@ export const SettingsService = {
   pickExportDir: bind<[], string>("SettingsService.PickExportDir", () => []),
   /** SaveModelRoute 校验并更新单个创作环节的模型路由配置。 */
   saveModelRoute: bind<[ModelRoute], ModelRoute>("SettingsService.SaveModelRoute", (route: ModelRoute) => [route]),
+  /** SetWindowTheme 同步主窗口隐藏标题栏上的系统按钮配色（深色/浅色）。 */
+  setWindowTheme: bind<[string], void>("SettingsService.SetWindowTheme", (theme: string) => [theme]),
   /** TestProvider 对已保存的供应商发起连通性与延迟探测（默认 10s 超时控制）。 */
   testProvider: bind<[number], ProviderTestResult>("SettingsService.TestProvider", (id: number) => [id]),
   /** UpsertProvider 校验并保存供应商配置，仅返回脱敏后的 ProviderPublic。 */

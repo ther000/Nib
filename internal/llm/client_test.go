@@ -780,3 +780,116 @@ func TestHTTP200NonSSEAndEmptyResponsesFailCleanly(t *testing.T) {
 		}
 	})
 }
+
+func TestListModelsProtocolsAndSanitization(t *testing.T) {
+	t.Run("openai_compat", func(t *testing.T) {
+		var gotPath, gotAuth string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			gotAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":"deepseek-reasoner"},{"id":"deepseek-chat"},{"id":"deepseek-chat"}]}`))
+		}))
+		defer srv.Close()
+
+		client := NewClient(WithHTTPClient(srv.Client()))
+		models, err := client.ListModels(context.Background(), domain.Provider{
+			Protocol: domain.ProtocolOpenAICompat,
+			BaseURL:  srv.URL + "/v1/chat/completions",
+			APIKey:   "sk-test-openai-secret",
+		})
+		if err != nil {
+			t.Fatalf("ListModels openai_compat failed: %v", err)
+		}
+		if gotPath != "/v1/models" {
+			t.Fatalf("expected /v1/models, got %q", gotPath)
+		}
+		if gotAuth != "Bearer sk-test-openai-secret" {
+			t.Fatalf("unexpected auth header: %q", gotAuth)
+		}
+		if len(models) != 2 || models[0] != "deepseek-chat" || models[1] != "deepseek-reasoner" {
+			t.Fatalf("unexpected models: %v", models)
+		}
+	})
+
+	t.Run("anthropic", func(t *testing.T) {
+		var gotPath, gotKey, gotVer string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			gotKey = r.Header.Get("x-api-key")
+			gotVer = r.Header.Get("anthropic-version")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":"claude-sonnet-4-20250514"},{"id":"claude-3-7-sonnet-latest"}]}`))
+		}))
+		defer srv.Close()
+
+		client := NewClient(WithHTTPClient(srv.Client()))
+		models, err := client.ListModels(context.Background(), domain.Provider{
+			Protocol: domain.ProtocolAnthropic,
+			BaseURL:  srv.URL,
+			APIKey:   "sk-ant-secret",
+		})
+		if err != nil {
+			t.Fatalf("ListModels anthropic failed: %v", err)
+		}
+		if gotPath != "/v1/models" || gotKey != "sk-ant-secret" || gotVer == "" {
+			t.Fatalf("unexpected anthropic request: path=%q key=%q ver=%q", gotPath, gotKey, gotVer)
+		}
+		if len(models) != 2 || models[0] != "claude-3-7-sonnet-latest" || models[1] != "claude-sonnet-4-20250514" {
+			t.Fatalf("unexpected models: %v", models)
+		}
+	})
+
+	t.Run("gemini filters generateContent and strips prefix", func(t *testing.T) {
+		var gotPath, gotKey string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			gotKey = r.Header.Get("x-goog-api-key")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":[
+				{"name":"models/gemini-2.5-pro","supportedGenerationMethods":["generateContent","countTokens"]},
+				{"name":"models/text-embedding-004","supportedGenerationMethods":["embedContent"]},
+				{"name":"models/gemini-2.5-flash","supportedGenerationMethods":["generateContent"]}
+			]}`))
+		}))
+		defer srv.Close()
+
+		client := NewClient(WithHTTPClient(srv.Client()))
+		models, err := client.ListModels(context.Background(), domain.Provider{
+			Protocol: domain.ProtocolGemini,
+			BaseURL:  srv.URL,
+			APIKey:   "AIzaSy-secret-key",
+		})
+		if err != nil {
+			t.Fatalf("ListModels gemini failed: %v", err)
+		}
+		if gotPath != "/v1beta/models" || gotKey != "AIzaSy-secret-key" {
+			t.Fatalf("unexpected gemini request: path=%q key=%q", gotPath, gotKey)
+		}
+		if len(models) != 2 || models[0] != "gemini-2.5-flash" || models[1] != "gemini-2.5-pro" {
+			t.Fatalf("unexpected gemini models: %v", models)
+		}
+	})
+
+	t.Run("401 sanitizes api key", func(t *testing.T) {
+		secret := "sk-super-secret-models-key-9988"
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"message":"invalid key ` + secret + `"}}`))
+		}))
+		defer srv.Close()
+
+		client := NewClient(WithHTTPClient(srv.Client()))
+		_, err := client.ListModels(context.Background(), domain.Provider{
+			Protocol: domain.ProtocolOpenAICompat,
+			BaseURL:  srv.URL,
+			APIKey:   secret,
+		})
+		if err == nil {
+			t.Fatalf("expected error on 401")
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("secret leaked in ListModels error: %v", err)
+		}
+	})
+}

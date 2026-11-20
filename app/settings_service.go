@@ -2,12 +2,19 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
+
+	"github.com/egoist/mygo"
 
 	"nib/internal/domain"
 )
 
-const providerTestTimeout = 10 * time.Second
+const (
+	providerTestTimeout        = 10 * time.Second
+	providerFetchModelsTimeout = 15 * time.Second
+)
 
 // SettingsService 提供多模型供应商（脱敏透出）、5 环节路由与本地导出目录选择绑定。
 type SettingsService struct {
@@ -92,6 +99,83 @@ func (s *SettingsService) TestProvider(ctx context.Context, id int64) (domain.Pr
 		defer cancel()
 	}
 	return client.TestConnection(callCtx, provider)
+}
+
+// FetchProviderModels 自动向已保存的供应商拉取可用模型列表，并在拉取到非空列表时持久化回供应商配置。
+func (s *SettingsService) FetchProviderModels(ctx context.Context, id int64) (domain.FetchModelsResult, error) {
+	if err := validatePositiveID("id", id); err != nil {
+		return domain.FetchModelsResult{}, err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return domain.FetchModelsResult{}, err
+	}
+	client, err := s.rt.llm()
+	if err != nil {
+		return domain.FetchModelsResult{}, err
+	}
+	provider, err := st.GetProvider(ctx, id)
+	if err != nil {
+		return domain.FetchModelsResult{}, err
+	}
+
+	callCtx := ctx
+	var cancel context.CancelFunc
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		callCtx, cancel = context.WithTimeout(ctx, providerFetchModelsTimeout)
+		defer cancel()
+	}
+
+	models, err := client.ListModels(callCtx, provider)
+	if err != nil {
+		return domain.FetchModelsResult{}, err
+	}
+	if len(models) == 0 {
+		existing := provider.Models
+		if existing == nil {
+			existing = []string{}
+		}
+		return domain.FetchModelsResult{
+			Models:  existing,
+			Count:   0,
+			Message: "上游未返回可用模型，已保留原列表",
+		}, nil
+	}
+
+	_, err = st.UpsertProvider(ctx, domain.UpsertProviderInput{
+		ID:       provider.ID,
+		Name:     provider.Name,
+		Protocol: provider.Protocol,
+		BaseURL:  provider.BaseURL,
+		APIKey:   "", // 留空以保留数据库中已保存的密钥
+		Models:   models,
+		Enabled:  provider.Enabled,
+	})
+	if err != nil {
+		return domain.FetchModelsResult{}, err
+	}
+	return domain.FetchModelsResult{
+		Models:  models,
+		Count:   len(models),
+		Message: fmt.Sprintf("已拉取 %d 个可用模型", len(models)),
+	}, nil
+}
+
+// SetWindowTheme 同步主窗口隐藏标题栏上的系统按钮配色（深色/浅色）。
+func (s *SettingsService) SetWindowTheme(ctx context.Context, theme string) error {
+	win := mygo.CallerWindow(ctx)
+	if win == nil {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(theme)) {
+	case "light":
+		win.SetWindowButtonsTheme(mygo.ThemeLight)
+	case "dark":
+		win.SetWindowButtonsTheme(mygo.ThemeDark)
+	default:
+		win.SetWindowButtonsTheme(mygo.ThemeSystem)
+	}
+	return nil
 }
 
 // ListModelRoutes 返回全部 5 个创作环节的模型路由配置。

@@ -48,6 +48,7 @@ export interface ToastItem {
 }
 
 export type SettingsTab = "providers" | "routes" | "workspace" | "usage";
+export type AppViewMode = "home" | "workspace";
 
 interface AppContextValue {
   // Preferences
@@ -63,6 +64,10 @@ interface AppContextValue {
   toggleStudioDrawer: () => void;
 
   // Navigation & Modals
+  viewMode: AppViewMode;
+  openHome: () => void;
+  openBook: (bookId: number, tab?: WorkspaceTab) => Promise<void>;
+  deleteBook: (bookId: number) => Promise<void>;
   activeTab: WorkspaceTab;
   setActiveTab: (tab: WorkspaceTab) => void;
   atlasSubTab: AtlasSubTab;
@@ -147,6 +152,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return initial;
   });
 
+  const [viewMode, setViewMode] = useState<AppViewMode>("home");
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("architect");
   const [atlasSubTab, setAtlasSubTab] = useState<AtlasSubTab>("entities");
   const [atlasFocusEntityId, setAtlasFocusEntityId] = useState<number | null>(null);
@@ -358,6 +364,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [refreshBookData, updatePrefs]
   );
 
+  const openHome = useCallback(() => {
+    setViewMode("home");
+  }, []);
+
+  const openBook = useCallback(
+    async (bookId: number, tab?: WorkspaceTab) => {
+      if (tab) {
+        setActiveTab(tab);
+      }
+      setViewMode("workspace");
+      if (bookId !== activeBookId) {
+        setActiveBookId(bookId);
+        updatePrefs((p) => ({ ...p, lastBookId: bookId }));
+        await refreshBookData(bookId, null);
+      } else if (volumes.length === 0 && chapters.length === 0) {
+        await refreshBookData(bookId, activeChapterId);
+      }
+    },
+    [activeBookId, activeChapterId, chapters.length, refreshBookData, updatePrefs, volumes.length]
+  );
+
   const refreshSettingsData = useCallback(async () => {
     try {
       const [provList, routeList] = await Promise.all([
@@ -407,6 +434,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [activeBookId, activeChapterId, notify, refreshBookData, updatePrefs]
   );
 
+  const deleteBook = useCallback(
+    async (bookId: number) => {
+      try {
+        await LibraryService.deleteBook(bookId);
+        await refreshBooks(activeBookId === bookId ? null : activeBookId);
+        notify({ tone: "ok", message: "已删除书籍" });
+      } catch (err) {
+        notify({ tone: "danger", message: "删除书籍失败", detail: formatErrorMessage(err) });
+      }
+    },
+    [activeBookId, notify, refreshBooks]
+  );
+
   const updateChapterInCache = useCallback((chapter: Chapter) => {
     setChapters((prev) => {
       const exists = prev.some((c) => c.id === chapter.id);
@@ -428,6 +468,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const bumpMemoryRevision = useCallback(() => {
     setMemoryRevision((v) => v + 1);
   }, []);
+
+  // Sync native hidden-titlebar window control button theme with app theme
+  useEffect(() => {
+    void SettingsService.setWindowTheme(prefs.theme).catch(() => {});
+  }, [prefs.theme]);
 
   // Initial bootstrap
   useEffect(() => {
@@ -601,6 +646,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setProseIndent,
       setStudioDrawerOpen,
       toggleStudioDrawer,
+      viewMode,
+      openHome,
+      openBook,
+      deleteBook,
       activeTab,
       setActiveTab,
       atlasSubTab,
@@ -670,6 +719,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setProseIndent,
       setStudioDrawerOpen,
       toggleStudioDrawer,
+      viewMode,
+      openHome,
+      openBook,
+      deleteBook,
       activeTab,
       atlasSubTab,
       openAtlasSubTab,

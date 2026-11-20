@@ -186,3 +186,20 @@
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
+
+/* Integrated custom titlebar drag region (MyGo TitleBarHidden) */
+.nib-drag-region {
+  --app-region: drag;
+  -webkit-app-region: drag;
+}
+
+.nib-drag-region button,
+.nib-drag-region a,
+.nib-drag-region input,
+.nib-drag-region select,
+.nib-drag-region textarea,
+.nib-drag-region [role="button"],
+.nib-no-drag {
+  --app-region: no-drag;
+  -webkit-app-region: no-drag;
+}

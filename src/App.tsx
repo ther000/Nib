@@ -2,10 +2,10 @@ import { useEffect } from "react";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { AppProvider, useApp } from "./stores/AppContext";
 import { TopBar } from "./components/TopBar";
-import { EmptyShelf } from "./components/EmptyShelf";
 import { CreateBookModal } from "./components/CreateBookModal";
 import { MemorySearchModal } from "./components/MemorySearchModal";
 import { ToastHost } from "./components/ToastHost";
+import { HomeView } from "./views/HomeView";
 import { ArchitectView } from "./views/ArchitectView";
 import { StudioView } from "./views/StudioView";
 import { AtlasView } from "./views/AtlasView";
@@ -15,6 +15,7 @@ function NibShell() {
   const {
     bootstrapping,
     runtimeError,
+    viewMode,
     activeBook,
     activeTab,
     setActiveTab,
@@ -26,6 +27,8 @@ function NibShell() {
     memorySearchOpen,
     toggleMemorySearch,
   } = useApp();
+
+  const inWorkspace = viewMode === "workspace" && Boolean(activeBook);
 
   // Global keyboard shortcuts:
   // Ctrl+1/2/3     -> switch 编排 / 审改 / 账本
@@ -44,7 +47,7 @@ function NibShell() {
         (e.key.toLowerCase() === "f" || e.code === "KeyF") &&
         e.shiftKey &&
         !blockingModalOpen &&
-        activeBook
+        inWorkspace
       ) {
         e.preventDefault();
         toggleMemorySearch();
@@ -53,22 +56,22 @@ function NibShell() {
 
       const modalOpen = blockingModalOpen || memorySearchOpen;
 
-      if ((e.key === "1" || e.code === "Digit1") && !modalOpen && activeBook) {
+      if ((e.key === "1" || e.code === "Digit1") && !modalOpen && inWorkspace) {
         e.preventDefault();
         setActiveTab("architect");
         return;
       }
-      if ((e.key === "2" || e.code === "Digit2") && !modalOpen && activeBook) {
+      if ((e.key === "2" || e.code === "Digit2") && !modalOpen && inWorkspace) {
         e.preventDefault();
         setActiveTab("studio");
         return;
       }
-      if ((e.key === "3" || e.code === "Digit3") && !modalOpen && activeBook) {
+      if ((e.key === "3" || e.code === "Digit3") && !modalOpen && inWorkspace) {
         e.preventDefault();
         setActiveTab("atlas");
         return;
       }
-      if ((e.key === "\\" || e.code === "Backslash") && !modalOpen && activeBook) {
+      if ((e.key === "\\" || e.code === "Backslash") && !modalOpen && inWorkspace) {
         e.preventDefault();
         toggleStudioDrawer();
         return;
@@ -77,13 +80,13 @@ function NibShell() {
         (e.key.toLowerCase() === "s" || e.code === "KeyS") &&
         !e.shiftKey &&
         !modalOpen &&
-        activeBook
+        inWorkspace
       ) {
         e.preventDefault();
         triggerSave();
         return;
       }
-      if (e.key === "Enter" && !modalOpen && activeBook && activeTab === "studio") {
+      if (e.key === "Enter" && !modalOpen && inWorkspace && activeTab === "studio") {
         e.preventDefault();
         triggerGenerate();
       }
@@ -92,7 +95,7 @@ function NibShell() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
-    activeBook,
+    inWorkspace,
     activeTab,
     settingsOpen,
     createBookOpen,
@@ -129,8 +132,8 @@ function NibShell() {
             </div>
           </div>
         </main>
-      ) : !activeBook ? (
-        <EmptyShelf />
+      ) : !inWorkspace ? (
+        <HomeView />
       ) : activeTab === "architect" ? (
         <ArchitectView />
       ) : activeTab === "studio" ? (
