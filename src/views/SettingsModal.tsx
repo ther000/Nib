@@ -131,6 +131,7 @@ export function SettingsModal() {
   const dirtyStagesRef = useRef<Set<string>>(new Set());
   const prevSettingsOpenRef = useRef(false);
   const [savingStage, setSavingStage] = useState<string | null>(null);
+  const [customModelStages, setCustomModelStages] = useState<Set<string>>(new Set());
 
   dirtyStagesRef.current = dirtyStages;
 
@@ -224,6 +225,7 @@ export function SettingsModal() {
       setRouteDrafts(buildDefaultMap());
       setDirtyStages(new Set());
       dirtyStagesRef.current = new Set();
+      setCustomModelStages(new Set());
       return;
     }
 
@@ -1299,28 +1301,94 @@ export function SettingsModal() {
                           </select>
                         </div>
 
-                        {/* Model Input + Datalist */}
+                        {/* Model Selector */}
                         <div>
-                          <label className="mb-1 block text-xs text-ink-muted">
-                            模型
-                          </label>
-                          <input
-                            type="text"
-                            list={`models-${stageDef.stage}`}
-                            value={route.modelName}
-                            onChange={(e) =>
-                              updateRouteField(stageDef.stage, {
-                                modelName: e.target.value,
-                              })
-                            }
-                            placeholder="选择或输入模型 ID"
-                            className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
-                          />
-                          <datalist id={`models-${stageDef.stage}`}>
-                            {modelSuggestions.map((m) => (
-                              <option key={m} value={m} />
-                            ))}
-                          </datalist>
+                          <div className="mb-1 flex items-center justify-between gap-2">
+                            <label className="block text-xs text-ink-muted">
+                              模型
+                            </label>
+                            {selectedProv && modelSuggestions.length === 0 ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  selectProvider(selectedProv);
+                                  setTab("providers");
+                                }}
+                                className="text-xs text-accent transition-opacity hover:opacity-80"
+                              >
+                                去启用模型
+                              </button>
+                            ) : (
+                              modelSuggestions.length > 0 &&
+                              customModelStages.has(stageDef.stage) && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setCustomModelStages((prev) => {
+                                      const next = new Set(prev);
+                                      next.delete(stageDef.stage);
+                                      return next;
+                                    })
+                                  }
+                                  className="text-xs text-accent transition-opacity hover:opacity-80"
+                                >
+                                  从列表选择
+                                </button>
+                              )
+                            )}
+                          </div>
+
+                          {modelSuggestions.length > 0 &&
+                          !customModelStages.has(stageDef.stage) ? (
+                            <select
+                              value={route.modelName}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === "__custom__") {
+                                  setCustomModelStages((prev) => {
+                                    const next = new Set(prev);
+                                    next.add(stageDef.stage);
+                                    return next;
+                                  });
+                                  return;
+                                }
+                                updateRouteField(stageDef.stage, {
+                                  modelName: val,
+                                });
+                              }}
+                              className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                            >
+                              {!route.modelName && <option value="">选择模型</option>}
+                              {route.modelName &&
+                                !modelSuggestions.includes(route.modelName) && (
+                                  <option value={route.modelName}>
+                                    {route.modelName}（当前值）
+                                  </option>
+                                )}
+                              {modelSuggestions.map((m) => (
+                                <option key={m} value={m}>
+                                  {m}
+                                </option>
+                              ))}
+                              <option value="__custom__">手动输入其他模型…</option>
+                            </select>
+                          ) : (
+                            <input
+                              type="text"
+                              value={route.modelName}
+                              onChange={(e) =>
+                                updateRouteField(stageDef.stage, {
+                                  modelName: e.target.value,
+                                })
+                              }
+                              placeholder={
+                                selectedProv && modelSuggestions.length === 0
+                                  ? "该服务尚未启用模型，可手动输入或点右上角启用"
+                                  : "输入模型 ID"
+                              }
+                              className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                            />
+                          )}
                         </div>
 
                         {/* Temperature */}

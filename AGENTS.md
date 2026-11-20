@@ -19,7 +19,7 @@ src/ (React + TS)  ──►  app/ (MyGo Service 胶水)  ──►  internal/ (
 
 1. **数据库与迁移禁止放 `main()` 顶层**：`mygo generate` 会注入 `MYGO_GENERATE` 环境变量并执行 `main()` 直至 `mygo.App.Run()` 后立即退出。因此 `main()` 中只能做 `mygo.Bind(...)`、`mygo.App.RequestSingleInstanceLock()` 与生命周期回调注册；SQLite 连接池打开、建表迁移与流水线恢复必须全部写在 `mygo.App.WhenReady(...)` 内。
 2. **CLI 包名区分**：项目尚未初始化 `mygo-cli` 依赖时，严禁运行 `bunx mygo`（npm 上存在同名无关包），必须使用 `bunx mygo-cli`；项目依赖装好后在根目录使用 `bun run dev` / `bunx mygo generate` / `bun run build`。
-3. **流式传输禁走自定义协议**：Windows WebView2 会缓冲自定义 URL Scheme 响应（约 1MB 门槛且阻塞同源读取），无法承载流式长连接。所有 AI Token 流与流水线进度必须走 `*mygo.Channel[T]` + `context.Context`（前端配合 `AbortController` 取消）或 `mygo.NewEvent[T]`。
+3. **流式传输禁走自定义协议且禁与 `.with({ signal })` 混用**：Windows WebView2 会缓冲自定义 URL Scheme 响应（约 1MB 门槛且阻塞同源读取），无法承载流式长连接。所有 AI Token 流与流水线进度必须走 `*mygo.Channel[T]` + `context.Context` 或 `mygo.NewEvent[T]`；**注意**：MyGo v0.10.0 中带 `*mygo.Channel[T]` 参数的方法严禁在前端使用 `.with({ signal })`（`ipc.go` 包装 `pageCtx` 会导致 `channel.go` 中 `w.pageCtx == page` 恒为 `false`，通道在进入方法前即被关闭），取消流式调用必须直接调用 `ch.close()`。
 4. **防闪白、防双开、防强退损坏库**：
    - 窗口创建必须设置 `Hidden: true`、`BackgroundColor: "light-dark(#F6F3EC, #141416)"`、`StateKey: "main"`，并在 `win.OnReadyToShow(win.Show)` 后再显示。
    - 必须启用 `mygo.App.RequestSingleInstanceLock()`，防止双开进程争抢 SQLite 写锁，二次拉起时聚焦已存在窗口。

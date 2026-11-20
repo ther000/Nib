@@ -74,7 +74,8 @@ export function CreateBookModal() {
   const [plan, setPlan] = useState<BookGenesisPlan | null>(null);
   const [selectedEntityIdx, setSelectedEntityIdx] = useState<Set<number>>(new Set());
   const [selectedOutlineIdx, setSelectedOutlineIdx] = useState<Set<number>>(new Set());
-  const abortRef = useRef<AbortController | null>(null);
+  const channelRef = useRef<Channel<GenesisChunk> | null>(null);
+  const userStoppedRef = useRef(false);
 
   const hasReadyModel = useMemo(() => {
     const enabledProviderIds = new Set(
@@ -121,7 +122,13 @@ export function CreateBookModal() {
 
   useEffect(() => {
     return () => {
-      abortRef.current?.abort();
+      userStoppedRef.current = true;
+      try {
+        channelRef.current?.close();
+      } catch {
+        // ignore
+      }
+      channelRef.current = null;
     };
   }, []);
 
@@ -137,7 +144,12 @@ export function CreateBookModal() {
   };
 
   const handleStopGenerate = () => {
-    abortRef.current?.abort();
+    userStoppedRef.current = true;
+    try {
+      channelRef.current?.close();
+    } catch {
+      // ignore
+    }
   };
 
   const handleGeneratePlan = async () => {
@@ -165,9 +177,12 @@ export function CreateBookModal() {
       return;
     }
 
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
+    try {
+      channelRef.current?.close();
+    } catch {
+      // ignore
+    }
+    userStoppedRef.current = false;
 
     setGenerating(true);
     setStreamChars(0);
@@ -182,11 +197,12 @@ export function CreateBookModal() {
         setSelectedOutlineIdx(new Set(chunk.plan.initialOutlines.map((_, i) => i)));
       }
     });
+    channelRef.current = ch;
 
     try {
-      const generated = await LibraryService.generateBookGenesis.with({
-        signal: controller.signal,
-      })(
+      // 注意：MyGo v0.10.0 中带 Channel 参数的方法不可与 .with({ signal }) 混用（否则 pageCtx 包装会导致 Channel 立即关闭），
+      // 取消流式调用直接通过 ch.close() 触发 Go 端 ctx 取消。
+      const generated = await LibraryService.generateBookGenesis(
         {
           idea: trimmedIdea,
           genre,
@@ -199,7 +215,7 @@ export function CreateBookModal() {
       setSelectedEntityIdx(new Set(generated.entities.map((_, i) => i)));
       setSelectedOutlineIdx(new Set(generated.initialOutlines.map((_, i) => i)));
     } catch (err) {
-      if (!controller.signal.aborted) {
+      if (!userStoppedRef.current) {
         notify({
           tone: "danger",
           message: "生成开书企划失败",
@@ -207,8 +223,13 @@ export function CreateBookModal() {
         });
       }
     } finally {
+      try {
+        if (!ch.closed) ch.close();
+      } catch {
+        // ignore
+      }
+      if (channelRef.current === ch) channelRef.current = null;
       setGenerating(false);
-      abortRef.current = null;
     }
   };
 

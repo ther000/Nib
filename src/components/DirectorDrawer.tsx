@@ -47,7 +47,7 @@ export function DirectorDrawer() {
   const [liveStatus, setLiveStatus] = useState("");
   const [liveToolCalls, setLiveToolCalls] = useState<DirectorToolCall[]>([]);
 
-  const abortRef = useRef<AbortController | null>(null);
+  const userStoppedRef = useRef(false);
   const channelRef = useRef<Channel<DirectorEvent> | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevBookIdRef = useRef<number | null>(null);
@@ -68,7 +68,13 @@ export function DirectorDrawer() {
   useEffect(() => {
     if (activeBook?.id !== prevBookIdRef.current) {
       prevBookIdRef.current = activeBook?.id ?? null;
-      abortRef.current?.abort();
+      userStoppedRef.current = true;
+      try {
+        channelRef.current?.close();
+      } catch {
+        // ignore
+      }
+      channelRef.current = null;
       setMessages([]);
       setLiveStatus("");
       setLiveToolCalls([]);
@@ -84,24 +90,25 @@ export function DirectorDrawer() {
 
   useEffect(() => {
     return () => {
+      userStoppedRef.current = true;
       try {
         channelRef.current?.close();
       } catch {
         // ignore
       }
-      abortRef.current?.abort();
+      channelRef.current = null;
     };
   }, []);
 
   if (!directorOpen || !activeBook) return null;
 
   const handleStop = () => {
+    userStoppedRef.current = true;
     try {
       channelRef.current?.close();
     } catch {
       // ignore
     }
-    abortRef.current?.abort();
   };
 
   const handleSend = async (overrideText?: string) => {
@@ -128,8 +135,7 @@ export function DirectorDrawer() {
     setMessages(nextHistory);
     if (!overrideText) setInput("");
 
-    const ac = new AbortController();
-    abortRef.current = ac;
+    userStoppedRef.current = false;
     setRunning(true);
     setLiveStatus("正在分析你的指令…");
     setLiveToolCalls([]);
@@ -151,7 +157,7 @@ export function DirectorDrawer() {
     channelRef.current = ch;
 
     try {
-      const reply = await DirectorService.sendInstruction.with({ signal: ac.signal })(
+      const reply = await DirectorService.sendInstruction(
         {
           bookId: activeBook.id,
           activeChapterId: activeChapter?.id ?? 0,
@@ -179,7 +185,7 @@ export function DirectorDrawer() {
         bumpMemoryRevision();
       }
     } catch (err) {
-      if (!ac.signal.aborted) {
+      if (!userStoppedRef.current) {
         notify({
           tone: "danger",
           message: "AI 导演执行失败",
@@ -204,11 +210,15 @@ export function DirectorDrawer() {
         ]);
       }
     } finally {
+      try {
+        if (!ch.closed) ch.close();
+      } catch {
+        // ignore
+      }
+      if (channelRef.current === ch) channelRef.current = null;
       setRunning(false);
       setLiveStatus("");
       setLiveToolCalls([]);
-      abortRef.current = null;
-      channelRef.current = null;
     }
   };
 

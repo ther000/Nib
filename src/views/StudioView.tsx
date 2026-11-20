@@ -907,9 +907,9 @@ export function StudioView() {
     };
 
     try {
-      const updated = await StudioService.generateChapter.with({
-        signal: ac.signal,
-      })(genChapterId, opts, ch);
+      // 注意：MyGo v0.10.0 中带 Channel 参数的方法不可与 .with({ signal }) 混用（否则 pageCtx 包装会导致 Channel 立即关闭），
+      // 取消流式生成通过 stopGeneration 调用 ch.close() 触发 Go 端 ctx 取消并安全落盘 partial 快照。
+      const updated = await StudioService.generateChapter(genChapterId, opts, ch);
 
       if (!mountedRef.current || streamRunIdRef.current !== runId) {
         return;
