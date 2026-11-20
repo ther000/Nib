@@ -1,15 +1,21 @@
 import type {
+  ArcSummaryLevel,
   BeatStage,
   ChapterStatus,
+  DeltaForeshadowAction,
   EmotionTag,
   EntityKind,
+  Foreshadowing,
+  ForeshadowingStatus,
   HookType,
   PipelineStage,
   ProviderProtocol,
+  StateEventStatus,
   VersionSource,
 } from "../mygo";
 
 export type WorkspaceTab = "architect" | "studio" | "atlas";
+export type AtlasSubTab = "entities" | "foreshadowings" | "summaries";
 
 export interface OptionMeta<T extends string = string> {
   value: T;
@@ -89,9 +95,65 @@ export const CHAPTER_STATUS_META: Record<
   },
   upstream_dirty: {
     label: "上游变更",
-    dotClass: "bg-danger",
-    badgeClass: "bg-danger-soft text-danger border-danger/30",
+    dotClass: "bg-danger ring-2 ring-warn/50",
+    badgeClass: "bg-danger-soft text-danger border-danger/45 font-medium",
   },
+};
+
+export const FORESHADOWING_STATUSES: Array<
+  OptionMeta<ForeshadowingStatus> & { badgeClass: string; dotClass: string }
+> = [
+  {
+    value: "pending_plant",
+    label: "待埋设",
+    badgeClass: "bg-elevated text-ink-secondary border-border-subtle",
+    dotClass: "bg-ink-muted",
+  },
+  {
+    value: "planted",
+    label: "已埋设",
+    badgeClass: "bg-accent-soft text-accent border-accent/30",
+    dotClass: "bg-accent",
+  },
+  {
+    value: "hinted",
+    label: "已暗示",
+    badgeClass: "bg-warn-soft text-warn border-warn/30",
+    dotClass: "bg-warn",
+  },
+  {
+    value: "resolved",
+    label: "已回收",
+    badgeClass: "bg-ok-soft text-ok border-ok/30",
+    dotClass: "bg-ok",
+  },
+  {
+    value: "abandoned",
+    label: "已废弃",
+    badgeClass: "bg-elevated text-ink-muted border-border-subtle",
+    dotClass: "bg-ink-muted/60",
+  },
+];
+
+export const ARC_SUMMARY_LEVELS: OptionMeta<ArcSummaryLevel>[] = [
+  { value: "arc_10", label: "10 章弧线摘要", shortLabel: "10章弧线" },
+  { value: "volume", label: "卷级摘要", shortLabel: "卷摘要" },
+];
+
+export const DELTA_FORESHADOW_ACTION_META: Record<
+  DeltaForeshadowAction,
+  { label: string; badgeClass: string }
+> = {
+  plant: { label: "埋设新伏笔", badgeClass: "bg-accent-soft text-accent border-accent/30" },
+  hint: { label: "推进暗示", badgeClass: "bg-warn-soft text-warn border-warn/30" },
+  resolve: { label: "回收关闭", badgeClass: "bg-ok-soft text-ok border-ok/30" },
+  abandon: { label: "废弃关闭", badgeClass: "bg-elevated text-ink-muted border-border-subtle" },
+};
+
+export const STATE_EVENT_STATUS_LABELS: Record<StateEventStatus, string> = {
+  pending: "待审",
+  committed: "已入库",
+  reverted: "已撤回",
 };
 
 export const PIPELINE_STAGES: Array<{
@@ -169,6 +231,65 @@ export function getChapterStatusMeta(status: ChapterStatus) {
 
 export function getVersionSourceLabel(source: VersionSource): string {
   return VERSION_SOURCE_LABELS[source] ?? source;
+}
+
+export function getForeshadowingStatusMeta(status: ForeshadowingStatus) {
+  return (
+    FORESHADOWING_STATUSES.find((s) => s.value === status) ?? {
+      value: status,
+      label: status || "已埋设",
+      badgeClass: "bg-elevated text-ink-secondary border-border-subtle",
+      dotClass: "bg-ink-muted",
+    }
+  );
+}
+
+export function getDeltaForeshadowActionMeta(action: DeltaForeshadowAction) {
+  return (
+    DELTA_FORESHADOW_ACTION_META[action] ?? {
+      label: action || "伏笔变更",
+      badgeClass: "bg-elevated text-ink-secondary border-border-subtle",
+    }
+  );
+}
+
+export function getArcSummaryLevelLabel(level: ArcSummaryLevel): string {
+  return ARC_SUMMARY_LEVELS.find((l) => l.value === level)?.label ?? level;
+}
+
+export function isForeshadowingOpen(status: ForeshadowingStatus): boolean {
+  return status === "pending_plant" || status === "planted" || status === "hinted";
+}
+
+export function isForeshadowingOverdue(item: Foreshadowing, currentSeq: number): boolean {
+  return (
+    isForeshadowingOpen(item.status) &&
+    item.targetResolveSeq > 0 &&
+    currentSeq > item.targetResolveSeq
+  );
+}
+
+export function isForeshadowingApproaching(item: Foreshadowing, currentSeq: number): boolean {
+  return (
+    isForeshadowingOpen(item.status) &&
+    item.targetResolveSeq > 0 &&
+    currentSeq > 0 &&
+    currentSeq <= item.targetResolveSeq &&
+    item.targetResolveSeq - currentSeq <= 3
+  );
+}
+
+export function parseKeywordList(raw: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of raw.split(/[\n,，、;；]+/)) {
+    const trimmed = part.trim();
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      out.push(trimmed);
+    }
+  }
+  return out;
 }
 
 export function getEmotionColorClass(tag: EmotionTag): string {

@@ -11,16 +11,22 @@ import {
 import {
   AtlasService,
   LibraryService,
+  MemoryService,
   SettingsService,
   type Book,
   type Chapter,
   type Entity,
+  type Foreshadowing,
   type GenrePreset,
   type ModelRoute,
   type ProviderPublic,
   type Volume,
 } from "../mygo";
-import { formatErrorMessage, type WorkspaceTab } from "../lib/constants";
+import {
+  formatErrorMessage,
+  type AtlasSubTab,
+  type WorkspaceTab,
+} from "../lib/constants";
 import {
   applyDocumentPreferences,
   loadPreferences,
@@ -59,6 +65,13 @@ interface AppContextValue {
   // Navigation & Modals
   activeTab: WorkspaceTab;
   setActiveTab: (tab: WorkspaceTab) => void;
+  atlasSubTab: AtlasSubTab;
+  setAtlasSubTab: (sub: AtlasSubTab) => void;
+  openAtlasSubTab: (sub: AtlasSubTab) => void;
+  atlasFocusEntityId: number | null;
+  clearAtlasFocusEntity: () => void;
+  jumpToChapter: (chapterId: number) => Promise<void>;
+  jumpToEntity: (entityId: number) => void;
   settingsOpen: boolean;
   settingsTab: SettingsTab;
   openSettings: (tab?: SettingsTab) => void;
@@ -66,6 +79,10 @@ interface AppContextValue {
   createBookOpen: boolean;
   openCreateBook: () => void;
   closeCreateBook: () => void;
+  memorySearchOpen: boolean;
+  openMemorySearch: () => void;
+  closeMemorySearch: () => void;
+  toggleMemorySearch: () => void;
 
   // Toasts
   toasts: ToastItem[];
@@ -88,18 +105,23 @@ interface AppContextValue {
   activeChapterId: number | null;
   activeChapter: Chapter | null;
   entities: Entity[];
+  foreshadowings: Foreshadowing[];
   providers: ProviderPublic[];
   modelRoutes: ModelRoute[];
+  memoryRevision: number;
 
   // Actions
   selectBook: (bookId: number) => Promise<void>;
   selectChapter: (chapterId: number | null) => Promise<void>;
   refreshBooks: (preferBookId?: number | null) => Promise<void>;
   refreshBookData: (bookId?: number | null, preferChapterId?: number | null) => Promise<void>;
+  refreshChapters: (bookId?: number | null) => Promise<void>;
   refreshActiveChapter: (chapterId?: number | null) => Promise<Chapter | null>;
   updateChapterInCache: (chapter: Chapter) => void;
   refreshEntities: (bookId?: number | null) => Promise<void>;
+  refreshForeshadowings: (bookId?: number | null) => Promise<void>;
   refreshSettingsData: () => Promise<void>;
+  bumpMemoryRevision: () => void;
 
   // Shortcut hooks for active view
   registerSaveHandler: (handler: (() => void | Promise<void>) | null) => void;
@@ -110,6 +132,14 @@ interface AppContextValue {
 
 const AppContext = createContext<AppContextValue | null>(null);
 
+async function safeListForeshadowings(bookId: number): Promise<Foreshadowing[]> {
+  try {
+    return await MemoryService.listForeshadowings(bookId, "");
+  } catch {
+    return [];
+  }
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [prefs, setPrefs] = useState<NibPreferences>(() => {
     const initial = loadPreferences();
@@ -118,9 +148,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   });
 
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("architect");
+  const [atlasSubTab, setAtlasSubTab] = useState<AtlasSubTab>("entities");
+  const [atlasFocusEntityId, setAtlasFocusEntityId] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("providers");
   const [createBookOpen, setCreateBookOpen] = useState(false);
+  const [memorySearchOpen, setMemorySearchOpen] = useState(false);
 
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const toastSeqRef = useRef(1);
@@ -138,8 +171,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [activeChapterId, setActiveChapterId] = useState<number | null>(null);
   const [activeChapter, setActiveChapter] = useState<Chapter | null>(null);
   const [entities, setEntities] = useState<Entity[]>([]);
+  const [foreshadowings, setForeshadowings] = useState<Foreshadowing[]>([]);
   const [providers, setProviders] = useState<ProviderPublic[]>([]);
   const [modelRoutes, setModelRoutes] = useState<ModelRoute[]>([]);
+  const [memoryRevision, setMemoryRevision] = useState(0);
 
   const saveHandlerRef = useRef<(() => void | Promise<void>) | null>(null);
   const generateHandlerRef = useRef<(() => void) | null>(null);
@@ -236,6 +271,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [activeBookId, notify]
   );
 
+  const refreshForeshadowings = useCallback(
+    async (targetBookId?: number | null) => {
+      const bid = targetBookId ?? activeBookId;
+      if (!bid) {
+        setForeshadowings([]);
+        return;
+      }
+      const list = await safeListForeshadowings(bid);
+      setForeshadowings(list);
+    },
+    [activeBookId]
+  );
+
+  const refreshChapters = useCallback(
+    async (targetBookId?: number | null) => {
+      const bid = targetBookId ?? activeBookId;
+      if (!bid) {
+        setChapters([]);
+        return;
+      }
+      try {
+        const chaps = await LibraryService.listBookChapters(bid);
+        setChapters(chaps);
+      } catch (err) {
+        notify({ tone: "danger", message: "刷新章节列表失败", detail: formatErrorMessage(err) });
+      }
+    },
+    [activeBookId, notify]
+  );
+
   const refreshBookData = useCallback(
     async (targetBookId?: number | null, preferChapterId?: number | null) => {
       const bid = targetBookId ?? activeBookId;
@@ -243,20 +308,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setVolumes([]);
         setChapters([]);
         setEntities([]);
+        setForeshadowings([]);
         setActiveChapterId(null);
         setActiveChapter(null);
         return;
       }
       setBookLoading(true);
       try {
-        const [vols, chaps, ents] = await Promise.all([
+        const [vols, chaps, ents, fss] = await Promise.all([
           LibraryService.listVolumes(bid),
           LibraryService.listBookChapters(bid),
           AtlasService.listEntities(bid, {}),
+          safeListForeshadowings(bid),
         ]);
         setVolumes(vols);
         setChapters(chaps);
         setEntities(ents);
+        setForeshadowings(fss);
 
         const desiredChapterId =
           preferChapterId !== undefined ? preferChapterId : activeChapterId;
@@ -313,6 +381,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setVolumes([]);
           setChapters([]);
           setEntities([]);
+          setForeshadowings([]);
           setActiveChapterId(null);
           setActiveChapter(null);
           updatePrefs((p) => ({ ...p, lastBookId: null, lastChapterId: null }));
@@ -356,6 +425,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [activeChapterId, loadChapterDetail]
   );
 
+  const bumpMemoryRevision = useCallback(() => {
+    setMemoryRevision((v) => v + 1);
+  }, []);
+
   // Initial bootstrap
   useEffect(() => {
     let cancelled = false;
@@ -384,15 +457,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           if (chosenBook) {
             setActiveBookId(chosenBook.id);
-            const [vols, chaps, ents] = await Promise.all([
+            const [vols, chaps, ents, fss] = await Promise.all([
               LibraryService.listVolumes(chosenBook.id),
               LibraryService.listBookChapters(chosenBook.id),
               AtlasService.listEntities(chosenBook.id, {}),
+              safeListForeshadowings(chosenBook.id),
             ]);
             if (cancelled) return;
             setVolumes(vols);
             setChapters(chaps);
             setEntities(ents);
+            setForeshadowings(fss);
 
             const chosenChap =
               (initialPrefs.lastChapterId
@@ -459,6 +534,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [updatePrefs]
   );
 
+  const openAtlasSubTab = useCallback((sub: AtlasSubTab) => {
+    setAtlasSubTab(sub);
+    setActiveTab("atlas");
+  }, []);
+
+  const clearAtlasFocusEntity = useCallback(() => {
+    setAtlasFocusEntityId(null);
+  }, []);
+
+  const jumpToChapter = useCallback(
+    async (chapterId: number) => {
+      await loadChapterDetail(chapterId);
+      setActiveTab("studio");
+    },
+    [loadChapterDetail]
+  );
+
+  const jumpToEntity = useCallback((entityId: number) => {
+    setAtlasSubTab("entities");
+    setAtlasFocusEntityId(entityId);
+    setActiveTab("atlas");
+  }, []);
+
   const openSettings = useCallback((tab: SettingsTab = "providers") => {
     setSettingsTab(tab);
     setSettingsOpen(true);
@@ -466,6 +564,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const openCreateBook = useCallback(() => setCreateBookOpen(true), []);
   const closeCreateBook = useCallback(() => setCreateBookOpen(false), []);
+  const openMemorySearch = useCallback(() => setMemorySearchOpen(true), []);
+  const closeMemorySearch = useCallback(() => setMemorySearchOpen(false), []);
+  const toggleMemorySearch = useCallback(() => setMemorySearchOpen((v) => !v), []);
 
   const registerSaveHandler = useCallback(
     (handler: (() => void | Promise<void>) | null) => {
@@ -502,6 +603,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toggleStudioDrawer,
       activeTab,
       setActiveTab,
+      atlasSubTab,
+      setAtlasSubTab,
+      openAtlasSubTab,
+      atlasFocusEntityId,
+      clearAtlasFocusEntity,
+      jumpToChapter,
+      jumpToEntity,
       settingsOpen,
       settingsTab,
       openSettings,
@@ -509,6 +617,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       createBookOpen,
       openCreateBook,
       closeCreateBook,
+      memorySearchOpen,
+      openMemorySearch,
+      closeMemorySearch,
+      toggleMemorySearch,
       toasts,
       notify,
       dismissToast,
@@ -525,18 +637,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
       activeChapterId,
       activeChapter,
       entities,
+      foreshadowings,
       providers,
       modelRoutes,
+      memoryRevision,
       selectBook,
       selectChapter: async (cid) => {
         await loadChapterDetail(cid);
       },
       refreshBooks,
       refreshBookData,
+      refreshChapters,
       refreshActiveChapter,
       updateChapterInCache,
       refreshEntities,
+      refreshForeshadowings,
       refreshSettingsData,
+      bumpMemoryRevision,
       registerSaveHandler,
       triggerSave,
       registerGenerateHandler,
@@ -554,6 +671,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setStudioDrawerOpen,
       toggleStudioDrawer,
       activeTab,
+      atlasSubTab,
+      openAtlasSubTab,
+      atlasFocusEntityId,
+      clearAtlasFocusEntity,
+      jumpToChapter,
+      jumpToEntity,
       settingsOpen,
       settingsTab,
       openSettings,
@@ -561,6 +684,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       createBookOpen,
       openCreateBook,
       closeCreateBook,
+      memorySearchOpen,
+      openMemorySearch,
+      closeMemorySearch,
+      toggleMemorySearch,
       toasts,
       notify,
       dismissToast,
@@ -577,16 +704,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
       activeChapterId,
       activeChapter,
       entities,
+      foreshadowings,
       providers,
       modelRoutes,
+      memoryRevision,
       selectBook,
       loadChapterDetail,
       refreshBooks,
       refreshBookData,
+      refreshChapters,
       refreshActiveChapter,
       updateChapterInCache,
       refreshEntities,
+      refreshForeshadowings,
       refreshSettingsData,
+      bumpMemoryRevision,
       registerSaveHandler,
       triggerSave,
       registerGenerateHandler,

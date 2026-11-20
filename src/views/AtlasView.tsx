@@ -1,18 +1,39 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
+  ArrowRight,
+  BookMarked,
+  Clock,
+  Flag,
+  History,
   Plus,
   Search,
   ShieldAlert,
   Trash2,
+  Users,
   X,
 } from "lucide-react";
-import { AtlasService, type Entity, type EntityKind, type GenreFieldSpec } from "../mygo";
+import {
+  AtlasService,
+  MemoryService,
+  type Entity,
+  type EntityKind,
+  type EntitySnapshot,
+  type EntityStateEvent,
+  type GenreFieldSpec,
+} from "../mygo";
 import { useApp } from "../stores/AppContext";
 import {
   ENTITY_KINDS,
+  STATE_EVENT_STATUS_LABELS,
   formatErrorMessage,
+  formatSeq,
   getEntityKindLabel,
+  isForeshadowingOverdue,
+  type AtlasSubTab,
 } from "../lib/constants";
+import { ForeshadowingBoard } from "../components/atlas/ForeshadowingBoard";
+import { ArcSummaryBoard } from "../components/atlas/ArcSummaryBoard";
 
 interface CustomAttrRow {
   localKey: string;
@@ -40,21 +61,70 @@ export function AtlasView() {
   const {
     activeBook,
     activeGenrePreset,
+    chapters,
     entities: allEntities,
+    foreshadowings,
+    atlasSubTab,
+    setAtlasSubTab,
+    atlasFocusEntityId,
+    clearAtlasFocusEntity,
+    memoryRevision,
     refreshEntities,
     notify,
   } = useApp();
 
+  const latestChapterSeq = useMemo(
+    () => chapters.reduce((max, c) => (c.globalSeq > max ? c.globalSeq : max), 0),
+    [chapters]
+  );
+
+  const overdueForeshadowCount = useMemo(
+    () =>
+      foreshadowings.filter((fs) => isForeshadowingOverdue(fs, latestChapterSeq))
+        .length,
+    [foreshadowings, latestChapterSeq]
+  );
+
+  // Timeline state for 实体档案
+  const [timelineSeq, setTimelineSeq] = useState<number>(latestChapterSeq);
+  const [includePending, setIncludePending] = useState<boolean>(false);
+  const userAdjustedTimelineRef = useRef(false);
+  const lastBookIdRef = useRef<number | null>(activeBook?.id ?? null);
+
+  // Reset timeline to latest chapter when book switches or chapters finish initial load
+  useEffect(() => {
+    const bookChanged = lastBookIdRef.current !== (activeBook?.id ?? null);
+    if (bookChanged) {
+      lastBookIdRef.current = activeBook?.id ?? null;
+      userAdjustedTimelineRef.current = false;
+      setTimelineSeq(latestChapterSeq);
+      return;
+    }
+    if (!userAdjustedTimelineRef.current) {
+      setTimelineSeq(latestChapterSeq);
+    } else if (timelineSeq > latestChapterSeq) {
+      setTimelineSeq(latestChapterSeq);
+    }
+  }, [activeBook?.id, latestChapterSeq, timelineSeq]);
+
+  // Entity list & snapshot state
   const [kindFilter, setKindFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [filteredEntities, setFilteredEntities] = useState<Entity[]>([]);
+  const [snapshots, setSnapshots] = useState<EntitySnapshot[]>([]);
+  const [searchMatchedIds, setSearchMatchedIds] = useState<Set<number> | null>(null);
   const [loading, setLoading] = useState(false);
+  const snapReqRef = useRef(0);
 
   // Slide-over editor state
   const [editor, setEditor] = useState<EntityEditorState | null>(null);
   const [aliasDraft, setAliasDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Chronological state events for currently open entity
+  const [entityEvents, setEntityEvents] = useState<EntityStateEvent[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [showAllEntityEvents, setShowAllEntityEvents] = useState(false);
 
   // All invariants pinned at top
   const invariants = useMemo(
@@ -71,32 +141,91 @@ export function AtlasView() {
     return map;
   }, [activeGenrePreset]);
 
-  // Query backend via AtlasService.listEntities (supports FTS5 + LIKE fallback)
-  const fetchFiltered = useCallback(async () => {
+  // Fetch timeline snapshots via MemoryService.snapshotAt
+  const fetchSnapshots = useCallback(async () => {
     if (!activeBook) {
-      setFilteredEntities([]);
+      setSnapshots([]);
       return;
     }
+    const reqId = ++snapReqRef.current;
     setLoading(true);
     try {
-      const list = await AtlasService.listEntities(activeBook.id, {
-        kind: kindFilter === "all" ? undefined : kindFilter,
-        query: searchQuery.trim() || undefined,
-      });
-      setFilteredEntities(list);
-    } catch (err) {
-      notify({ tone: "danger", message: "检索设定账本失败", detail: formatErrorMessage(err) });
+      const snaps = await MemoryService.snapshotAt(
+        activeBook.id,
+        timelineSeq,
+        includePending
+      );
+      if (snapReqRef.current !== reqId) return;
+      setSnapshots(snaps);
+    } catch {
+      if (snapReqRef.current !== reqId) return;
+      // Fallback cleanly to static entities if memory store isn't wired yet
+      setSnapshots(
+        allEntities.map((entity) => ({
+          entity,
+          effectiveAttributes: entity.attributes ?? {},
+          appliedEventCount: 0,
+          pendingEventCount: 0,
+        }))
+      );
     } finally {
-      setLoading(false);
+      if (snapReqRef.current === reqId) setLoading(false);
     }
-  }, [activeBook, kindFilter, searchQuery, notify]);
+  }, [activeBook, timelineSeq, includePending, allEntities]);
 
   useEffect(() => {
+    if (atlasSubTab !== "entities") return;
     const timer = window.setTimeout(() => {
-      void fetchFiltered();
-    }, 150);
+      void fetchSnapshots();
+    }, 100);
     return () => window.clearTimeout(timer);
-  }, [fetchFiltered, allEntities]);
+  }, [atlasSubTab, fetchSnapshots, memoryRevision]);
+
+  // Backend search filter when searchQuery is non-empty
+  useEffect(() => {
+    if (atlasSubTab !== "entities" || !activeBook) return;
+    const trimmed = searchQuery.trim();
+    if (!trimmed) {
+      setSearchMatchedIds(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const list = await AtlasService.listEntities(activeBook.id, {
+          kind: kindFilter === "all" ? undefined : kindFilter,
+          query: trimmed,
+        });
+        if (!cancelled) {
+          setSearchMatchedIds(new Set(list.map((e) => e.id)));
+        }
+      } catch (err) {
+        if (!cancelled) {
+          notify({
+            tone: "danger",
+            message: "检索设定账本失败",
+            detail: formatErrorMessage(err),
+          });
+        }
+      }
+    }, 150);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [atlasSubTab, activeBook, kindFilter, searchQuery, allEntities, notify]);
+
+  const displayedSnapshots = useMemo(() => {
+    return snapshots.filter((snap) => {
+      if (kindFilter !== "all" && snap.entity.kind !== kindFilter) {
+        return false;
+      }
+      if (searchMatchedIds !== null && !searchMatchedIds.has(snap.entity.id)) {
+        return false;
+      }
+      return true;
+    });
+  }, [snapshots, kindFilter, searchMatchedIds]);
 
   const getSpecsForKind = useCallback(
     (kind: EntityKind): GenreFieldSpec[] =>
@@ -122,36 +251,83 @@ export function AtlasView() {
     });
     setAliasDraft("");
     setConfirmDelete(false);
+    setEntityEvents([]);
+    setShowAllEntityEvents(false);
   };
 
-  const openEditEntity = (ent: Entity) => {
-    const specs = getSpecsForKind(ent.kind);
-    const specKeySet = new Set(specs.map((s) => s.key));
-    const presetValues: Record<string, string> = {};
-    for (const spec of specs) {
-      presetValues[spec.key] = ent.attributes?.[spec.key] ?? "";
-    }
-    const customAttrs: CustomAttrRow[] = [];
-    for (const [k, v] of Object.entries(ent.attributes ?? {})) {
-      if (!specKeySet.has(k)) {
-        customAttrs.push({ localKey: nextAttrKey(), key: k, value: v });
+  const openEditEntity = useCallback(
+    (ent: Entity) => {
+      const specs = getSpecsForKind(ent.kind);
+      const specKeySet = new Set(specs.map((s) => s.key));
+      const presetValues: Record<string, string> = {};
+      for (const spec of specs) {
+        presetValues[spec.key] = ent.attributes?.[spec.key] ?? "";
       }
-    }
-    setEditor({
-      id: ent.id,
-      kind: ent.kind,
-      name: ent.name,
-      aliases: Array.isArray(ent.aliases) ? [...ent.aliases] : [],
-      isInvariant: ent.isInvariant,
-      summary: ent.summary,
-      presetValues,
-      customAttrs,
-    });
-    setAliasDraft("");
-    setConfirmDelete(false);
-  };
+      const customAttrs: CustomAttrRow[] = [];
+      for (const [k, v] of Object.entries(ent.attributes ?? {})) {
+        if (!specKeySet.has(k)) {
+          customAttrs.push({ localKey: nextAttrKey(), key: k, value: v });
+        }
+      }
+      setEditor({
+        id: ent.id,
+        kind: ent.kind,
+        name: ent.name,
+        aliases: Array.isArray(ent.aliases) ? [...ent.aliases] : [],
+        isInvariant: ent.isInvariant,
+        summary: ent.summary,
+        presetValues,
+        customAttrs,
+      });
+      setAliasDraft("");
+      setConfirmDelete(false);
+      setShowAllEntityEvents(false);
+    },
+    [getSpecsForKind]
+  );
 
-  // When changing kind inside editor, re-seed preset fields while keeping entered values
+  // Handle cross-view jump from MemorySearchModal
+  useEffect(() => {
+    if (!atlasFocusEntityId) return;
+    const target = allEntities.find((e) => e.id === atlasFocusEntityId);
+    if (target) {
+      setAtlasSubTab("entities");
+      openEditEntity(target);
+      clearAtlasFocusEntity();
+    }
+  }, [atlasFocusEntityId, allEntities, setAtlasSubTab, openEditEntity, clearAtlasFocusEntity]);
+
+  // Load chronological state events for the open entity
+  useEffect(() => {
+    if (!activeBook || !editor || editor.id <= 0) {
+      setEntityEvents([]);
+      return;
+    }
+    // Note: backend treats upToSeq=0 as "unlimited". When user sits at chapter 0
+    // and hasn't asked to show all history, show 0 active events to stay spoiler-free.
+    if (!showAllEntityEvents && timelineSeq === 0) {
+      setEntityEvents([]);
+      setEventsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setEventsLoading(true);
+    const upToSeq = showAllEntityEvents ? 0 : timelineSeq;
+    MemoryService.listStateEvents(activeBook.id, editor.id, upToSeq, includePending)
+      .then((list) => {
+        if (!cancelled) setEntityEvents(list);
+      })
+      .catch(() => {
+        if (!cancelled) setEntityEvents([]);
+      })
+      .finally(() => {
+        if (!cancelled) setEventsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBook, editor?.id, timelineSeq, includePending, showAllEntityEvents, memoryRevision]);
+
   const handleKindChange = (nextKind: EntityKind) => {
     if (!editor) return;
     const allCurrent: Record<string, string> = { ...editor.presetValues };
@@ -220,7 +396,6 @@ export function AtlasView() {
       if (k && v) attributes[k] = v;
     }
 
-    // Flush pending alias text if user forgot to hit Enter
     const finalAliases = [...editor.aliases];
     const extraAlias = aliasDraft.trim();
     if (extraAlias && !finalAliases.includes(extraAlias)) {
@@ -267,7 +442,6 @@ export function AtlasView() {
     }
   };
 
-  // Close slide-over on Escape
   useEffect(() => {
     if (!editor) return;
     const onKey = (e: KeyboardEvent) => {
@@ -282,214 +456,382 @@ export function AtlasView() {
     [editor, getSpecsForKind]
   );
 
+  const subTabs: Array<{
+    id: AtlasSubTab;
+    label: string;
+    Icon: typeof Users;
+    badge?: number;
+    badgeTone?: "danger" | "muted";
+  }> = [
+    { id: "entities", label: "实体档案", Icon: Users, badge: allEntities.length, badgeTone: "muted" },
+    {
+      id: "foreshadowings",
+      label: "伏笔看板",
+      Icon: Flag,
+      badge: overdueForeshadowCount > 0 ? overdueForeshadowCount : foreshadowings.length,
+      badgeTone: overdueForeshadowCount > 0 ? "danger" : "muted",
+    },
+    { id: "summaries", label: "弧线摘要", Icon: BookMarked },
+  ];
+
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-canvas">
-      {/* Pinned Top Strip: 世界铁律 (isInvariant: true) */}
-      <section className="shrink-0 border-b border-border-subtle bg-surface/85 px-6 py-3">
-        <div className="mx-auto flex w-full max-w-[1160px] flex-wrap items-center gap-2.5">
-          <div className="flex shrink-0 items-center gap-1.5">
-            <ShieldAlert className="h-4 w-4 text-danger" />
-            <span className="text-xs font-semibold text-ink-primary">世界铁律</span>
-            <span className="nib-mono rounded bg-danger-soft px-1.5 py-0.5 text-[10px] font-medium text-danger">
-              P0 强制注入 · {invariants.length}
-            </span>
-          </div>
-
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-            {invariants.map((inv) => (
-              <button
-                key={inv.id}
-                type="button"
-                onClick={() => openEditEntity(inv)}
-                title={inv.summary || inv.name}
-                className="flex max-w-[260px] items-center gap-1.5 rounded-full border border-danger/30 bg-danger-soft/70 px-2.5 py-1 text-xs text-ink-primary transition-colors hover:border-danger/60"
-              >
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger" />
-                <span className="truncate font-medium">{inv.name}</span>
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => openNewEntity("rule", true)}
-              className="flex items-center gap-1 rounded-full border border-dashed border-accent/50 px-2.5 py-1 text-xs text-accent transition-colors hover:border-accent hover:bg-accent-soft"
-            >
-              <Plus className="h-3 w-3" />
-              <span>新增铁律</span>
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {/* Filter Toolbar + Entity Grid */}
-      <div className="flex-1 overflow-y-auto px-6 py-5">
-        <div className="mx-auto flex w-full max-w-[1160px] flex-col gap-5">
-          {/* Toolbar */}
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            {/* Kind Filter */}
-            <div className="flex flex-wrap items-center gap-1 rounded-lg border border-border-subtle bg-surface p-1">
-              <button
-                type="button"
-                onClick={() => setKindFilter("all")}
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                  kindFilter === "all"
-                    ? "bg-accent-soft text-accent"
-                    : "text-ink-secondary hover:text-ink-primary"
-                }`}
-              >
-                全部
-              </button>
-              {ENTITY_KINDS.map((k) => (
+      {/* Atlas Sub-Navigation Bar */}
+      <div className="shrink-0 border-b border-border-subtle bg-surface px-6">
+        <div className="mx-auto flex h-10 w-full max-w-[1160px] items-center justify-between gap-4">
+          <div className="flex items-center gap-1">
+            {subTabs.map(({ id, label, Icon, badge, badgeTone }) => {
+              const active = atlasSubTab === id;
+              return (
                 <button
-                  key={k.value}
+                  key={id}
                   type="button"
-                  onClick={() => setKindFilter(k.value)}
-                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                    kindFilter === k.value
+                  onClick={() => setAtlasSubTab(id)}
+                  className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                    active
                       ? "bg-accent-soft text-accent"
-                      : "text-ink-secondary hover:text-ink-primary"
+                      : "text-ink-secondary hover:bg-elevated/60 hover:text-ink-primary"
                   }`}
                 >
-                  {k.label}
+                  <Icon className="h-3.5 w-3.5" />
+                  <span>{label}</span>
+                  {badge !== undefined && badge > 0 && (
+                    <span
+                      className={`nib-mono rounded-full px-1.5 py-0.2 text-[10px] ${
+                        badgeTone === "danger"
+                          ? "bg-danger-soft text-danger font-semibold"
+                          : "bg-canvas/70 text-ink-muted"
+                      }`}
+                    >
+                      {badgeTone === "danger" ? `${badge} 超期` : badge}
+                    </span>
+                  )}
                 </button>
-              ))}
-            </div>
-
-            {/* Search + Add */}
-            <div className="flex items-center gap-2">
-              <div className="relative">
-                <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-ink-muted" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="检索实体名、别名或设定…"
-                  className="w-56 rounded-md border border-border-subtle bg-surface py-1.5 pr-7 pl-8 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
-                />
-                {searchQuery && (
-                  <button
-                    type="button"
-                    onClick={() => setSearchQuery("")}
-                    className="absolute top-1/2 right-2 -translate-y-1/2 text-ink-muted hover:text-ink-primary"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
-              </div>
-
-              <button
-                type="button"
-                onClick={() =>
-                  openNewEntity(
-                    kindFilter === "all" ? "character" : kindFilter,
-                    false
-                  )
-                }
-                className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                <span>新建实体</span>
-              </button>
-            </div>
+              );
+            })}
           </div>
 
-          {/* Card Grid */}
-          {loading && filteredEntities.length === 0 ? (
-            <div className="py-16 text-center text-xs text-ink-muted">
-              正在加载设定账本…
-            </div>
-          ) : filteredEntities.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border-strong bg-surface/35 py-16 text-center">
-              <div className="text-xs text-ink-secondary">
-                {searchQuery
-                  ? `未找到与「${searchQuery}」匹配的实体`
-                  : "当前分类下暂无设定实体"}
-              </div>
-              {!searchQuery && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    openNewEntity(
-                      kindFilter === "all" ? "character" : kindFilter,
-                      false
-                    )
-                  }
-                  className="rounded-md border border-accent/40 bg-accent-soft px-3.5 py-1.5 text-xs font-medium text-accent hover:border-accent"
-                >
-                  新建实体档案
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
-              {filteredEntities.map((ent) => {
-                const attrEntries = Object.entries(ent.attributes ?? {}).slice(0, 4);
-                return (
-                  <button
-                    key={ent.id}
-                    type="button"
-                    onClick={() => openEditEntity(ent)}
-                    className="group flex flex-col rounded-xl border border-border-subtle bg-surface p-4 text-left transition-colors hover:border-border-strong hover:bg-elevated/60"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="truncate text-[14.5px] font-medium text-ink-primary">
-                            {ent.name}
-                          </span>
-                          {ent.isInvariant && (
-                            <span className="shrink-0 rounded bg-danger-soft px-1.5 py-0.5 text-[10px] font-medium text-danger">
-                              铁律
-                            </span>
-                          )}
-                        </div>
-                        {ent.aliases && ent.aliases.length > 0 && (
-                          <div className="mt-1 truncate text-[11px] text-ink-muted">
-                            别名：{ent.aliases.join(" / ")}
-                          </div>
-                        )}
-                      </div>
-                      <span className="shrink-0 rounded-md border border-border-subtle bg-canvas/70 px-2 py-0.5 text-[11px] text-ink-secondary">
-                        {getEntityKindLabel(ent.kind)}
-                      </span>
-                    </div>
-
-                    {ent.summary && (
-                      <p className="mt-2.5 line-clamp-2 text-xs leading-relaxed text-ink-secondary">
-                        {ent.summary}
-                      </p>
-                    )}
-
-                    {attrEntries.length > 0 && (
-                      <div className="mt-3 flex flex-wrap gap-1.5 border-t border-border-subtle pt-2.5">
-                        {attrEntries.map(([k, v]) => {
-                          const spec = fieldLabelMap.get(k);
-                          return (
-                            <span
-                              key={k}
-                              className={`inline-flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 text-[11px] ${
-                                spec?.highRisk
-                                  ? "bg-accent-soft text-ink-primary"
-                                  : "bg-canvas/80 text-ink-secondary"
-                              }`}
-                            >
-                              <span className="shrink-0 text-ink-muted">
-                                {spec?.label ?? k}:
-                              </span>
-                              <span className="truncate">{v}</span>
-                            </span>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </button>
-                );
-              })}
+          {atlasSubTab === "entities" && (
+            <div className="hidden items-center gap-2 text-[11px] text-ink-muted sm:flex">
+              <Clock className="h-3.5 w-3.5 text-accent" />
+              <span>
+                {timelineSeq === 0
+                  ? "初始静态设定"
+                  : `时间轴：截至第 ${formatSeq(timelineSeq)} 章`}
+              </span>
             </div>
           )}
         </div>
       </div>
 
-      {/* Slide-Over Detail Editor */}
+      {/* Sub-tab 1: 实体档案 (with Pinned Invariants + Chapter Timeline Slider) */}
+      {atlasSubTab === "entities" && (
+        <>
+          {/* Pinned Top Strip: 世界铁律 (isInvariant: true) */}
+          <section className="shrink-0 border-b border-border-subtle bg-surface/65 px-6 py-2.5">
+            <div className="mx-auto flex w-full max-w-[1160px] flex-wrap items-center gap-2.5">
+              <div className="flex shrink-0 items-center gap-1.5">
+                <ShieldAlert className="h-4 w-4 text-danger" />
+                <span className="text-xs font-semibold text-ink-primary">世界铁律</span>
+                <span className="nib-mono rounded bg-danger-soft px-1.5 py-0.5 text-[10px] font-medium text-danger">
+                  P0 强制注入 · {invariants.length}
+                </span>
+              </div>
+
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+                {invariants.map((inv) => (
+                  <button
+                    key={inv.id}
+                    type="button"
+                    onClick={() => openEditEntity(inv)}
+                    title={inv.summary || inv.name}
+                    className="flex max-w-[260px] items-center gap-1.5 rounded-full border border-danger/30 bg-danger-soft/70 px-2.5 py-1 text-xs text-ink-primary transition-colors hover:border-danger/60"
+                  >
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger" />
+                    <span className="truncate font-medium">{inv.name}</span>
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => openNewEntity("rule", true)}
+                  className="flex items-center gap-1 rounded-full border border-dashed border-accent/50 px-2.5 py-1 text-xs text-accent transition-colors hover:border-accent hover:bg-accent-soft"
+                >
+                  <Plus className="h-3 w-3" />
+                  <span>新增铁律</span>
+                </button>
+              </div>
+            </div>
+          </section>
+
+          {/* Main Content */}
+          <div className="flex-1 overflow-y-auto px-6 py-5">
+            <div className="mx-auto flex w-full max-w-[1160px] flex-col gap-4">
+              {/* Chapter Timeline Slider Strip */}
+              <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border-subtle bg-surface px-4 py-3">
+                <div className="flex min-w-[240px] flex-1 items-center gap-3">
+                  <div className="flex shrink-0 items-center gap-1.5 text-xs">
+                    <History className="h-3.5 w-3.5 text-accent" />
+                    <span className="font-medium text-ink-primary">
+                      {timelineSeq === 0
+                        ? "截至第 0 章（初始设定）"
+                        : `截至第 ${formatSeq(timelineSeq)} 章世界状态`}
+                    </span>
+                  </div>
+
+                  <input
+                    type="range"
+                    min={0}
+                    max={latestChapterSeq}
+                    value={timelineSeq}
+                    disabled={latestChapterSeq === 0}
+                    onChange={(e) => {
+                      userAdjustedTimelineRef.current = true;
+                      setTimelineSeq(Number(e.target.value));
+                    }}
+                    className="h-1.5 flex-1 cursor-pointer accent-[var(--accent)] disabled:opacity-35"
+                  />
+
+                  <span className="nib-mono shrink-0 text-[11px] text-ink-muted">
+                    {formatSeq(timelineSeq)} / {formatSeq(latestChapterSeq)}
+                  </span>
+
+                  {latestChapterSeq > 0 && (
+                    <div className="flex shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          userAdjustedTimelineRef.current = true;
+                          setTimelineSeq(0);
+                        }}
+                        className={`rounded px-1.5 py-0.5 text-[10.5px] transition-colors ${
+                          timelineSeq === 0
+                            ? "bg-accent-soft text-accent"
+                            : "text-ink-muted hover:bg-elevated hover:text-ink-primary"
+                        }`}
+                      >
+                        初始
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          userAdjustedTimelineRef.current = false;
+                          setTimelineSeq(latestChapterSeq);
+                        }}
+                        className={`rounded px-1.5 py-0.5 text-[10.5px] transition-colors ${
+                          timelineSeq === latestChapterSeq
+                            ? "bg-accent-soft text-accent"
+                            : "text-ink-muted hover:bg-elevated hover:text-ink-primary"
+                        }`}
+                      >
+                        最新
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-ink-secondary select-none">
+                  <input
+                    type="checkbox"
+                    checked={includePending}
+                    onChange={(e) => setIncludePending(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-[var(--accent)]"
+                  />
+                  <span>含待审状态</span>
+                </label>
+              </div>
+
+              {/* Filter Toolbar */}
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-1 rounded-lg border border-border-subtle bg-surface p-1">
+                  <button
+                    type="button"
+                    onClick={() => setKindFilter("all")}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                      kindFilter === "all"
+                        ? "bg-accent-soft text-accent"
+                        : "text-ink-secondary hover:text-ink-primary"
+                    }`}
+                  >
+                    全部
+                  </button>
+                  {ENTITY_KINDS.map((k) => (
+                    <button
+                      key={k.value}
+                      type="button"
+                      onClick={() => setKindFilter(k.value)}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                        kindFilter === k.value
+                          ? "bg-accent-soft text-accent"
+                          : "text-ink-secondary hover:text-ink-primary"
+                      }`}
+                    >
+                      {k.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-ink-muted" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="检索实体名、别名或设定…"
+                      className="w-56 rounded-md border border-border-subtle bg-surface py-1.5 pr-7 pl-8 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                    />
+                    {searchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setSearchQuery("")}
+                        className="absolute top-1/2 right-2 -translate-y-1/2 text-ink-muted hover:text-ink-primary"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openNewEntity(
+                        kindFilter === "all" ? "character" : kindFilter,
+                        false
+                      )
+                    }
+                    className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    <span>新建实体</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Snapshot Card Grid */}
+              {loading && displayedSnapshots.length === 0 ? (
+                <div className="py-16 text-center text-xs text-ink-muted">
+                  正在折算时间轴快照…
+                </div>
+              ) : displayedSnapshots.length === 0 ? (
+                <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border-strong bg-surface/35 py-16 text-center">
+                  <div className="text-xs text-ink-secondary">
+                    {searchQuery
+                      ? `未找到与「${searchQuery}」匹配的实体`
+                      : "当前分类下暂无设定实体"}
+                  </div>
+                  {!searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openNewEntity(
+                          kindFilter === "all" ? "character" : kindFilter,
+                          false
+                        )
+                      }
+                      className="rounded-md border border-accent/40 bg-accent-soft px-3.5 py-1.5 text-xs font-medium text-accent hover:border-accent"
+                    >
+                      新建实体档案
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-3.5 pb-8 sm:grid-cols-2 lg:grid-cols-3">
+                  {displayedSnapshots.map((snap) => {
+                    const ent = snap.entity;
+                    const effectiveAttrs = snap.effectiveAttributes ?? ent.attributes ?? {};
+                    const attrEntries = Object.entries(effectiveAttrs).slice(0, 4);
+                    return (
+                      <button
+                        key={ent.id}
+                        type="button"
+                        onClick={() => openEditEntity(ent)}
+                        className="group flex flex-col rounded-xl border border-border-subtle bg-surface p-4 text-left transition-colors hover:border-border-strong hover:bg-elevated/60"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="truncate text-[14.5px] font-medium text-ink-primary">
+                                {ent.name}
+                              </span>
+                              {ent.isInvariant && (
+                                <span className="shrink-0 rounded bg-danger-soft px-1.5 py-0.5 text-[10px] font-medium text-danger">
+                                  铁律
+                                </span>
+                              )}
+                              {snap.appliedEventCount > 0 && (
+                                <span className="nib-mono shrink-0 rounded bg-accent-soft px-1.5 py-0.5 text-[10px] text-accent">
+                                  {snap.appliedEventCount} 演变
+                                </span>
+                              )}
+                              {snap.pendingEventCount > 0 && (
+                                <span className="nib-mono shrink-0 rounded bg-warn-soft px-1.5 py-0.5 text-[10px] text-warn">
+                                  {snap.pendingEventCount} 待审
+                                </span>
+                              )}
+                            </div>
+                            {ent.aliases && ent.aliases.length > 0 && (
+                              <div className="mt-1 truncate text-[11px] text-ink-muted">
+                                别名：{ent.aliases.join(" / ")}
+                              </div>
+                            )}
+                          </div>
+                          <span className="shrink-0 rounded-md border border-border-subtle bg-canvas/70 px-2 py-0.5 text-[11px] text-ink-secondary">
+                            {getEntityKindLabel(ent.kind)}
+                          </span>
+                        </div>
+
+                        {ent.summary && (
+                          <p className="mt-2.5 line-clamp-2 text-xs leading-relaxed text-ink-secondary">
+                            {ent.summary}
+                          </p>
+                        )}
+
+                        {attrEntries.length > 0 && (
+                          <div className="mt-3 flex flex-wrap gap-1.5 border-t border-border-subtle pt-2.5">
+                            {attrEntries.map(([k, v]) => {
+                              const spec = fieldLabelMap.get(k);
+                              const changedFromBase = (ent.attributes?.[k] ?? "") !== v;
+                              return (
+                                <span
+                                  key={k}
+                                  className={`inline-flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 text-[11px] ${
+                                    changedFromBase
+                                      ? "border border-accent/35 bg-accent-soft text-ink-primary"
+                                      : spec?.highRisk
+                                      ? "bg-accent-soft/60 text-ink-primary"
+                                      : "bg-canvas/80 text-ink-secondary"
+                                  }`}
+                                >
+                                  <span className="shrink-0 text-ink-muted">
+                                    {spec?.label ?? k}:
+                                  </span>
+                                  <span className="truncate">{v}</span>
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Sub-tab 2: 伏笔看板 */}
+      {atlasSubTab === "foreshadowings" && (
+        <ForeshadowingBoard latestChapterSeq={latestChapterSeq} />
+      )}
+
+      {/* Sub-tab 3: 弧线摘要 */}
+      {atlasSubTab === "summaries" && (
+        <ArcSummaryBoard latestChapterSeq={latestChapterSeq} />
+      )}
+
+      {/* Slide-Over Detail Editor for Entities (with Chronological State Events History) */}
       {editor && (
         <div
           className="fixed inset-0 z-40 flex justify-end bg-black/50 backdrop-blur-[1px]"
@@ -497,7 +839,7 @@ export function AtlasView() {
             if (e.target === e.currentTarget) setEditor(null);
           }}
         >
-          <div className="flex h-full w-full max-w-[460px] flex-col border-l border-border-strong bg-elevated shadow-[var(--shadow-elevated)]">
+          <div className="flex h-full w-full max-w-[480px] flex-col border-l border-border-strong bg-elevated shadow-[var(--shadow-elevated)]">
             {/* Header */}
             <div className="flex items-center justify-between border-b border-border-subtle px-5 py-3.5">
               <h2 className="text-sm font-medium text-ink-primary">
@@ -623,15 +965,15 @@ export function AtlasView() {
                 />
               </div>
 
-              {/* Genre-Preseeded Structured Attributes */}
+              {/* Genre-Preseeded Static Base Attributes */}
               {editorSpecs.length > 0 && (
                 <div className="flex flex-col gap-2.5">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium text-ink-secondary">
-                      {activeGenrePreset?.name ?? "题材"}快捷属性
+                      {activeGenrePreset?.name ?? "题材"}初始属性底座
                     </span>
                     <span className="text-[11px] text-ink-muted">
-                      高危字段重点防吃书
+                      后续章节变化记录在状态事件账本中
                     </span>
                   </div>
                   <div className="flex flex-col gap-2">
@@ -743,6 +1085,101 @@ export function AtlasView() {
                   </div>
                 ))}
               </div>
+
+              {/* Chronological State Events Ledger (for existing entities) */}
+              {editor.id > 0 && (
+                <div className="flex flex-col gap-2 border-t border-border-subtle pt-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 text-xs font-medium text-ink-primary">
+                      <History className="h-3.5 w-3.5 text-accent" />
+                      <span>状态演变流水</span>
+                      <span className="nib-mono text-[11px] text-ink-muted">
+                        ({entityEvents.length})
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowAllEntityEvents((v) => !v)}
+                      className="text-[11px] text-accent hover:opacity-80"
+                    >
+                      {showAllEntityEvents
+                        ? `仅看截至第 ${formatSeq(timelineSeq)} 章`
+                        : "查看全书演变"}
+                    </button>
+                  </div>
+
+                  {eventsLoading ? (
+                    <div className="py-4 text-center text-xs text-ink-muted">
+                      正在读取状态事件…
+                    </div>
+                  ) : entityEvents.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-border-subtle px-3 py-4 text-center text-[11.5px] text-ink-muted">
+                      {!showAllEntityEvents && timelineSeq === 0
+                        ? "当前处于第 0 章初始态，尚无章节变更事件"
+                        : "截至当前时间点暂无状态演变记录"}
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      {entityEvents.map((ev) => {
+                        const isHighRisk = ev.changeSeverity === "high_risk";
+                        const spec = fieldLabelMap.get(ev.attrKey);
+                        return (
+                          <div
+                            key={ev.id}
+                            className={`rounded-lg border px-3 py-2 text-xs ${
+                              isHighRisk
+                                ? "border-danger/35 bg-danger-soft/30"
+                                : "border-border-subtle bg-canvas/70"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5">
+                                <span className="nib-mono rounded bg-surface px-1.5 py-0.5 text-[10.5px] text-accent">
+                                  第 {formatSeq(ev.chapterSeq)} 章
+                                </span>
+                                <span className="font-medium text-ink-primary">
+                                  {spec?.label ?? ev.attrKey}
+                                </span>
+                                {isHighRisk && (
+                                  <span className="inline-flex items-center gap-0.5 rounded bg-danger-soft px-1 text-[10px] font-medium text-danger">
+                                    <AlertTriangle className="h-2.5 w-2.5" />
+                                    高危
+                                  </span>
+                                )}
+                              </div>
+                              <span
+                                className={`rounded px-1.5 py-0.2 text-[10px] ${
+                                  ev.status === "pending"
+                                    ? "bg-warn-soft text-warn"
+                                    : "bg-surface text-ink-muted"
+                                }`}
+                              >
+                                {STATE_EVENT_STATUS_LABELS[ev.status] ?? ev.status}
+                              </span>
+                            </div>
+
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11.5px]">
+                              <span className="text-ink-muted line-through">
+                                {ev.prevValue || "无"}
+                              </span>
+                              <ArrowRight className="h-3 w-3 shrink-0 text-ink-muted" />
+                              <span className="font-medium text-ink-primary">
+                                {ev.newValue || "清空"}
+                              </span>
+                            </div>
+
+                            {ev.reason && (
+                              <div className="mt-1 text-[11px] text-ink-secondary">
+                                {ev.reason}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Footer */}

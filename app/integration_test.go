@@ -17,6 +17,7 @@ import (
 	"nib/internal/domain"
 	"nib/internal/exporter"
 	"nib/internal/llm"
+	"nib/internal/memory"
 	"nib/internal/pipeline"
 	"nib/internal/store"
 )
@@ -525,5 +526,430 @@ func TestRuntimeCloseCancelsInFlightPipelineBeforeClosingDB(t *testing.T) {
 	}
 	if persisted.Status != domain.ChapterStatusPartial || !strings.Contains(persisted.Content, "半截已流出的正文内容") {
 		t.Fatalf("persisted chapter mismatch after graceful shutdown: status=%q content=%q", persisted.Status, persisted.Content)
+	}
+}
+
+func TestPhase2MemoryEndToEndWorkflow(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "nib-phase2.db")
+
+	const (
+		rawSecretKey = "sk-phase2-extract-key-7744b9c1"
+		extractModel = "mock-extractor-v1"
+	)
+
+	var (
+		heroID int64
+		itemID int64
+	)
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer "+rawSecretKey {
+			http.Error(w, `{"error":{"message":"unauthorized"}}`, http.StatusUnauthorized)
+			return
+		}
+
+		extractJSON, _ := json.Marshal(map[string]any{
+			"causal_summary": "林渊于石室残阵反杀王执事，夺得破障丹与血玉令牌，左肩受阴雷暗伤，连夜撤离坊市。",
+			"new_entities":   []any{},
+			"state_patches": []map[string]any{
+				{
+					"entity_id":   itemID,
+					"entity_name": "破障丹",
+					"attr_key":    "owner",
+					"prev_value":  "王执事",
+					"new_value":   "林渊",
+					"severity":    "high_risk",
+					"reason":      "击杀王执事后战利品易主",
+				},
+				{
+					"entity_id":   heroID,
+					"entity_name": "林渊",
+					"attr_key":    "injury",
+					"prev_value":  "完好",
+					"new_value":   "左肩阴雷暗伤",
+					"severity":    "normal",
+					"reason":      "残阵反杀时被阴雷擦伤",
+				},
+			},
+			"foreshadowing_updates": []map[string]any{
+				{
+					"action":              "plant",
+					"foreshadowing_id":    0,
+					"title":               "血玉令牌密库",
+					"description":         "血玉令牌背面古阵纹指向三百年前失踪灵脉。",
+					"target_resolve_seq":  10,
+					"involved_entity_ids": []int64{heroID},
+				},
+			},
+		})
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+
+		payload, _ := json.Marshal(map[string]any{
+			"choices": []map[string]any{
+				{"delta": map[string]string{"content": string(extractJSON)}},
+			},
+		})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", payload)
+		usagePayload, _ := json.Marshal(map[string]any{
+			"choices": []map[string]any{{"finish_reason": "stop"}},
+			"usage":   map[string]int{"prompt_tokens": 220, "completion_tokens": 110, "total_tokens": 330},
+		})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", usagePayload)
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer mockServer.Close()
+
+	// 1. 真实装配 SQLite (001+002) + MemoryExtractor + Phase 2 Compiler + Services
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open failed: %v", err)
+	}
+	llmClient := llm.NewClient(llm.WithHTTPClient(mockServer.Client()))
+	comp := compiler.New(st, compiler.WithMemorySource(st))
+	runner := pipeline.New(st, comp, llmClient, exporter.New())
+	extractor := memory.NewExtractor(st, llmClient)
+
+	rt := app.NewRuntime()
+	rt.Init(app.RuntimeDeps{
+		Store:          st,
+		Exporter:       exporter.NewStoreExporter(st),
+		LLM:            llmClient,
+		Compiler:       comp,
+		Pipeline:       runner,
+		MemoryStore:    st,
+		DeltaExtractor: extractor,
+	})
+	defer func() {
+		if err := rt.Close(); err != nil {
+			t.Errorf("rt.Close failed: %v", err)
+		}
+	}()
+
+	lib := app.NewLibraryService(rt)
+	atlas := app.NewAtlasService(rt)
+	settings := app.NewSettingsService(rt)
+	studio := app.NewStudioService(rt)
+	memSvc := app.NewMemoryService(rt)
+
+	// 2. 创建书、卷、3 章（ch2/ch3 设为 outlined 供测试下游 upstream_dirty）、林渊 + 破障丹
+	book, err := lib.CreateBook(ctx, domain.CreateBookInput{
+		Title:        "太初剑渊",
+		Genre:        domain.GenreXianxia,
+		Premise:      "散修林渊凭古阵盘于修真界步步为营。",
+		GoldenFinger: "残缺古阵盘可反推灵阵破绽。",
+	})
+	if err != nil {
+		t.Fatalf("CreateBook failed: %v", err)
+	}
+	vol, err := lib.UpsertVolume(ctx, domain.UpsertVolumeInput{
+		BookID: book.ID,
+		Seq:    1,
+		Title:  "青云起",
+		Goal:   "坊市反杀夺丹并逃出黑煞宗封锁。",
+	})
+	if err != nil {
+		t.Fatalf("UpsertVolume failed: %v", err)
+	}
+
+	ch1, err := lib.CreateChapter(ctx, domain.CreateChapterInput{
+		BookID:     book.ID,
+		VolumeID:   vol.ID,
+		Title:      "残阵反杀",
+		EmotionTag: domain.EmotionBurst,
+		HookType:   domain.HookCrisis,
+	})
+	if err != nil {
+		t.Fatalf("CreateChapter ch1 failed: %v", err)
+	}
+	ch2, err := lib.CreateChapter(ctx, domain.CreateChapterInput{
+		BookID:         book.ID,
+		VolumeID:       vol.ID,
+		Title:          "夜遁荒山",
+		EmotionTag:     domain.EmotionSuppress,
+		HookType:       domain.HookMystery,
+		OutlineSummary: "林渊带伤清点破障丹并查验血玉令牌。",
+	})
+	if err != nil {
+		t.Fatalf("CreateChapter ch2 failed: %v", err)
+	}
+	ch3, err := lib.CreateChapter(ctx, domain.CreateChapterInput{
+		BookID:     book.ID,
+		VolumeID:   vol.ID,
+		Title:      "黑煞老祖降临",
+		EmotionTag: domain.EmotionTurn,
+		HookType:   domain.HookCrisis,
+	})
+	if err != nil {
+		t.Fatalf("CreateChapter ch3 failed: %v", err)
+	}
+
+	if _, err := lib.UpdateChapterMeta(ctx, domain.UpdateChapterMetaInput{
+		ID:             ch2.ID,
+		Title:          ch2.Title,
+		Status:         domain.ChapterStatusOutlined,
+		EmotionTag:     domain.EmotionSuppress,
+		HookType:       domain.HookMystery,
+		OutlineSummary: "林渊带伤清点破障丹并查验血玉令牌。",
+	}); err != nil {
+		t.Fatalf("UpdateChapterMeta ch2 failed: %v", err)
+	}
+	if _, err := lib.UpdateChapterMeta(ctx, domain.UpdateChapterMetaInput{
+		ID:         ch3.ID,
+		Title:      ch3.Title,
+		Status:     domain.ChapterStatusOutlined,
+		EmotionTag: domain.EmotionTurn,
+		HookType:   domain.HookCrisis,
+	}); err != nil {
+		t.Fatalf("UpdateChapterMeta ch3 failed: %v", err)
+	}
+
+	// 保存 ch1 与 ch3 正文（ch3 含未来章独有关键词 "黑煞老祖"，用于验证 maxChapterSeq 防剧透）
+	if _, err := lib.SaveChapterDraft(ctx, domain.SaveChapterDraftInput{
+		ChapterID: ch1.ID,
+		Content:   "残阵灵光骤灭，林渊忍着左肩阴雷暗伤，从王执事腰间摸出装有破障丹的青玉瓶与一枚血玉令牌。",
+		Status:    domain.ChapterStatusReviewing,
+	}); err != nil {
+		t.Fatalf("SaveChapterDraft ch1 failed: %v", err)
+	}
+	if _, err := lib.SaveChapterDraft(ctx, domain.SaveChapterDraftInput{
+		ChapterID: ch3.ID,
+		Content:   "三日后，黑煞老祖亲临坊市废墟，神识横扫百里追查血玉令牌下落。",
+		Status:    domain.ChapterStatusOutlined,
+	}); err != nil {
+		t.Fatalf("SaveChapterDraft ch3 failed: %v", err)
+	}
+
+	hero, err := atlas.UpsertEntity(ctx, domain.UpsertEntityInput{
+		BookID:  book.ID,
+		Kind:    domain.EntityKindCharacter,
+		Name:    "林渊",
+		Summary: "青云宗散修出身，谨慎狠辣。",
+		Attributes: map[string]string{
+			"cultivation": "筑基初期",
+			"injury":      "完好",
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpsertEntity 林渊 failed: %v", err)
+	}
+	item, err := atlas.UpsertEntity(ctx, domain.UpsertEntityInput{
+		BookID:  book.ID,
+		Kind:    domain.EntityKindItem,
+		Name:    "破障丹",
+		Summary: "可助筑基修士冲关破境的稀缺灵丹。",
+		Attributes: map[string]string{
+			"owner": "王执事",
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpsertEntity 破障丹 failed: %v", err)
+	}
+	heroID = hero.ID
+	itemID = item.ID
+
+	if _, err := lib.ReplaceBeats(ctx, ch2.ID, []domain.Beat{
+		{
+			Stage:       domain.BeatStageSetup,
+			Summary:     "林渊遁入荒山石窟，检查左肩伤势与破障丹。",
+			POVEntityID: &hero.ID,
+			EntityIDs:   []int64{hero.ID, item.ID},
+			TargetWords: 600,
+		},
+	}); err != nil {
+		t.Fatalf("ReplaceBeats ch2 failed: %v", err)
+	}
+
+	// 3. 配置供应商与 extract 路由，并调用 MemoryService.ExtractChapterDelta
+	prov, err := settings.UpsertProvider(ctx, domain.UpsertProviderInput{
+		Name:     "MockExtract",
+		Protocol: domain.ProtocolOpenAICompat,
+		BaseURL:  mockServer.URL + "/v1",
+		APIKey:   rawSecretKey,
+		Models:   []string{extractModel},
+		Enabled:  true,
+	})
+	if err != nil {
+		t.Fatalf("UpsertProvider failed: %v", err)
+	}
+	pid := prov.ID
+	if _, err := settings.SaveModelRoute(ctx, domain.ModelRoute{
+		Stage:       domain.StageExtract,
+		ProviderID:  &pid,
+		ModelName:   extractModel,
+		Temperature: 0.1,
+		MaxTokens:   2048,
+	}); err != nil {
+		t.Fatalf("SaveModelRoute extract failed: %v", err)
+	}
+
+	delta, err := memSvc.ExtractChapterDelta(ctx, ch1.ID)
+	if err != nil {
+		t.Fatalf("ExtractChapterDelta failed: %v", err)
+	}
+	if delta.ReviewStatus != domain.DeltaReviewPending || delta.HighRiskFlags < 1 {
+		t.Fatalf("unexpected extracted delta status=%q highRisk=%d", delta.ReviewStatus, delta.HighRiskFlags)
+	}
+	if len(delta.StatePatches) != 2 || len(delta.Foreshadows) != 1 {
+		t.Fatalf("unexpected delta counts: patches=%d foreshadows=%d", len(delta.StatePatches), len(delta.Foreshadows))
+	}
+
+	// 确认 GetPendingDelta 能读到同一条 pending 变更单
+	pending, err := memSvc.GetPendingDelta(ctx, ch1.ID)
+	if err != nil || pending == nil || pending.ID != delta.ID {
+		t.Fatalf("GetPendingDelta = (%+v, %v), want id=%d", pending, err, delta.ID)
+	}
+
+	// 4. 未确认前：SnapshotAt(1, false) 不应看到 pending 变更；SnapshotAt(1, true) 应能看到
+	findSnap := func(snaps []domain.EntitySnapshot, id int64) domain.EntitySnapshot {
+		for _, s := range snaps {
+			if s.Entity.ID == id {
+				return s
+			}
+		}
+		t.Fatalf("entity %d not found in snapshot", id)
+		return domain.EntitySnapshot{}
+	}
+
+	snapsCommittedOnly, err := memSvc.SnapshotAt(ctx, book.ID, 1, false)
+	if err != nil {
+		t.Fatalf("SnapshotAt(1, false) failed: %v", err)
+	}
+	if got := findSnap(snapsCommittedOnly, item.ID).EffectiveAttributes["owner"]; got != "王执事" {
+		t.Fatalf("unconfirmed pending leaked into committed SnapshotAt: owner=%q, want 王执事", got)
+	}
+	if got := findSnap(snapsCommittedOnly, hero.ID).EffectiveAttributes["injury"]; got != "完好" {
+		t.Fatalf("unconfirmed pending leaked into committed SnapshotAt: injury=%q, want 完好", got)
+	}
+
+	snapsWithPending, err := memSvc.SnapshotAt(ctx, book.ID, 1, true)
+	if err != nil {
+		t.Fatalf("SnapshotAt(1, true) failed: %v", err)
+	}
+	if got := findSnap(snapsWithPending, item.ID).EffectiveAttributes["owner"]; got != "林渊" {
+		t.Fatalf("SnapshotAt(1, true) missing pending owner transfer: got=%q", got)
+	}
+	if got := findSnap(snapsWithPending, hero.ID).EffectiveAttributes["injury"]; got != "左肩阴雷暗伤" {
+		t.Fatalf("SnapshotAt(1, true) missing pending injury patch: got=%q", got)
+	}
+
+	// 5. 审核确认变更单（接受全部 patches + foreshadowing + causal summary）
+	decisions := make([]domain.DeltaDecision, 0, len(delta.StatePatches)+len(delta.Foreshadows))
+	for _, p := range delta.StatePatches {
+		decisions = append(decisions, domain.DeltaDecision{
+			Kind:   domain.DeltaDecisionKindStatePatch,
+			ItemID: p.ID,
+			Accept: true,
+		})
+	}
+	for _, fs := range delta.Foreshadows {
+		decisions = append(decisions, domain.DeltaDecision{
+			Kind:   domain.DeltaDecisionKindForeshadow,
+			ItemID: fs.ID,
+			Accept: true,
+		})
+	}
+
+	applyRes, err := memSvc.ApplyDeltaDecisions(ctx, domain.ApplyDeltaInput{
+		DeltaID:            delta.ID,
+		ApplyCausalSummary: true,
+		Decisions:          decisions,
+	})
+	if err != nil {
+		t.Fatalf("ApplyDeltaDecisions failed: %v", err)
+	}
+	if applyRes.CommittedEvents != 2 || applyRes.UpdatedForeshadowings != 1 {
+		t.Fatalf("unexpected applyRes counts: %+v", applyRes)
+	}
+
+	// (a) SnapshotAt(1, false) 已反映 committed 状态
+	snapsAfterCommit, err := memSvc.SnapshotAt(ctx, book.ID, 1, false)
+	if err != nil {
+		t.Fatalf("SnapshotAt(1, false) after commit failed: %v", err)
+	}
+	if got := findSnap(snapsAfterCommit, item.ID).EffectiveAttributes["owner"]; got != "林渊" {
+		t.Fatalf("committed owner = %q, want 林渊", got)
+	}
+	if got := findSnap(snapsAfterCommit, hero.ID).EffectiveAttributes["injury"]; got != "左肩阴雷暗伤" {
+		t.Fatalf("committed injury = %q, want 左肩阴雷暗伤", got)
+	}
+
+	// (b) SnapshotAt(0, false) 仍严格保持 ch1 之前的初始静态状态（绝不反向剧透）
+	snapsBeforeCh1, err := memSvc.SnapshotAt(ctx, book.ID, 0, false)
+	if err != nil {
+		t.Fatalf("SnapshotAt(0, false) failed: %v", err)
+	}
+	if got := findSnap(snapsBeforeCh1, item.ID).EffectiveAttributes["owner"]; got != "王执事" {
+		t.Fatalf("SnapshotAt(0, false) leaked future owner: %q", got)
+	}
+	if got := findSnap(snapsBeforeCh1, hero.ID).EffectiveAttributes["injury"]; got != "完好" {
+		t.Fatalf("SnapshotAt(0, false) leaked future injury: %q", got)
+	}
+
+	// (c) 下游 outlined 章节 ch2 / ch3 均被标为 upstream_dirty
+	if len(applyRes.MarkedDirtyChapterIDs) != 2 {
+		t.Fatalf("expected 2 downstream chapters marked upstream_dirty, got %v", applyRes.MarkedDirtyChapterIDs)
+	}
+	ch2Reloaded, _ := lib.GetChapter(ctx, ch2.ID)
+	ch3Reloaded, _ := lib.GetChapter(ctx, ch3.ID)
+	if ch2Reloaded.Status != domain.ChapterStatusUpstreamDirty || ch3Reloaded.Status != domain.ChapterStatusUpstreamDirty {
+		t.Fatalf("downstream statuses = (%q, %q), want both upstream_dirty", ch2Reloaded.Status, ch3Reloaded.Status)
+	}
+
+	// (d) SearchMemory 同时支持 2 字人名("林渊" LIKE 回退)与 3 字道具("破障丹" FTS5 trigram)，且严守 maxChapterSeq 防剧透
+	hits2Char, err := memSvc.SearchMemory(ctx, book.ID, "林渊", 1)
+	if err != nil || len(hits2Char) == 0 {
+		t.Fatalf("SearchMemory 2-char 林渊 failed: hits=%+v err=%v", hits2Char, err)
+	}
+	hits3Char, err := memSvc.SearchMemory(ctx, book.ID, "破障丹", 1)
+	if err != nil || len(hits3Char) == 0 {
+		t.Fatalf("SearchMemory 3-char 破障丹 failed: hits=%+v err=%v", hits3Char, err)
+	}
+	hitsFutureBlocked, err := memSvc.SearchMemory(ctx, book.ID, "黑煞老祖", 1)
+	if err != nil {
+		t.Fatalf("SearchMemory maxChapterSeq=1 failed: %v", err)
+	}
+	for _, h := range hitsFutureBlocked {
+		if h.Source == domain.MemorySearchSourceChapter && h.ChapterSeq > 1 {
+			t.Fatalf("SearchMemory leaked future chapter seq=%d when maxChapterSeq=1: %+v", h.ChapterSeq, h)
+		}
+	}
+	hitsFutureAllowed, err := memSvc.SearchMemory(ctx, book.ID, "黑煞老祖", 3)
+	if err != nil || len(hitsFutureAllowed) == 0 {
+		t.Fatalf("SearchMemory maxChapterSeq=3 should find ch3: hits=%+v err=%v", hitsFutureAllowed, err)
+	}
+
+	// (e) StudioService.PreviewBriefing(ch2) 包含 P2 有效快照、P3 伏笔、P5 因果摘要、P6 检索片段
+	briefing, err := studio.PreviewBriefing(ctx, ch2.ID, domain.BriefingOptions{
+		SearchKeywords: []string{"破障丹"},
+	})
+	if err != nil {
+		t.Fatalf("PreviewBriefing ch2 failed: %v", err)
+	}
+	slotByPriority := make(map[string]domain.BriefingSlot, len(briefing.Slots))
+	for _, sl := range briefing.Slots {
+		slotByPriority[sl.Priority] = sl
+	}
+	if p2, ok := slotByPriority["P2"]; !ok || !strings.Contains(p2.Content, "左肩阴雷暗伤") || !strings.Contains(p2.Content, "林渊") {
+		t.Fatalf("P2 slot missing committed effective snapshot: %+v", p2)
+	}
+	if p3, ok := slotByPriority["P3"]; !ok || !strings.Contains(p3.Content, "血玉令牌密库") {
+		t.Fatalf("P3 slot missing foreshadowing: %+v", p3)
+	}
+	if p5, ok := slotByPriority["P5"]; !ok || !strings.Contains(p5.Content, "反杀王执事") {
+		t.Fatalf("P5 slot missing ch1 causal summary: %+v", p5)
+	}
+	if p6, ok := slotByPriority["P6"]; !ok || !strings.Contains(p6.Content, "破障丹") {
+		t.Fatalf("P6 slot missing FTS5 search snippet: %+v", p6)
 	}
 }

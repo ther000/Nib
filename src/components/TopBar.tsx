@@ -6,6 +6,7 @@ import {
   Feather,
   Moon,
   Plus,
+  Search,
   Settings,
   Sun,
 } from "lucide-react";
@@ -30,6 +31,7 @@ export function TopBar() {
     selectBook,
     openSettings,
     openCreateBook,
+    openMemorySearch,
   } = useApp();
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -170,8 +172,19 @@ export function TopBar() {
         <div />
       )}
 
-      {/* Right: Theme + Settings */}
+      {/* Right: Memory Search + Theme + Settings */}
       <div className="flex items-center gap-1">
+        {activeBook && (
+          <button
+            type="button"
+            onClick={openMemorySearch}
+            title="全局记忆检索 (Ctrl+Shift+F)"
+            aria-label="全局记忆检索"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+          >
+            <Search className="h-3.5 w-3.5" />
+          </button>
+        )}
         <button
           type="button"
           onClick={toggleTheme}

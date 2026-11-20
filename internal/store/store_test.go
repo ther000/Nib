@@ -143,23 +143,25 @@ func TestMigrationIdempotencyAndUpgradeBackup(t *testing.T) {
 		t.Fatalf("Close st2: %v", err)
 	}
 
-	// 3. 模拟升级到 v2：必须在执行 v2 迁移前自动创建 nib.db.bak.2 备份。
+	// 3. 模拟升级到下一 schema 版本：必须在执行高版本迁移前自动创建 nib.db.bak.<currentVer> 备份。
 	embedded, err := loadEmbeddedMigrations()
 	if err != nil {
 		t.Fatalf("loadEmbeddedMigrations: %v", err)
 	}
-	migsV2 := append(embedded, migration{
-		Version: 2,
-		Name:    "002_test_upgrade.sql",
-		SQL:     `CREATE TABLE test_v2_marker (id INTEGER PRIMARY KEY, note TEXT NOT NULL);`,
+	latestVer := embedded[len(embedded)-1].Version
+	nextVer := latestVer + 1
+	migsNext := append(append([]migration(nil), embedded...), migration{
+		Version: nextVer,
+		Name:    fmt.Sprintf("%03d_test_upgrade.sql", nextVer),
+		SQL:     `CREATE TABLE test_upgrade_marker (id INTEGER PRIMARY KEY, note TEXT NOT NULL);`,
 	})
-	st3, err := openWithMigrations(dbFile, migsV2)
+	st3, err := openWithMigrations(dbFile, migsNext)
 	if err != nil {
-		t.Fatalf("openWithMigrations v2 failed: %v", err)
+		t.Fatalf("openWithMigrations v%d failed: %v", nextVer, err)
 	}
 	defer st3.Close()
 
-	bakPath := dbFile + ".bak.2"
+	bakPath := fmt.Sprintf("%s.bak.%d", dbFile, latestVer)
 	fi, err := os.Stat(bakPath)
 	if err != nil {
 		t.Fatalf("expected upgrade backup %q to exist: %v", bakPath, err)
@@ -179,9 +181,9 @@ func TestMigrationIdempotencyAndUpgradeBackup(t *testing.T) {
 		t.Fatalf("backup DB missing pre-upgrade data: book=%+v err=%v", bakBook, err)
 	}
 
-	// 验证 v2 表已成功落库。
-	if _, err := st3.db.ExecContext(ctx, `INSERT INTO test_v2_marker (note) VALUES ('ok')`); err != nil {
-		t.Fatalf("v2 table missing after migration: %v", err)
+	// 验证新版本表已成功落库。
+	if _, err := st3.db.ExecContext(ctx, `INSERT INTO test_upgrade_marker (note) VALUES ('ok')`); err != nil {
+		t.Fatalf("upgrade table missing after migration: %v", err)
 	}
 }
 

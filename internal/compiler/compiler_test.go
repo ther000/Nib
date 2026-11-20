@@ -370,3 +370,295 @@ func TestCompilePreviousChapterTailTrimming(t *testing.T) {
 		t.Fatalf("TotalTokenEst (%d) exceeded tightBudget (%d)", trimmedBrief.TotalTokenEst, tightBudget)
 	}
 }
+
+type fakeMemoryDataSource struct {
+	*fakeDataSource
+	snapshotsCommitted []domain.EntitySnapshot
+	snapshotsPending   []domain.EntitySnapshot
+	foreshadowings     []domain.Foreshadowing
+	arcSummaries       []domain.ArcSummary
+	searchHits         []domain.MemorySearchHit
+
+	lastSnapSeq            int
+	lastSnapIncludePending bool
+	lastSearchMaxSeq       int
+	searchedKeywords       []string
+}
+
+func (f *fakeMemoryDataSource) SnapshotAt(_ context.Context, _ int64, chapterSeq int, includePending bool) ([]domain.EntitySnapshot, error) {
+	f.lastSnapSeq = chapterSeq
+	f.lastSnapIncludePending = includePending
+	if includePending {
+		return f.snapshotsPending, nil
+	}
+	return f.snapshotsCommitted, nil
+}
+
+func (f *fakeMemoryDataSource) ListForeshadowings(_ context.Context, _ int64, status domain.ForeshadowingStatus) ([]domain.Foreshadowing, error) {
+	out := make([]domain.Foreshadowing, 0, len(f.foreshadowings))
+	for _, fs := range f.foreshadowings {
+		if status != "" && fs.Status != status {
+			continue
+		}
+		out = append(out, fs)
+	}
+	return out, nil
+}
+
+func (f *fakeMemoryDataSource) ListArcSummaries(_ context.Context, _ int64, level domain.ArcSummaryLevel) ([]domain.ArcSummary, error) {
+	out := make([]domain.ArcSummary, 0, len(f.arcSummaries))
+	for _, a := range f.arcSummaries {
+		if level != "" && a.Level != level {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+func (f *fakeMemoryDataSource) SearchMemory(_ context.Context, _ int64, query string, maxChapterSeq int) ([]domain.MemorySearchHit, error) {
+	f.lastSearchMaxSeq = maxChapterSeq
+	f.searchedKeywords = append(f.searchedKeywords, query)
+	return f.searchHits, nil
+}
+
+func newPhase2Fixture() *fakeMemoryDataSource {
+	base := newTestFixture()
+	base.chapter.GlobalSeq = 20
+
+	// 静态属性是第 1 章旧值（炼气九层 / 完好），快照中已演化为最新值。
+	entLin := base.entities[101]
+	entWang := base.entities[102]
+	entPill := base.entities[103]
+
+	committed := []domain.EntitySnapshot{
+		{
+			Entity: entLin,
+			EffectiveAttributes: map[string]string{
+				"realm":  "筑基初期（已确认快照）",
+				"injury": "左肩阴雷暗伤",
+			},
+			AppliedEventCount: 2,
+			PendingEventCount: 0,
+		},
+		{
+			Entity: entWang,
+			EffectiveAttributes: map[string]string{
+				"realm":    "筑基中期",
+				"treasure": "阴雷珠（裂纹）",
+			},
+			AppliedEventCount: 1,
+		},
+		{
+			Entity: entPill,
+			EffectiveAttributes: map[string]string{
+				"owner": "林渊（已夺得）",
+			},
+			AppliedEventCount: 1,
+		},
+	}
+
+	pending := []domain.EntitySnapshot{
+		{
+			Entity: entLin,
+			EffectiveAttributes: map[string]string{
+				"realm":  "筑基初期（含同批待审）",
+				"injury": "经脉微损（同批第19章pending）",
+			},
+			AppliedEventCount: 3,
+			PendingEventCount: 1,
+		},
+		committed[1],
+		committed[2],
+	}
+
+	// 构造 16 章带因果摘要的前文（含未来第 21 章干扰项，检验防剧透）。
+	prevChaps := make([]domain.Chapter, 0, 18)
+	for seq := 4; seq <= 19; seq++ {
+		prevChaps = append(prevChaps, domain.Chapter{
+			ID:            int64(seq),
+			BookID:        1,
+			GlobalSeq:     seq,
+			Title:         "前文第" + string(rune('A'+(seq-4))) + "章",
+			CausalSummary: strings.Repeat("因果推进详情。", 18) + "【因果标记:" + string(rune('A'+(seq-4))) + "】",
+			Content:       strings.Repeat("正文铺陈。", 30) + "【结尾】",
+		})
+	}
+	prevChaps = append(prevChaps, domain.Chapter{
+		ID:            21,
+		BookID:        1,
+		GlobalSeq:     21,
+		Title:         "未来剧透章",
+		CausalSummary: "【未来绝对不可泄露】",
+		Content:       "【未来正文不可泄露】",
+	})
+	base.prevChapters = prevChaps
+
+	return &fakeMemoryDataSource{
+		fakeDataSource:     base,
+		snapshotsCommitted: committed,
+		snapshotsPending:   pending,
+		foreshadowings: []domain.Foreshadowing{
+			{
+				ID: 1, BookID: 1, Title: "超期核心伏笔：血玉密库",
+				Description: "早该在第15章收网的宗门秘闻", PlantedChapterSeq: 3, TargetResolveSeq: 15,
+				Status: domain.ForeshadowingPlanted, InvolvedEntityIDs: []int64{101},
+			},
+			{
+				ID: 2, BookID: 1, Title: "远期普通伏笔：海外仙岛",
+				Description: "计划第80章才触发", PlantedChapterSeq: 5, TargetResolveSeq: 80,
+				Status: domain.ForeshadowingHinted, InvolvedEntityIDs: []int64{999},
+			},
+			{
+				ID: 3, BookID: 1, Title: "已回收伏笔：外门试炼",
+				Description: "已完结不应入P3", PlantedChapterSeq: 1, TargetResolveSeq: 10, ResolvedChapterSeq: 10,
+				Status: domain.ForeshadowingResolved,
+			},
+			{
+				ID: 4, BookID: 1, Title: "未来章才埋设的剧透伏笔",
+				Description: "第22章才埋设绝不能剧透", PlantedChapterSeq: 22, TargetResolveSeq: 40,
+				Status: domain.ForeshadowingPlanted,
+			},
+		},
+		arcSummaries: []domain.ArcSummary{
+			{ID: 1, BookID: 1, Level: domain.ArcSummaryLevelVolume, StartSeq: 1, EndSeq: 10, Summary: "第一卷前半：外门崛起。"},
+			{ID: 2, BookID: 1, Level: domain.ArcSummaryLevelArc10, StartSeq: 1, EndSeq: 10, Summary: "1~10章弧线：黑市初遇与破障丹争夺。"},
+			{ID: 3, BookID: 1, Level: domain.ArcSummaryLevelArc10, StartSeq: 11, EndSeq: 25, Summary: "未来超前弧线绝不可注入。"},
+		},
+		searchHits: []domain.MemorySearchHit{
+			{Source: domain.MemorySearchSourceChapter, ChapterID: 7, ChapterSeq: 7, Title: "黑市偶遇", Snippet: "【命中片段1】半块玉佩在坊市发出微光。", Score: 9.5},
+			{Source: domain.MemorySearchSourceChapter, ChapterID: 12, ChapterSeq: 12, Title: "密库线索", Snippet: "【命中片段2】王煞腰间挂着血玉令牌。", Score: 8.2},
+			{Source: domain.MemorySearchSourceChapter, ChapterID: 14, ChapterSeq: 14, Title: "雨夜暗袭", Snippet: "【命中片段3】残阵雷纹只能催动三次。", Score: 7.1},
+			{Source: domain.MemorySearchSourceChapter, ChapterID: 25, ChapterSeq: 25, Title: "未来剧透命中", Snippet: "【绝对不可出现的第25章剧透】", Score: 99.9},
+		},
+	}
+}
+
+func TestCompilePhase2SnapshotForeshadowPyramidAndSearch(t *testing.T) {
+	ds := newPhase2Fixture()
+	comp := New(ds) // 自动检测 MemoryDataSource，无需额外胶水
+
+	brief, err := comp.Compile(context.Background(), 100, domain.BriefingOptions{
+		IncludePending: false,
+		SearchKeywords: []string{"血玉令牌", "半块玉佩"},
+	})
+	if err != nil {
+		t.Fatalf("Phase 2 Compile failed: %v", err)
+	}
+
+	if ds.lastSnapSeq != 19 || ds.lastSnapIncludePending != false {
+		t.Fatalf("expected SnapshotAt(seq=19, includePending=false), got seq=%d pending=%v", ds.lastSnapSeq, ds.lastSnapIncludePending)
+	}
+	if ds.lastSearchMaxSeq != 19 {
+		t.Fatalf("expected spoiler-free SearchMemory maxChapterSeq=19, got %d", ds.lastSearchMaxSeq)
+	}
+
+	slotByKey := map[string]domain.BriefingSlot{}
+	sumEst := 0
+	for _, s := range brief.Slots {
+		slotByKey[s.Key] = s
+		sumEst += s.TokenEst
+	}
+	if brief.TotalTokenEst != sumEst {
+		t.Fatalf("TotalTokenEst (%d) != sum of slot estimates (%d)", brief.TotalTokenEst, sumEst)
+	}
+
+	// P2：必须以快照属性覆盖静态旧属性（筑基初期替换掉炼气九层）。
+	p2 := slotByKey["p2_entities"]
+	if !strings.Contains(p2.Content, "筑基初期（已确认快照）") || strings.Contains(p2.Content, "炼气九层") {
+		t.Fatalf("P2 did not override stale static attributes with SnapshotAt: %s", p2.Content)
+	}
+
+	// P3：超期伏笔排首位且带预警，已回收/未来埋设伏笔绝不出现。
+	p3 := slotByKey["p3_foreshadowings"]
+	overdueIdx := strings.Index(p3.Content, "超期核心伏笔：血玉密库")
+	futureIdx := strings.Index(p3.Content, "远期普通伏笔：海外仙岛")
+	if overdueIdx < 0 || futureIdx < 0 || overdueIdx >= futureIdx {
+		t.Fatalf("expected overdue foreshadowing ranked ahead of distant foreshadowing: %s", p3.Content)
+	}
+	if strings.Contains(p3.Content, "已回收伏笔") || strings.Contains(p3.Content, "未来章才埋设") {
+		t.Fatalf("resolved or future foreshadowing leaked into P3: %s", p3.Content)
+	}
+
+	// P5：包含卷摘要 + 1~10章弧线摘要 + 近15章因果摘要（第5~19章，不含第4章也不含未来第21章或11~25弧线）。
+	p5 := slotByKey["p5_summary_pyramid"]
+	if !strings.Contains(p5.Content, "第一卷前半：外门崛起") || !strings.Contains(p5.Content, "1~10章弧线") {
+		t.Fatalf("P5 missing volume or arc_10 summary: %s", p5.Content)
+	}
+	if strings.Contains(p5.Content, "未来绝对不可泄露") || strings.Contains(p5.Content, "未来超前弧线") {
+		t.Fatalf("future summary leaked into P5: %s", p5.Content)
+	}
+	if strings.Contains(p5.Content, "【因果标记:A】") {
+		t.Fatalf("expected only recent 15 chapters (ch5..ch19), ch4 should be excluded")
+	}
+	if !strings.Contains(p5.Content, "【因果标记:P】") {
+		t.Fatalf("expected latest ch19 causal summary present in P5")
+	}
+
+	// P6：最多 3 条且严防第 25 章未来剧透片段进入。
+	p6 := slotByKey["p6_memory_search"]
+	if !strings.Contains(p6.Content, "【命中片段1】") || !strings.Contains(p6.Content, "【命中片段3】") {
+		t.Fatalf("P6 missing expected search hits: %s", p6.Content)
+	}
+	if strings.Contains(p6.Content, "第25章剧透") {
+		t.Fatalf("future chapter search hit leaked into P6: %s", p6.Content)
+	}
+
+	// 验证 IncludePending=true 切换后 P2 读取同批待审状态。
+	pendingBrief, err := comp.Compile(context.Background(), 100, domain.BriefingOptions{
+		IncludePending: true,
+	})
+	if err != nil {
+		t.Fatalf("Compile(IncludePending=true) failed: %v", err)
+	}
+	if !ds.lastSnapIncludePending {
+		t.Fatalf("expected IncludePending=true forwarded to SnapshotAt")
+	}
+	if !strings.Contains(pendingBrief.UserPrompt, "经脉微损（同批第19章pending）") {
+		t.Fatalf("expected pending state attribute visible when IncludePending=true")
+	}
+}
+
+func TestCompilePhase2SummaryPyramidTrimmingAndForeshadowBudget(t *testing.T) {
+	ds := newPhase2Fixture()
+	comp := New(ds)
+
+	full, err := comp.Compile(context.Background(), 100, domain.BriefingOptions{})
+	if err != nil {
+		t.Fatalf("full compile failed: %v", err)
+	}
+	// 计算 P0+P1+P2+P3+P4 占用，然后仅给 P5 留下约 180 token，迫使 P5 从最远单章因果摘要开始收缩。
+	preP5Tokens := 0
+	for _, s := range full.Slots {
+		if s.Priority == "P0" || s.Priority == "P1" || s.Priority == "P2" || s.Priority == "P3" || s.Priority == "P4" {
+			preP5Tokens += s.TokenEst
+		}
+	}
+	tightBudget := preP5Tokens + 180
+
+	tight, err := comp.Compile(context.Background(), 100, domain.BriefingOptions{
+		TokenBudget: tightBudget,
+	})
+	if err != nil {
+		t.Fatalf("tight compile failed: %v", err)
+	}
+	var p5 domain.BriefingSlot
+	for _, s := range tight.Slots {
+		if s.Key == "p5_summary_pyramid" {
+			p5 = s
+		}
+	}
+	if !p5.Truncated {
+		t.Fatalf("expected P5 truncated under tight budget %d (est=%d)", tightBudget, p5.TokenEst)
+	}
+	if p5.TokenEst > 180 {
+		t.Fatalf("P5 TokenEst (%d) exceeded remaining cap (180)", p5.TokenEst)
+	}
+	if tight.TotalTokenEst > tightBudget {
+		t.Fatalf("TotalTokenEst (%d) exceeded tightBudget (%d)", tight.TotalTokenEst, tightBudget)
+	}
+	// 最远的第 5 章（标记 B）应比最新章节更早被裁剪掉，高浓缩卷/弧线摘要得到优先保留。
+	if strings.Contains(p5.Content, "【因果标记:B】") {
+		t.Fatalf("oldest chapter causal summary should have been trimmed first: %s", p5.Content)
+	}
+}

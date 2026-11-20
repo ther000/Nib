@@ -264,15 +264,18 @@ func (s *Store) runMigrations(ctx context.Context, migs []migration, isMemory bo
 		return nil
 	}
 
-	// 升级非空磁盘数据库到更高版本前，先刷盘 WAL 并创建 .bak.<ver> 备份，出错则中止迁移。
+	// 升级非空磁盘数据库到更高版本前，先刷盘 WAL 并创建 .bak.<ver> 备份（保留升级前版本号），出错则中止迁移。
 	if !isMemory && (currentVer > 0 || preExistingNonEmpty) {
 		if _, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE);`); err != nil {
 			return fmt.Errorf("checkpoint WAL before backup: %w", err)
 		}
-		targetVer := pending[len(pending)-1].Version
-		backupPath := fmt.Sprintf("%s.bak.%d", s.path, targetVer)
+		backupVer := currentVer
+		if backupVer <= 0 {
+			backupVer = pending[len(pending)-1].Version
+		}
+		backupPath := fmt.Sprintf("%s.bak.%d", s.path, backupVer)
 		if err := copyFileAtomic(s.path, backupPath); err != nil {
-			return fmt.Errorf("backup db to %q before migration v%d: %w", backupPath, targetVer, err)
+			return fmt.Errorf("backup db to %q before migration v%d: %w", backupPath, pending[len(pending)-1].Version, err)
 		}
 	}
 

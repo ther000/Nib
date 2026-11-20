@@ -7,6 +7,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Flag,
   Layers,
   Pencil,
   Plus,
@@ -34,6 +35,7 @@ import {
   getEmotionColorClass,
   getEmotionMeta,
   getEntityKindLabel,
+  isForeshadowingOverdue,
 } from "../lib/constants";
 
 interface VolumeDialogState {
@@ -83,10 +85,12 @@ export function ArchitectView() {
     activeChapter,
     activeChapterId,
     entities,
+    foreshadowings,
     selectChapter,
     refreshBookData,
     updateChapterInCache,
     setActiveTab,
+    openAtlasSubTab,
     notify,
     registerSaveHandler,
   } = useApp();
@@ -148,6 +152,13 @@ export function ArchitectView() {
     if (!activeVolume) return [];
     return chaptersByVolume.get(activeVolume.id) ?? [];
   }, [activeVolume, chaptersByVolume]);
+
+  const overdueForChapter = useMemo(() => {
+    if (!activeChapter) return [];
+    return foreshadowings.filter((fs) =>
+      isForeshadowingOverdue(fs, activeChapter.globalSeq)
+    );
+  }, [foreshadowings, activeChapter]);
 
   // Pacing diagnostics for current volume (warn on 3+ consecutive suppress or setup)
   const pacingWarning = useMemo(() => {
@@ -708,10 +719,19 @@ export function ArchitectView() {
                               <span className="min-w-0 flex-1 truncate text-[12.5px]">
                                 {chap.title}
                               </span>
-                              <span
-                                title={st.label}
-                                className={`h-1.5 w-1.5 shrink-0 rounded-full ${st.dotClass}`}
-                              />
+                              {chap.status === "upstream_dirty" ? (
+                                <span
+                                  title="上游章节设定变更，建议复核"
+                                  className="shrink-0 rounded border border-danger/40 bg-danger-soft px-1 py-0.2 text-[9.5px] font-medium text-danger"
+                                >
+                                  变更
+                                </span>
+                              ) : (
+                                <span
+                                  title={st.label}
+                                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${st.dotClass}`}
+                                />
+                              )}
                             </button>
                           );
                         })}
@@ -814,12 +834,25 @@ export function ArchitectView() {
                         </span>
                       )}
                     </div>
-                    {pacingWarning && (
-                      <div className="flex shrink-0 items-center gap-1 text-[11px] text-warn">
-                        <AlertTriangle className="h-3 w-3" />
-                        <span>{pacingWarning}</span>
-                      </div>
-                    )}
+                    <div className="flex shrink-0 items-center gap-3">
+                      {overdueForChapter.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => openAtlasSubTab("foreshadowings")}
+                          title="前往账本伏笔看板查看超期伏笔"
+                          className="flex items-center gap-1 rounded-full border border-warn/40 bg-warn-soft px-2 py-0.5 text-[11px] font-medium text-warn transition-colors hover:border-warn"
+                        >
+                          <Flag className="h-3 w-3" />
+                          <span>{overdueForChapter.length} 条伏笔超期</span>
+                        </button>
+                      )}
+                      {pacingWarning && (
+                        <div className="flex items-center gap-1 text-[11px] text-warn">
+                          <AlertTriangle className="h-3 w-3" />
+                          <span>{pacingWarning}</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
                     {activeVolumeChapters.map((c) => {

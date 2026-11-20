@@ -4,6 +4,7 @@ import { AppProvider, useApp } from "./stores/AppContext";
 import { TopBar } from "./components/TopBar";
 import { EmptyShelf } from "./components/EmptyShelf";
 import { CreateBookModal } from "./components/CreateBookModal";
+import { MemorySearchModal } from "./components/MemorySearchModal";
 import { ToastHost } from "./components/ToastHost";
 import { ArchitectView } from "./views/ArchitectView";
 import { StudioView } from "./views/StudioView";
@@ -22,19 +23,35 @@ function NibShell() {
     triggerGenerate,
     settingsOpen,
     createBookOpen,
+    memorySearchOpen,
+    toggleMemorySearch,
   } = useApp();
 
   // Global keyboard shortcuts:
-  // Ctrl+1/2/3 -> switch 编排 / 审改 / 账本
-  // Ctrl+\     -> toggle Studio right drawer
-  // Ctrl+S     -> save active chapter draft (or beats/meta in Architect)
-  // Ctrl+Enter -> start/stop chapter generation in Studio
+  // Ctrl+1/2/3     -> switch 编排 / 审改 / 账本
+  // Ctrl+\         -> toggle Studio right drawer
+  // Ctrl+S         -> save active chapter draft (or beats/meta in Architect)
+  // Ctrl+Enter     -> start/stop chapter generation in Studio
+  // Ctrl+Shift+F   -> toggle Global Memory Search modal
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
       if (!mod) return;
 
-      const modalOpen = settingsOpen || createBookOpen;
+      const blockingModalOpen = settingsOpen || createBookOpen;
+
+      if (
+        (e.key.toLowerCase() === "f" || e.code === "KeyF") &&
+        e.shiftKey &&
+        !blockingModalOpen &&
+        activeBook
+      ) {
+        e.preventDefault();
+        toggleMemorySearch();
+        return;
+      }
+
+      const modalOpen = blockingModalOpen || memorySearchOpen;
 
       if ((e.key === "1" || e.code === "Digit1") && !modalOpen && activeBook) {
         e.preventDefault();
@@ -79,8 +96,10 @@ function NibShell() {
     activeTab,
     settingsOpen,
     createBookOpen,
+    memorySearchOpen,
     setActiveTab,
     toggleStudioDrawer,
+    toggleMemorySearch,
     triggerSave,
     triggerGenerate,
   ]);
@@ -121,6 +140,7 @@ function NibShell() {
       )}
 
       <CreateBookModal />
+      <MemorySearchModal />
       <SettingsModal />
       <ToastHost />
     </div>

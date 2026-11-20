@@ -16,9 +16,14 @@ const (
 	defaultP0Budget       = 1200
 	defaultP1Budget       = 1000
 	defaultP2Budget       = 2400
+	defaultP3Budget       = 800
 	defaultP4Budget       = 1600
+	defaultP5Budget       = 2800
+	defaultP6Budget       = 1000
 	prevChapter1TailRunes = 1200
 	prevChapter2TailRunes = 400
+	recentCausalLimit     = 15
+	maxSearchHits         = 3
 )
 
 // DataSource 定义上下文编译器所需的最小只读仓储契约，解耦 internal/store 实现细节。
@@ -32,22 +37,57 @@ type DataSource interface {
 	GetPreviousChapters(ctx context.Context, bookID int64, beforeGlobalSeq int, limit int) ([]domain.Chapter, error)
 }
 
-// Compiler 负责将书卷设定、世界铁律、节拍卡、出场实体与前文衔接编译为透明的作战简报。
-type Compiler struct {
-	src DataSource
+// MemoryDataSource 定义 Phase 2 动态记忆编译所需的只读扩展契约（直接由 *store.Store 满足）。
+// 当传入 New(src) 的 src 同时实现该接口（或通过 WithMemorySource 显式注入）时，
+// 编译器自动启用 P2 事件溯源快照、P3 伏笔追踪、P5 摘要金字塔与 P6 防剧透 FTS5 检索。
+type MemoryDataSource interface {
+	SnapshotAt(ctx context.Context, bookID int64, chapterSeq int, includePending bool) ([]domain.EntitySnapshot, error)
+	ListForeshadowings(ctx context.Context, bookID int64, status domain.ForeshadowingStatus) ([]domain.Foreshadowing, error)
+	ListArcSummaries(ctx context.Context, bookID int64, level domain.ArcSummaryLevel) ([]domain.ArcSummary, error)
+	SearchMemory(ctx context.Context, bookID int64, query string, maxChapterSeq int) ([]domain.MemorySearchHit, error)
 }
 
-// New 创建上下文编译器实例。
-func New(src DataSource) *Compiler {
-	return &Compiler{src: src}
+// Option 用于定制 Compiler 可选扩展依赖。
+type Option func(*Compiler)
+
+// WithMemorySource 显式注入 Phase 2 记忆数据源。
+func WithMemorySource(mem MemoryDataSource) Option {
+	return func(c *Compiler) {
+		if mem != nil {
+			c.mem = mem
+		}
+	}
+}
+
+// Compiler 负责将书卷设定、世界铁律、节拍卡、实体快照、伏笔、前文衔接、摘要金字塔与精准检索编译为透明的作战简报。
+type Compiler struct {
+	src DataSource
+	mem MemoryDataSource
+}
+
+// New 创建上下文编译器实例。若 src 本身实现了 MemoryDataSource，将自动激活 Phase 2 全槽位编译。
+func New(src DataSource, opts ...Option) *Compiler {
+	c := &Compiler{src: src}
+	if ms, ok := src.(MemoryDataSource); ok {
+		c.mem = ms
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(c)
+		}
+	}
+	return c
 }
 
 type p2Candidate struct {
 	entity       domain.Entity
 	highPriority bool // POV 或作者显式钉选实体
+	appliedCount int
+	pendingCount int
 }
 
-// Compile 按 P0/P1（永不裁剪）→ P2（实体档案）→ P4（前文结尾衔接）优先级编译 Phase 1 作战简报。
+// Compile 按 P0/P1（永不裁剪）→ P2（实体状态快照）→ P3（未回收伏笔）→ P4（前文结尾衔接）→
+// P5（摘要金字塔）→ P6（前文精确检索）优先级编译确定性作战简报。
 func (c *Compiler) Compile(ctx context.Context, chapterID int64, opts domain.BriefingOptions) (domain.Briefing, error) {
 	if c == nil || c.src == nil {
 		return domain.Briefing{}, errors.New("compiler data source is nil")
@@ -93,41 +133,92 @@ func (c *Compiler) Compile(ctx context.Context, chapterID int64, opts domain.Bri
 		return int(a.ID - b.ID)
 	})
 
-	// 收集 P2 候选实体 ID（POV > Pinned > Beat 关联，剔除 Excluded）。
-	p2IDs, highPrioritySet := collectP2EntityIDs(beats, opts.PinnedEntityIDs, opts.ExcludedEntityIDs)
-	var fetchedEntities []domain.Entity
-	if len(p2IDs) > 0 {
-		fetchedEntities, err = c.src.GetEntitiesByIDs(ctx, p2IDs)
-		if err != nil {
-			return domain.Briefing{}, fmt.Errorf("load referenced entities: %w", err)
-		}
+	prevSeq := chap.GlobalSeq - 1
+	if prevSeq < 0 {
+		prevSeq = 0
 	}
 
-	entityByID := make(map[int64]domain.Entity, len(fetchedEntities)+len(invariants))
+	// 收集 P2 候选实体 ID（POV > Pinned > Beat 关联，剔除 Excluded）。
+	p2IDs, highPrioritySet := collectP2EntityIDs(beats, opts.PinnedEntityIDs, opts.ExcludedEntityIDs)
+
+	entityByID := make(map[int64]domain.Entity, len(invariants)+len(p2IDs))
 	for _, inv := range invariants {
 		entityByID[inv.ID] = inv
 	}
-	for _, ent := range fetchedEntities {
-		entityByID[ent.ID] = ent
-	}
 
 	p2Candidates := make([]p2Candidate, 0, len(p2IDs))
-	for _, id := range p2IDs {
-		ent, ok := entityByID[id]
-		if !ok {
-			continue
+	if c.mem != nil {
+		snapshots, snapErr := c.mem.SnapshotAt(ctx, book.ID, prevSeq, opts.IncludePending)
+		if snapErr != nil {
+			return domain.Briefing{}, fmt.Errorf("load entity snapshots at chapter %d: %w", prevSeq, snapErr)
 		}
-		p2Candidates = append(p2Candidates, p2Candidate{
-			entity:       ent,
-			highPriority: highPrioritySet[id],
-		})
+		snapByID := make(map[int64]domain.EntitySnapshot, len(snapshots))
+		for _, snap := range snapshots {
+			ent := applySnapshotAttributes(snap)
+			entityByID[ent.ID] = ent
+			snapByID[ent.ID] = snap
+		}
+		for _, id := range p2IDs {
+			snap, ok := snapByID[id]
+			if !ok {
+				continue
+			}
+			p2Candidates = append(p2Candidates, p2Candidate{
+				entity:       entityByID[id],
+				highPriority: highPrioritySet[id],
+				appliedCount: snap.AppliedEventCount,
+				pendingCount: snap.PendingEventCount,
+			})
+		}
+	} else if len(p2IDs) > 0 {
+		fetchedEntities, fetchErr := c.src.GetEntitiesByIDs(ctx, p2IDs)
+		if fetchErr != nil {
+			return domain.Briefing{}, fmt.Errorf("load referenced entities: %w", fetchErr)
+		}
+		for _, ent := range fetchedEntities {
+			entityByID[ent.ID] = ent
+		}
+		for _, id := range p2IDs {
+			ent, ok := entityByID[id]
+			if !ok {
+				continue
+			}
+			p2Candidates = append(p2Candidates, p2Candidate{
+				entity:       ent,
+				highPriority: highPrioritySet[id],
+			})
+		}
 	}
 
-	prevChaps, err := c.src.GetPreviousChapters(ctx, book.ID, chap.GlobalSeq, 2)
+	// 一次查询最多 15 章前文：同时服务 P4（近 2 章正文尾巴）与 P5（近 15 章因果摘要）。
+	prevAll, err := c.src.GetPreviousChapters(ctx, book.ID, chap.GlobalSeq, recentCausalLimit)
 	if err != nil {
 		return domain.Briefing{}, fmt.Errorf("load previous chapters: %w", err)
 	}
-	prevOrdered := normalizePreviousChapters(prevChaps, chap.GlobalSeq)
+	prevOrderedForTail := normalizePreviousChaptersForTail(prevAll, chap.GlobalSeq)
+	prevOrderedForSummary := normalizePreviousChaptersForSummary(prevAll, chap.GlobalSeq)
+
+	// 加载 Phase 2 可选数据：未回收伏笔（P3）、弧线/卷摘要（P5）、防剧透记忆检索（P6）。
+	var allForeshadowings []domain.Foreshadowing
+	var arcSummaries []domain.ArcSummary
+	var searchHits []domain.MemorySearchHit
+	if c.mem != nil {
+		allForeshadowings, err = c.mem.ListForeshadowings(ctx, book.ID, "")
+		if err != nil {
+			return domain.Briefing{}, fmt.Errorf("load foreshadowings: %w", err)
+		}
+		arcSummaries, err = c.mem.ListArcSummaries(ctx, book.ID, "")
+		if err != nil {
+			return domain.Briefing{}, fmt.Errorf("load arc summaries: %w", err)
+		}
+		if prevSeq > 0 {
+			keywords := buildSearchKeywords(opts.SearchKeywords, p2Candidates, beats)
+			searchHits, err = runSpoilerFreeMemorySearch(ctx, c.mem, book.ID, prevSeq, keywords)
+			if err != nil {
+				return domain.Briefing{}, fmt.Errorf("search memory: %w", err)
+			}
+		}
+	}
 
 	totalBudget := opts.TokenBudget
 	if totalBudget <= 0 {
@@ -173,9 +264,8 @@ func (c *Compiler) Compile(ctx context.Context, chapterID int64, opts domain.Bri
 		remaining = 0
 	}
 
-	// P2（高优）：出场实体与钉选实体档案，超限时优先保留 POV/钉选详情，其余压缩或裁剪。
-	p2Nominal := max(defaultP2Budget, totalBudget*defaultP2Budget/domain.DefaultBriefingTokenBudget)
-	p2Cap := min(p2Nominal, remaining)
+	// P2（高优）：出场实体与钉选实体状态快照。
+	p2Cap := min(scaledBudget(totalBudget, defaultP2Budget), remaining)
 	p2Content, includedEntityIDs, p2Truncated := buildP2Content(p2Candidates, p2Cap)
 	p2Est := EstimateTokens(p2Content)
 	if p2Truncated {
@@ -191,15 +281,33 @@ func (c *Compiler) Compile(ctx context.Context, chapterID int64, opts domain.Bri
 		Truncated:   p2Truncated,
 		Required:    false,
 	}
-	remaining -= p2Est
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining = max(0, remaining-p2Est)
 
-	// P4（衔接）：上一章尾部 ~1200 字 + 上两章尾部 ~400 字，预算紧张时优先收缩上两章再收缩上一章头部。
-	p4Nominal := max(defaultP4Budget, totalBudget*defaultP4Budget/domain.DefaultBriefingTokenBudget)
-	p4Cap := min(p4Nominal, remaining)
-	p4Content, p4Truncated := buildP4Content(prevOrdered, p4Cap)
+	// P3（高优）：未回收与临期/超期伏笔（按超期紧迫度与出场实体关联排序）。
+	p3Cap := min(scaledBudget(totalBudget, defaultP3Budget), remaining)
+	p3Content, p3Truncated, overdueCount := buildP3Content(allForeshadowings, chap.GlobalSeq, includedEntityIDs, p3Cap)
+	p3Est := EstimateTokens(p3Content)
+	if overdueCount > 0 {
+		warnings = append(warnings, fmt.Sprintf("当前有 %d 条未回收伏笔已超过计划回收章号，建议在本章或近期章安排收网", overdueCount))
+	}
+	if p3Truncated {
+		warnings = append(warnings, "P3 未回收伏笔因预算受限已按紧迫度截断低优伏笔")
+	}
+	p3Slot := domain.BriefingSlot{
+		Key:         "p3_foreshadowings",
+		Priority:    "P3",
+		Title:       "未回收与临期伏笔",
+		Content:     p3Content,
+		TokenBudget: p3Cap,
+		TokenEst:    p3Est,
+		Truncated:   p3Truncated,
+		Required:    false,
+	}
+	remaining = max(0, remaining-p3Est)
+
+	// P4（衔接）：上一章尾部 ~1200 字 + 上两章尾部 ~400 字。
+	p4Cap := min(scaledBudget(totalBudget, defaultP4Budget), remaining)
+	p4Content, p4Truncated := buildP4Content(prevOrderedForTail, p4Cap)
 	p4Est := EstimateTokens(p4Content)
 	if p4Truncated {
 		warnings = append(warnings, "P4 前文衔接片段已按预算自动收缩尾部字数")
@@ -214,20 +322,58 @@ func (c *Compiler) Compile(ctx context.Context, chapterID int64, opts domain.Bri
 		Truncated:   p4Truncated,
 		Required:    false,
 	}
+	remaining = max(0, remaining-p4Est)
 
-	slots := []domain.BriefingSlot{p0Slot, p1Slot, p2Slot, p4Slot}
-	totalEst := p0Est + p1Est + p2Est + p4Est
+	// P5（记忆）：近 15 章因果摘要 + 10 章弧线摘要 + 历史卷摘要（紧张时优先从最远单章摘要向上收缩）。
+	p5Cap := min(scaledBudget(totalBudget, defaultP5Budget), remaining)
+	p5Content, p5Truncated := buildP5Content(prevOrderedForSummary, arcSummaries, prevSeq, p5Cap)
+	p5Est := EstimateTokens(p5Content)
+	if p5Truncated {
+		warnings = append(warnings, "P5 历史摘要金字塔已按预算从较远章节起收缩")
+	}
+	p5Slot := domain.BriefingSlot{
+		Key:         "p5_summary_pyramid",
+		Priority:    "P5",
+		Title:       "历史摘要金字塔",
+		Content:     p5Content,
+		TokenBudget: p5Cap,
+		TokenEst:    p5Est,
+		Truncated:   p5Truncated,
+		Required:    false,
+	}
+	remaining = max(0, remaining-p5Est)
 
-	// 装配最终发送给模型的 SystemPrompt（P0）与 UserPrompt（P2 -> P4 -> P1，把本章硬指令放末尾增强遵循度）。
-	userSections := make([]string, 0, 3)
-	if p2Content != "" {
-		userSections = append(userSections, p2Content)
+	// P6（检索）：最多 3 条防剧透 FTS5/短词前文检索命中片段。
+	p6Cap := min(scaledBudget(totalBudget, defaultP6Budget), remaining)
+	p6Content, p6Truncated := buildP6Content(searchHits, p6Cap)
+	p6Est := EstimateTokens(p6Content)
+	if p6Truncated {
+		warnings = append(warnings, "P6 前文精确检索片段已按预算截断低相关度命中")
 	}
-	if p4Content != "" {
-		userSections = append(userSections, p4Content)
+	p6Slot := domain.BriefingSlot{
+		Key:         "p6_memory_search",
+		Priority:    "P6",
+		Title:       "前文精确检索片段",
+		Content:     p6Content,
+		TokenBudget: p6Cap,
+		TokenEst:    p6Est,
+		Truncated:   p6Truncated,
+		Required:    false,
 	}
-	if p1Content != "" {
-		userSections = append(userSections, p1Content)
+
+	slots := buildOrderedSlots(c.mem != nil, p0Slot, p1Slot, p2Slot, p3Slot, p4Slot, p5Slot, p6Slot)
+	totalEst := 0
+	for _, s := range slots {
+		totalEst += s.TokenEst
+	}
+
+	// 装配最终发送给模型的 SystemPrompt（P0）与 UserPrompt：
+	// 长程设定与记忆（P2 -> P3 -> P5 -> P6）→ 紧邻前文尾部（P4）→ 本章目标与节拍（P1，放末尾强化遵循）。
+	userSections := make([]string, 0, 6)
+	for _, sec := range []string{p2Content, p3Content, p5Content, p6Content, p4Content, p1Content} {
+		if sec != "" {
+			userSections = append(userSections, sec)
+		}
 	}
 
 	return domain.Briefing{
@@ -244,6 +390,33 @@ func (c *Compiler) Compile(ctx context.Context, chapterID int64, opts domain.Bri
 		Warnings:         warnings,
 		CompiledAt:       time.Now().UTC().Format(time.RFC3339Nano),
 	}, nil
+}
+
+func buildOrderedSlots(
+	hasMemory bool,
+	p0, p1, p2, p3, p4, p5, p6 domain.BriefingSlot,
+) []domain.BriefingSlot {
+	if hasMemory {
+		return []domain.BriefingSlot{p0, p1, p2, p3, p4, p5, p6}
+	}
+	// 无 MemoryDataSource 的纯 Phase 1 模式下保留核心槽位（若有因果摘要则附带 P5）。
+	slots := []domain.BriefingSlot{p0, p1, p2, p4}
+	if p5.Content != "" || p5.Truncated {
+		slots = append(slots, p5)
+	}
+	return slots
+}
+
+func applySnapshotAttributes(snap domain.EntitySnapshot) domain.Entity {
+	ent := snap.Entity
+	if len(snap.EffectiveAttributes) > 0 {
+		merged := make(map[string]string, len(snap.EffectiveAttributes))
+		for k, v := range snap.EffectiveAttributes {
+			merged[k] = v
+		}
+		ent.Attributes = merged
+	}
+	return ent
 }
 
 func scaledBudget(totalBudget, nominal int) int {
@@ -298,7 +471,7 @@ func collectP2EntityIDs(beats []domain.Beat, pinnedIDs, excludedIDs []int64) ([]
 	return ordered, highPriority
 }
 
-func normalizePreviousChapters(chaps []domain.Chapter, currentSeq int) []domain.Chapter {
+func normalizePreviousChaptersForTail(chaps []domain.Chapter, currentSeq int) []domain.Chapter {
 	out := make([]domain.Chapter, 0, len(chaps))
 	for _, ch := range chaps {
 		if ch.GlobalSeq >= currentSeq {
@@ -316,6 +489,30 @@ func normalizePreviousChapters(chaps []domain.Chapter, currentSeq int) []domain.
 	if len(out) > 2 {
 		out = out[:2]
 	}
+	return out
+}
+
+func normalizePreviousChaptersForSummary(chaps []domain.Chapter, currentSeq int) []domain.Chapter {
+	out := make([]domain.Chapter, 0, len(chaps))
+	for _, ch := range chaps {
+		if ch.GlobalSeq >= currentSeq {
+			continue
+		}
+		if strings.TrimSpace(ch.CausalSummary) == "" {
+			continue
+		}
+		out = append(out, ch)
+	}
+	// 先按 GlobalSeq 降序截取最近 15 章，再按时间升序排列供阅读。
+	slices.SortFunc(out, func(a, b domain.Chapter) int {
+		return b.GlobalSeq - a.GlobalSeq
+	})
+	if len(out) > recentCausalLimit {
+		out = out[:recentCausalLimit]
+	}
+	slices.SortFunc(out, func(a, b domain.Chapter) int {
+		return a.GlobalSeq - b.GlobalSeq
+	})
 	return out
 }
 
@@ -449,7 +646,7 @@ func buildP2Content(candidates []p2Candidate, budget int) (string, []int64, bool
 		return "", []int64{}, false
 	}
 
-	const header = "【本章节拍出场与钉选实体档案】\n"
+	const header = "【本章节拍出场与钉选实体状态快照】\n"
 	if budget <= EstimateTokens(header) {
 		return "", []int64{}, true
 	}
@@ -458,7 +655,7 @@ func buildP2Content(candidates []p2Candidate, budget int) (string, []int64, bool
 	fullLines := make([]string, len(candidates))
 	allIDs := make([]int64, len(candidates))
 	for i, cand := range candidates {
-		fullLines[i] = formatEntityDetailed(cand.entity)
+		fullLines[i] = formatCandidateDetailed(cand)
 		allIDs[i] = cand.entity.ID
 	}
 	fullText := strings.TrimSpace(header + strings.Join(fullLines, "\n"))
@@ -470,7 +667,7 @@ func buildP2Content(candidates []p2Candidate, budget int) (string, []int64, bool
 	mixedLines := make([]string, len(candidates))
 	for i, cand := range candidates {
 		if cand.highPriority {
-			mixedLines[i] = formatEntityDetailed(cand.entity)
+			mixedLines[i] = formatCandidateDetailed(cand)
 		} else {
 			mixedLines[i] = formatEntityCompact(cand.entity)
 		}
@@ -480,13 +677,13 @@ func buildP2Content(candidates []p2Candidate, budget int) (string, []int64, bool
 		return mixedText, allIDs, true
 	}
 
-	// 第 3 档：预算仍吃紧，按优先级逐条装配（优先详细/精简高优实体，再逐个追加其余精简实体）。
+	// 第 3 档：预算仍吃紧，按优先级逐条装配。
 	keptLines := make([]string, 0, len(candidates))
 	keptIDs := make([]int64, 0, len(candidates))
 	for _, cand := range candidates {
 		line := formatEntityCompact(cand.entity)
 		if cand.highPriority {
-			detailed := formatEntityDetailed(cand.entity)
+			detailed := formatCandidateDetailed(cand)
 			candidateText := strings.TrimSpace(header + strings.Join(append(slices.Clone(keptLines), detailed), "\n"))
 			if EstimateTokens(candidateText) <= budget {
 				keptLines = append(keptLines, detailed)
@@ -500,7 +697,6 @@ func buildP2Content(candidates []p2Candidate, budget int) (string, []int64, bool
 			keptIDs = append(keptIDs, cand.entity.ID)
 			continue
 		}
-		// 若连第一条高优实体都超过单槽剩余预算，按 Token 截断单行以尽量保留核心标识。
 		if len(keptLines) == 0 {
 			rem := budget - EstimateTokens(header)
 			if truncated := truncateHeadWithinTokens(line, rem); truncated != "" {
@@ -515,6 +711,145 @@ func buildP2Content(candidates []p2Candidate, budget int) (string, []int64, bool
 		return "", []int64{}, true
 	}
 	return strings.TrimSpace(header + strings.Join(keptLines, "\n")), keptIDs, true
+}
+
+type scoredForeshadow struct {
+	fs          domain.Foreshadowing
+	overdue     bool
+	overlapCnt  int
+	urgencyDiff int // targetResolveSeq - currentSeq (越小越紧迫；未设目标则为极大值)
+}
+
+func buildP3Content(
+	all []domain.Foreshadowing,
+	currentSeq int,
+	includedEntityIDs []int64,
+	budget int,
+) (string, bool, int) {
+	includedSet := make(map[int64]bool, len(includedEntityIDs))
+	for _, id := range includedEntityIDs {
+		includedSet[id] = true
+	}
+
+	const noTargetDiff = 1_000_000
+	candidates := make([]scoredForeshadow, 0, len(all))
+	overdueCount := 0
+
+	for _, fs := range all {
+		if fs.Status != domain.ForeshadowingPlanted && fs.Status != domain.ForeshadowingHinted {
+			continue
+		}
+		// 防剧透：绝不注入未来章节才埋设的伏笔。
+		if fs.PlantedChapterSeq > 0 && fs.PlantedChapterSeq >= currentSeq {
+			continue
+		}
+
+		overlap := 0
+		for _, eid := range fs.InvolvedEntityIDs {
+			if includedSet[eid] {
+				overlap++
+			}
+		}
+		overdue := fs.TargetResolveSeq > 0 && currentSeq > fs.TargetResolveSeq
+		if overdue {
+			overdueCount++
+		}
+		diff := noTargetDiff
+		if fs.TargetResolveSeq > 0 {
+			diff = fs.TargetResolveSeq - currentSeq
+		}
+
+		candidates = append(candidates, scoredForeshadow{
+			fs:          fs,
+			overdue:     overdue,
+			overlapCnt:  overlap,
+			urgencyDiff: diff,
+		})
+	}
+
+	if len(candidates) == 0 {
+		return "", false, 0
+	}
+
+	// 优先级排序：1) 超期伏笔优先（超期越久越靠前）→ 2) 关联本章节拍出场实体 → 3) 临近 target_resolve_seq → 4) ID 稳定序。
+	slices.SortFunc(candidates, func(a, b scoredForeshadow) int {
+		if a.overdue != b.overdue {
+			if a.overdue {
+				return -1
+			}
+			return 1
+		}
+		if a.overdue && b.overdue && a.urgencyDiff != b.urgencyDiff {
+			return a.urgencyDiff - b.urgencyDiff
+		}
+		if (a.overlapCnt > 0) != (b.overlapCnt > 0) {
+			if a.overlapCnt > 0 {
+				return -1
+			}
+			return 1
+		}
+		if a.urgencyDiff != b.urgencyDiff {
+			return a.urgencyDiff - b.urgencyDiff
+		}
+		if a.overlapCnt != b.overlapCnt {
+			return b.overlapCnt - a.overlapCnt
+		}
+		return int(a.fs.ID - b.fs.ID)
+	})
+
+	const header = "【未回收伏笔与临期/超期预警】\n"
+	if budget <= EstimateTokens(header) {
+		return "", true, overdueCount
+	}
+
+	kept := make([]string, 0, len(candidates))
+	truncated := false
+	for _, cand := range candidates {
+		line := formatForeshadowLine(cand, currentSeq)
+		trial := strings.TrimSpace(header + strings.Join(append(slices.Clone(kept), line), "\n"))
+		if EstimateTokens(trial) <= budget {
+			kept = append(kept, line)
+			continue
+		}
+		truncated = true
+		if len(kept) == 0 {
+			rem := budget - EstimateTokens(header)
+			if cut := truncateHeadWithinTokens(line, rem); cut != "" {
+				kept = append(kept, cut)
+			}
+		}
+		break
+	}
+	if len(kept) == 0 {
+		return "", true, overdueCount
+	}
+	return strings.TrimSpace(header + strings.Join(kept, "\n")), truncated, overdueCount
+}
+
+func formatForeshadowLine(cand scoredForeshadow, currentSeq int) string {
+	fs := cand.fs
+	var tag string
+	switch {
+	case cand.overdue:
+		tag = fmt.Sprintf("【超期 %d 章】", currentSeq-fs.TargetResolveSeq)
+	case fs.TargetResolveSeq > 0 && fs.TargetResolveSeq-currentSeq <= 3:
+		tag = fmt.Sprintf("【临期·目标第%d章】", fs.TargetResolveSeq)
+	case fs.TargetResolveSeq > 0:
+		tag = fmt.Sprintf("【目标第%d章回收】", fs.TargetResolveSeq)
+	default:
+		tag = "【长期悬念】"
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "- %s[%s] %s（第%d章埋设", tag, fs.Status.Label(), fs.Title, fs.PlantedChapterSeq)
+	if fs.LastHintSeq > 0 {
+		fmt.Fprintf(&b, "，第%d章暗示", fs.LastHintSeq)
+	}
+	b.WriteString("）")
+	if strings.TrimSpace(fs.Description) != "" {
+		fmt.Fprintf(&b, "：%s", strings.TrimSpace(fs.Description))
+	}
+	return b.String()
 }
 
 func buildP4Content(prevOrdered []domain.Chapter, budget int) (string, bool) {
@@ -566,7 +901,6 @@ func buildP4Content(prevOrdered []domain.Chapter, budget int) (string, bool) {
 	onlyPrev1 := renderFull("", tail1)
 	if EstimateTokens(onlyPrev1) <= budget {
 		if hasPrev2 {
-			// 计算剩余给 N-2 的 Token 配额并尝试保留 N-2 末尾片段。
 			remForPrev2 := budget - EstimateTokens(onlyPrev1) - 4
 			if fitted2, kept2 := fitTailWithinTokens(prev2Header, tail2, remForPrev2); kept2 > 0 {
 				combined := strings.TrimSpace(slotHeader + fitted2 + "\n\n" + prev1Header + tail1)
@@ -585,6 +919,297 @@ func buildP4Content(prevOrdered []domain.Chapter, budget int) (string, bool) {
 		return "", true
 	}
 	return strings.TrimSpace(slotHeader + fitted1), true
+}
+
+func buildP5Content(
+	recentChapters []domain.Chapter,
+	arcSummaries []domain.ArcSummary,
+	maxSeq int,
+	budget int,
+) (string, bool) {
+	// 过滤未来摘要（防剧透）并按层级拆分：卷摘要 + 10章弧线摘要 + 近15章单章因果摘要。
+	var volLines []string
+	var arcLines []string
+
+	filteredArcs := make([]domain.ArcSummary, 0, len(arcSummaries))
+	for _, a := range arcSummaries {
+		if strings.TrimSpace(a.Summary) == "" {
+			continue
+		}
+		if maxSeq > 0 && a.EndSeq > maxSeq {
+			continue
+		}
+		if maxSeq == 0 {
+			continue
+		}
+		filteredArcs = append(filteredArcs, a)
+	}
+	slices.SortFunc(filteredArcs, func(a, b domain.ArcSummary) int {
+		if a.StartSeq != b.StartSeq {
+			return a.StartSeq - b.StartSeq
+		}
+		return a.EndSeq - b.EndSeq
+	})
+
+	for _, a := range filteredArcs {
+		switch a.Level {
+		case domain.ArcSummaryLevelVolume:
+			volLines = append(volLines, fmt.Sprintf("- [卷摘要 第%d~%d章] %s", a.StartSeq, a.EndSeq, strings.TrimSpace(a.Summary)))
+		case domain.ArcSummaryLevelArc10:
+			arcLines = append(arcLines, fmt.Sprintf("- [弧线摘要 第%d~%d章] %s", a.StartSeq, a.EndSeq, strings.TrimSpace(a.Summary)))
+		}
+	}
+
+	chapLines := make([]string, 0, len(recentChapters))
+	for _, ch := range recentChapters {
+		chapLines = append(chapLines, fmt.Sprintf("- [第%d章《%s》] %s", ch.GlobalSeq, ch.Title, strings.TrimSpace(ch.CausalSummary)))
+	}
+
+	if len(volLines) == 0 && len(arcLines) == 0 && len(chapLines) == 0 {
+		return "", false
+	}
+
+	const header = "【历史剧情摘要金字塔（卷摘要 / 10章弧线 / 近15章因果）】\n"
+	render := func(vols, arcs, chaps []string) string {
+		lines := make([]string, 0, len(vols)+len(arcs)+len(chaps))
+		lines = append(lines, vols...)
+		lines = append(lines, arcs...)
+		lines = append(lines, chaps...)
+		if len(lines) == 0 {
+			return ""
+		}
+		return strings.TrimSpace(header + strings.Join(lines, "\n"))
+	}
+
+	full := render(volLines, arcLines, chapLines)
+	if EstimateTokens(full) <= budget {
+		return full, false
+	}
+	if budget <= EstimateTokens(header) {
+		return "", true
+	}
+
+	// 按 docs/03 §1.3 裁剪策略：从最远的单章因果摘要开始向上收缩（保留最新单章与高浓缩弧线/卷摘要）。
+	curChaps := slices.Clone(chapLines)
+	for len(curChaps) > 0 {
+		candidate := render(volLines, arcLines, curChaps)
+		if EstimateTokens(candidate) <= budget {
+			return candidate, true
+		}
+		curChaps = curChaps[1:]
+	}
+
+	// 若单章摘要全撤后仍超预算，则从最远弧线摘要开始收缩。
+	curArcs := slices.Clone(arcLines)
+	for len(curArcs) > 0 {
+		candidate := render(volLines, curArcs, nil)
+		if EstimateTokens(candidate) <= budget {
+			return candidate, true
+		}
+		curArcs = curArcs[1:]
+	}
+
+	// 最后从最远卷摘要收缩。
+	curVols := slices.Clone(volLines)
+	for len(curVols) > 0 {
+		candidate := render(curVols, nil, nil)
+		if EstimateTokens(candidate) <= budget {
+			return candidate, true
+		}
+		curVols = curVols[1:]
+	}
+
+	// 若连单条最近摘要都超过预算，则截断最新一条单章或弧线摘要作为保底。
+	fallback := ""
+	switch {
+	case len(chapLines) > 0:
+		fallback = chapLines[len(chapLines)-1]
+	case len(arcLines) > 0:
+		fallback = arcLines[len(arcLines)-1]
+	case len(volLines) > 0:
+		fallback = volLines[len(volLines)-1]
+	}
+	if cut := truncateHeadWithinTokens(fallback, budget-EstimateTokens(header)); cut != "" {
+		return strings.TrimSpace(header + cut), true
+	}
+	return "", true
+}
+
+func buildSearchKeywords(explicit []string, p2Candidates []p2Candidate, beats []domain.Beat) []string {
+	out := make([]string, 0, 5)
+	seen := make(map[string]bool)
+	add := func(raw string) {
+		kw := strings.TrimSpace(raw)
+		if kw == "" || len([]rune(kw)) < 2 {
+			return
+		}
+		lower := strings.ToLower(kw)
+		if seen[lower] {
+			return
+		}
+		seen[lower] = true
+		out = append(out, kw)
+	}
+
+	for _, kw := range explicit {
+		add(kw)
+	}
+	if len(out) > 0 {
+		if len(out) > 5 {
+			return out[:5]
+		}
+		return out
+	}
+
+	// 未显式指定关键词时，自动从出场实体名（优先非 POV 的核心道具/对手/地点，再补 POV）中提取最多 3 个精确检索词。
+	for _, cand := range p2Candidates {
+		if !cand.highPriority {
+			add(cand.entity.Name)
+		}
+		if len(out) >= 3 {
+			return out
+		}
+	}
+	for _, cand := range p2Candidates {
+		add(cand.entity.Name)
+		if len(out) >= 3 {
+			return out
+		}
+	}
+	// 若本章节拍无绑定实体，则从首个节拍摘要/冲突说明取短词作为回退。
+	for _, b := range beats {
+		for _, tok := range strings.FieldsFunc(b.ConflictNote+" "+b.Summary, isKeywordDelimiter) {
+			if r := []rune(tok); len(r) >= 2 && len(r) <= 8 {
+				add(tok)
+				if len(out) >= 2 {
+					return out
+				}
+			}
+		}
+	}
+	return out
+}
+
+func isKeywordDelimiter(r rune) bool {
+	switch r {
+	case ' ', '\t', '\n', '，', '。', '、', '；', '：', '！', '？', '（', '）', '《', '》', '“', '”', ',', '.', ';', ':', '!', '?', '/', '|', '-':
+		return true
+	default:
+		return false
+	}
+}
+
+func runSpoilerFreeMemorySearch(
+	ctx context.Context,
+	mem MemoryDataSource,
+	bookID int64,
+	maxChapterSeq int,
+	keywords []string,
+) ([]domain.MemorySearchHit, error) {
+	if maxChapterSeq <= 0 || len(keywords) == 0 {
+		return nil, nil
+	}
+
+	type hitKey struct {
+		source    string
+		chapterID int64
+		entityID  int64
+	}
+	dedup := make(map[hitKey]domain.MemorySearchHit)
+	for _, kw := range keywords {
+		hits, err := mem.SearchMemory(ctx, bookID, kw, maxChapterSeq)
+		if err != nil {
+			return nil, err
+		}
+		for _, h := range hits {
+			// 双重防剧透守卫：即便底层实现返回超前章节，也在此硬过滤。
+			if h.Source == domain.MemorySearchSourceChapter && h.ChapterSeq > maxChapterSeq {
+				continue
+			}
+			if strings.TrimSpace(h.Snippet) == "" {
+				continue
+			}
+			k := hitKey{source: h.Source, chapterID: h.ChapterID, entityID: h.EntityID}
+			if existing, ok := dedup[k]; !ok || h.Score > existing.Score {
+				dedup[k] = h
+			}
+		}
+	}
+
+	merged := make([]domain.MemorySearchHit, 0, len(dedup))
+	for _, h := range dedup {
+		merged = append(merged, h)
+	}
+	slices.SortFunc(merged, func(a, b domain.MemorySearchHit) int {
+		// 优先章节原文片段，其次按相关度得分降序，最后按章号倒序稳定排序。
+		if a.Source != b.Source {
+			if a.Source == domain.MemorySearchSourceChapter {
+				return -1
+			}
+			return 1
+		}
+		if a.Score != b.Score {
+			if a.Score > b.Score {
+				return -1
+			}
+			return 1
+		}
+		if a.ChapterSeq != b.ChapterSeq {
+			return b.ChapterSeq - a.ChapterSeq
+		}
+		return int(a.ChapterID - b.ChapterID)
+	})
+	if len(merged) > maxSearchHits {
+		merged = merged[:maxSearchHits]
+	}
+	return merged, nil
+}
+
+func buildP6Content(hits []domain.MemorySearchHit, budget int) (string, bool) {
+	if len(hits) == 0 {
+		return "", false
+	}
+
+	const header = "【前文精确检索命中片段（历史出处核验）】\n"
+	if budget <= EstimateTokens(header) {
+		return "", true
+	}
+
+	kept := make([]string, 0, len(hits))
+	truncated := false
+	for _, h := range hits {
+		var line string
+		if h.Source == domain.MemorySearchSourceChapter {
+			line = fmt.Sprintf("- [第%d章《%s》] %s", h.ChapterSeq, h.Title, strings.TrimSpace(h.Snippet))
+		} else {
+			line = fmt.Sprintf("- [设定《%s》] %s", h.Title, strings.TrimSpace(h.Snippet))
+		}
+		trial := strings.TrimSpace(header + strings.Join(append(slices.Clone(kept), line), "\n"))
+		if EstimateTokens(trial) <= budget {
+			kept = append(kept, line)
+			continue
+		}
+		truncated = true
+		if len(kept) == 0 {
+			rem := budget - EstimateTokens(header)
+			if cut := truncateHeadWithinTokens(line, rem); cut != "" {
+				kept = append(kept, cut)
+			}
+		}
+		break
+	}
+	if len(kept) == 0 {
+		return "", true
+	}
+	return strings.TrimSpace(header + strings.Join(kept, "\n")), truncated
+}
+
+func formatCandidateDetailed(cand p2Candidate) string {
+	base := formatEntityDetailed(cand.entity)
+	if cand.pendingCount > 0 {
+		base += fmt.Sprintf("\n  状态备注：包含 %d 条同批待审变更", cand.pendingCount)
+	}
+	return base
 }
 
 func formatEntityDetailed(e domain.Entity) string {

@@ -11,6 +11,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  FileDiff,
   FileText,
   History,
   Loader2,
@@ -26,13 +27,17 @@ import {
 } from "lucide-react";
 import {
   LibraryService,
+  MemoryService,
   StudioService,
+  type ApplyDeltaResult,
   type Briefing,
+  type ChapterDelta,
   type ChapterVersion,
   type GenChunk,
   type TokenUsage,
 } from "../mygo";
 import { useApp } from "../stores/AppContext";
+import { DeltaReviewPanel } from "../components/DeltaReviewPanel";
 import {
   countWords,
   formatErrorMessage,
@@ -42,9 +47,10 @@ import {
   getChapterStatusMeta,
   getEntityKindLabel,
   getVersionSourceLabel,
+  parseKeywordList,
 } from "../lib/constants";
 
-type DrawerTab = "briefing" | "versions";
+type DrawerTab = "briefing" | "delta" | "versions";
 
 export function StudioView() {
   const {
@@ -59,9 +65,14 @@ export function StudioView() {
     proseFont,
     proseIndent,
     studioDrawerOpen,
+    setStudioDrawerOpen,
     toggleStudioDrawer,
     selectChapter,
+    refreshChapters,
     refreshActiveChapter,
+    refreshEntities,
+    refreshForeshadowings,
+    bumpMemoryRevision,
     updateChapterInCache,
     setActiveTab,
     openSettings,
@@ -109,7 +120,14 @@ export function StudioView() {
   const [pinnedEntityIds, setPinnedEntityIds] = useState<Set<number>>(new Set());
   const [excludedEntityIds, setExcludedEntityIds] = useState<Set<number>>(new Set());
   const [extraInstruction, setExtraInstruction] = useState("");
+  const [includePending, setIncludePending] = useState(false);
+  const [searchKeywordsText, setSearchKeywordsText] = useState("");
   const [entityControlsOpen, setEntityControlsOpen] = useState(false);
+
+  // Pending memory delta state
+  const [pendingDelta, setPendingDelta] = useState<ChapterDelta | null>(null);
+  const [deltaLoading, setDeltaLoading] = useState(false);
+  const deltaReqIdRef = useRef(0);
 
   // Versions state
   const [versions, setVersions] = useState<ChapterVersion[]>([]);
@@ -161,7 +179,9 @@ export function StudioView() {
     setPinnedEntityIds(new Set());
     setExcludedEntityIds(new Set());
     setExtraInstruction("");
+    setSearchKeywordsText("");
     setExpandedSlots(new Set());
+    setPendingDelta(null);
   }, [activeChapter?.id]);
 
   // Keep synced if chapter updated externally while not editing or streaming
@@ -242,10 +262,13 @@ export function StudioView() {
     setBriefingLoading(true);
     setBriefingError(null);
     try {
+      const keywords = parseKeywordList(searchKeywordsText);
       const res = await StudioService.previewBriefing(activeChapterId, {
         pinnedEntityIds: Array.from(pinnedEntityIds),
         excludedEntityIds: Array.from(excludedEntityIds),
         extraInstruction: extraInstruction.trim() || undefined,
+        includePending,
+        searchKeywords: keywords.length > 0 ? keywords : undefined,
       });
       setBriefing(res);
     } catch (err) {
@@ -253,7 +276,87 @@ export function StudioView() {
     } finally {
       setBriefingLoading(false);
     }
-  }, [activeChapterId, pinnedEntityIds, excludedEntityIds, extraInstruction]);
+  }, [
+    activeChapterId,
+    pinnedEntityIds,
+    excludedEntityIds,
+    extraInstruction,
+    includePending,
+    searchKeywordsText,
+  ]);
+
+  // Load pending chapter memory delta
+  const loadPendingDelta = useCallback(async (targetChapterId?: number | null) => {
+    const cid = targetChapterId ?? activeChapterId;
+    if (!cid) {
+      setPendingDelta(null);
+      return;
+    }
+    const reqId = ++deltaReqIdRef.current;
+    setDeltaLoading(true);
+    try {
+      const delta = await MemoryService.getPendingDelta(cid);
+      if (deltaReqIdRef.current === reqId) {
+        setPendingDelta(delta);
+      }
+    } catch {
+      if (deltaReqIdRef.current === reqId) {
+        setPendingDelta(null);
+      }
+    } finally {
+      if (deltaReqIdRef.current === reqId) {
+        setDeltaLoading(false);
+      }
+    }
+  }, [activeChapterId]);
+
+  // Automatically check pending delta when switching chapters
+  useEffect(() => {
+    void loadPendingDelta(activeChapterId);
+  }, [activeChapterId, loadPendingDelta]);
+
+  const handleDeltaApplied = useCallback(
+    async (result: ApplyDeltaResult) => {
+      setPendingDelta(null);
+      await Promise.all([
+        refreshActiveChapter(activeChapterId),
+        refreshChapters(activeBook?.id),
+        refreshEntities(activeBook?.id),
+        refreshForeshadowings(activeBook?.id),
+      ]);
+      bumpMemoryRevision();
+      if (studioDrawerOpen && drawerTab === "briefing") {
+        void loadBriefing();
+      }
+
+      const dirtyCount = result.markedDirtyChapterIds?.length ?? 0;
+      const summaryParts = [
+        `${result.committedEvents} 条状态事件入库`,
+        `${result.updatedForeshadowings} 条伏笔更新`,
+      ];
+      if (dirtyCount > 0) {
+        summaryParts.push(`下游 ${dirtyCount} 章标记为上游变更`);
+      }
+      notify({
+        tone: dirtyCount > 0 ? "warn" : "ok",
+        message: "记忆变更单已入库",
+        detail: summaryParts.join(" · "),
+      });
+    },
+    [
+      activeChapterId,
+      activeBook?.id,
+      refreshActiveChapter,
+      refreshChapters,
+      refreshEntities,
+      refreshForeshadowings,
+      bumpMemoryRevision,
+      studioDrawerOpen,
+      drawerTab,
+      loadBriefing,
+      notify,
+    ]
+  );
 
   // Load versions
   const loadVersions = useCallback(async () => {
@@ -508,11 +611,14 @@ export function StudioView() {
     channelRef.current = ch;
 
     const trimmedExtra = extraInstruction.trim();
+    const keywords = parseKeywordList(searchKeywordsText);
     const opts = {
       briefing: {
         pinnedEntityIds: Array.from(pinnedEntityIds),
         excludedEntityIds: Array.from(excludedEntityIds),
         extraInstruction: trimmedExtra || undefined,
+        includePending,
+        searchKeywords: keywords.length > 0 ? keywords : undefined,
       },
       extraInstruction: trimmedExtra || undefined,
     };
@@ -611,6 +717,7 @@ export function StudioView() {
         setGenerating(false);
         setGenStageText("");
         if (activeChapterIdRef.current === genChapterId) {
+          void loadPendingDelta(genChapterId);
           if (studioDrawerOpen && drawerTab === "versions") {
             void loadVersions();
           }
@@ -627,12 +734,15 @@ export function StudioView() {
     extraInstruction,
     pinnedEntityIds,
     excludedEntityIds,
+    includePending,
+    searchKeywordsText,
     updateChapterInCache,
     refreshActiveChapter,
     notify,
     openSettings,
     studioDrawerOpen,
     drawerTab,
+    loadPendingDelta,
     loadVersions,
     loadBriefing,
   ]);
@@ -900,6 +1010,26 @@ export function StudioView() {
               </div>
             )}
 
+            {!generating && !genError && activeChapter.status === "upstream_dirty" && (
+              <div className="mb-5 flex items-center justify-between gap-3 rounded-lg border border-danger/35 bg-danger-soft/70 px-3.5 py-2 text-xs text-danger">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                  <span>上游章节设定已变更，建议重新预览简报或复核本章正文</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDrawerTab("briefing");
+                    setStudioDrawerOpen(true);
+                    void loadBriefing();
+                  }}
+                  className="shrink-0 font-medium underline underline-offset-2 hover:opacity-80"
+                >
+                  查看简报
+                </button>
+              </div>
+            )}
+
             {!generating && !genError && activeChapter.status === "partial" && (
               <div className="mb-5 flex items-center justify-between gap-3 rounded-lg border border-warn/30 bg-warn-soft px-3.5 py-2 text-xs text-warn">
                 <div className="flex items-center gap-2">
@@ -1090,12 +1220,12 @@ export function StudioView() {
           style={{ width: "var(--studio-drawer-width)" }}
         >
           {/* Drawer Header Tabs */}
-          <div className="flex items-center justify-between border-b border-border-subtle px-3 py-2">
-            <div className="flex items-center gap-1">
+          <div className="flex items-center justify-between border-b border-border-subtle px-2.5 py-2">
+            <div className="flex items-center gap-0.5">
               <button
                 type="button"
                 onClick={() => setDrawerTab("briefing")}
-                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                className={`flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium transition-colors ${
                   drawerTab === "briefing"
                     ? "bg-accent-soft text-accent"
                     : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
@@ -1106,8 +1236,27 @@ export function StudioView() {
               </button>
               <button
                 type="button"
+                onClick={() => setDrawerTab("delta")}
+                className={`flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                  drawerTab === "delta"
+                    ? "bg-accent-soft text-accent"
+                    : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                }`}
+              >
+                <FileDiff className="h-3.5 w-3.5" />
+                <span>变更单</span>
+                {pendingDelta && (
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      pendingDelta.highRiskFlags > 0 ? "bg-danger" : "bg-warn"
+                    }`}
+                  />
+                )}
+              </button>
+              <button
+                type="button"
                 onClick={() => setDrawerTab("versions")}
-                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                className={`flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium transition-colors ${
                   drawerTab === "versions"
                     ? "bg-accent-soft text-accent"
                     : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
@@ -1125,15 +1274,19 @@ export function StudioView() {
 
             <button
               type="button"
-              onClick={() =>
-                drawerTab === "briefing" ? void loadBriefing() : void loadVersions()
-              }
+              onClick={() => {
+                if (drawerTab === "briefing") void loadBriefing();
+                else if (drawerTab === "delta") void loadPendingDelta();
+                else void loadVersions();
+              }}
               title="刷新"
               className="rounded p-1 text-ink-muted transition-colors hover:bg-elevated hover:text-ink-primary"
             >
               <RefreshCw
                 className={`h-3.5 w-3.5 ${
-                  briefingLoading || versionsLoading ? "animate-spin text-accent" : ""
+                  briefingLoading || versionsLoading || deltaLoading
+                    ? "animate-spin text-accent"
+                    : ""
                 }`}
               />
             </button>
@@ -1182,18 +1335,43 @@ export function StudioView() {
                 </div>
               )}
 
-              {/* Extra Instruction */}
-              <div className="mb-3">
-                <label className="mb-1 block text-[11px] font-medium text-ink-secondary">
-                  本次出稿补充指令
+              {/* Extra Instruction & Memory Retrieval Controls */}
+              <div className="mb-3 flex flex-col gap-2.5">
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium text-ink-secondary">
+                    本次出稿补充指令
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={extraInstruction}
+                    onChange={(e) => setExtraInstruction(e.target.value)}
+                    placeholder="例如：本段重点压低配角台词字数，突出实战招式细节"
+                    className="w-full resize-none rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium text-ink-secondary">
+                    记忆检索关键词（P6 槽位，逗号分隔）
+                  </label>
+                  <input
+                    type="text"
+                    value={searchKeywordsText}
+                    onChange={(e) => setSearchKeywordsText(e.target.value)}
+                    placeholder="例如：血玉令牌, 破障丹, 残阵"
+                    className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                  />
+                </div>
+
+                <label className="flex cursor-pointer items-center justify-between rounded-md border border-border-subtle bg-canvas/60 px-2.5 py-1.5 text-xs text-ink-secondary select-none">
+                  <span>含同批待审状态（pending）</span>
+                  <input
+                    type="checkbox"
+                    checked={includePending}
+                    onChange={(e) => setIncludePending(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-[var(--accent)]"
+                  />
                 </label>
-                <textarea
-                  rows={2}
-                  value={extraInstruction}
-                  onChange={(e) => setExtraInstruction(e.target.value)}
-                  placeholder="例如：本段重点压低配角台词字数，突出实战招式细节"
-                  className="w-full resize-none rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
-                />
               </div>
 
               {/* Pin / Exclude Entities */}
@@ -1329,6 +1507,10 @@ export function StudioView() {
                                   ? "bg-danger-soft text-danger"
                                   : slot.priority === "P1"
                                   ? "bg-accent-soft text-accent"
+                                  : slot.priority === "P2"
+                                  ? "bg-ok-soft text-ok"
+                                  : slot.priority === "P3"
+                                  ? "bg-warn-soft text-warn"
                                   : "bg-elevated text-ink-secondary"
                               }`}
                             >
@@ -1370,7 +1552,20 @@ export function StudioView() {
             </div>
           )}
 
-          {/* Tab 2: Version Snapshots */}
+          {/* Tab 2: Memory Delta Review */}
+          {drawerTab === "delta" && (
+            <DeltaReviewPanel
+              chapterId={activeChapter.id}
+              chapterHasContent={content.trim().length > 0}
+              delta={pendingDelta}
+              loading={deltaLoading}
+              onDeltaLoaded={setPendingDelta}
+              onDeltaApplied={handleDeltaApplied}
+              onNotify={notify}
+            />
+          )}
+
+          {/* Tab 3: Version Snapshots */}
           {drawerTab === "versions" && (
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               {versionsLoading && versions.length === 0 ? (
