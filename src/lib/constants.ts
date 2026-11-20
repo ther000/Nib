@@ -69,27 +69,27 @@ export const CHAPTER_STATUS_META: Record<
   { label: string; dotClass: string; badgeClass: string }
 > = {
   planned: {
-    label: "规划中",
+    label: "待写",
     dotClass: "bg-ink-muted",
     badgeClass: "bg-elevated text-ink-secondary border-border-subtle",
   },
   outlined: {
-    label: "已编排",
+    label: "已有大纲",
     dotClass: "bg-ink-secondary",
     badgeClass: "bg-elevated text-ink-primary border-border-subtle",
   },
   drafting: {
-    label: "出稿中",
+    label: "写作中",
     dotClass: "bg-accent animate-pulse",
     badgeClass: "bg-accent-soft text-accent border-accent/30",
   },
   partial: {
-    label: "部分生成",
+    label: "未写完",
     dotClass: "bg-warn",
     badgeClass: "bg-warn-soft text-warn border-warn/30",
   },
   reviewing: {
-    label: "待审改",
+    label: "待定稿",
     dotClass: "bg-accent",
     badgeClass: "bg-accent-soft text-accent border-accent/30",
   },
@@ -99,9 +99,9 @@ export const CHAPTER_STATUS_META: Record<
     badgeClass: "bg-ok-soft text-ok border-ok/30",
   },
   upstream_dirty: {
-    label: "上游变更",
-    dotClass: "bg-danger ring-2 ring-warn/50",
-    badgeClass: "bg-danger-soft text-danger border-danger/45 font-medium",
+    label: "前文有变动",
+    dotClass: "bg-warn",
+    badgeClass: "bg-warn-soft text-warn border-warn/40 font-medium",
   },
 };
 
@@ -236,11 +236,11 @@ export const PIPELINE_STAGES: Array<{
   defaultTemp: number;
   defaultMaxTokens: number;
 }> = [
-  { stage: "outline", label: "大纲节拍", desc: "章纲与节拍编排", defaultTemp: 0.65, defaultMaxTokens: 4096 },
-  { stage: "draft", label: "正文撰写", desc: "审改台流式出稿主模型", defaultTemp: 0.8, defaultMaxTokens: 4096 },
-  { stage: "critic", label: "审校质检", desc: "吃书冲突与钩子审查", defaultTemp: 0.2, defaultMaxTokens: 2048 },
-  { stage: "polish", label: "局部润色", desc: "病灶段落手术润色", defaultTemp: 0.55, defaultMaxTokens: 2048 },
-  { stage: "extract", label: "记忆抽取", desc: "完章状态变更与伏笔抽取", defaultTemp: 0.1, defaultMaxTokens: 2048 },
+  { stage: "outline", label: "大纲构思", desc: "生成章节大纲与剧情节拍", defaultTemp: 0.65, defaultMaxTokens: 4096 },
+  { stage: "draft", label: "正文写作", desc: "按大纲撰写章节正文", defaultTemp: 0.8, defaultMaxTokens: 4096 },
+  { stage: "critic", label: "审校检查", desc: "检查设定冲突、毒点与结尾悬念", defaultTemp: 0.2, defaultMaxTokens: 2048 },
+  { stage: "polish", label: "局部润色", desc: "改写生硬段落，保持上下文连贯", defaultTemp: 0.55, defaultMaxTokens: 2048 },
+  { stage: "extract", label: "设定提取", desc: "完章后自动整理人物变化与伏笔", defaultTemp: 0.1, defaultMaxTokens: 2048 },
 ];
 
 export const PROVIDER_PROTOCOLS: Array<{
@@ -251,29 +251,29 @@ export const PROVIDER_PROTOCOLS: Array<{
 }> = [
   {
     value: "openai_compat",
-    label: "OpenAI 兼容",
+    label: "OpenAI 兼容接口",
     defaultBaseUrl: "https://api.deepseek.com/v1",
     sampleModels: "deepseek-chat\ndeepseek-reasoner",
   },
   {
     value: "anthropic",
-    label: "Anthropic",
+    label: "Anthropic (Claude)",
     defaultBaseUrl: "https://api.anthropic.com",
     sampleModels: "claude-sonnet-4-20250514\nclaude-3-7-sonnet-latest",
   },
   {
     value: "gemini",
-    label: "Gemini",
+    label: "Google Gemini",
     defaultBaseUrl: "https://generativelanguage.googleapis.com",
     sampleModels: "gemini-2.5-pro\ngemini-2.5-flash",
   },
 ];
 
 export const VERSION_SOURCE_LABELS: Record<VersionSource, string> = {
-  ai_draft: "AI 出稿",
+  ai_draft: "AI 生成",
   manual_backup: "手动保存",
   surgical_polish: "局部润色",
-  restore_backup: "回滚前备份",
+  restore_backup: "恢复前备份",
 };
 
 export function getEmotionMeta(tag: EmotionTag): OptionMeta<EmotionTag> {
@@ -443,7 +443,27 @@ export function countWords(text: string): number {
 }
 
 export function formatNumber(n: number): string {
-  return n.toLocaleString("zh-CN");
+  if (!Number.isFinite(n)) return "0";
+  return Math.round(n).toLocaleString("zh-CN");
+}
+
+export function formatCompactTokens(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0";
+  if (n >= 100_000_000) {
+    return `${(n / 100_000_000).toFixed(2)} 亿`;
+  }
+  if (n >= 10_000) {
+    return `${(n / 10_000).toFixed(n >= 100_000 ? 1 : 2)} 万`;
+  }
+  return Math.round(n).toLocaleString("zh-CN");
+}
+
+export function formatLatency(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "—";
+  if (ms >= 1000) {
+    return `${(ms / 1000).toFixed(1)} 秒`;
+  }
+  return `${Math.round(ms)} 毫秒`;
 }
 
 export function formatSeq(seq: number): string {
@@ -475,27 +495,27 @@ export function parseModelList(raw: string): string[] {
 }
 
 export function formatErrorMessage(err: unknown): string {
-  if (!err) return "操作失败";
+  if (!err) return "操作未成功，请稍后重试";
   const raw = err instanceof Error ? err.message : String(err);
   const lower = raw.toLowerCase();
 
   if (lower.includes("401") || lower.includes("invalid api key") || lower.includes("unauthorized")) {
-    return "API 密钥认证失败（401），请检查供应商设置中的密钥";
+    return "密钥验证未通过，请检查模型服务中的密钥是否正确";
   }
   if (lower.includes("429") || lower.includes("rate limit")) {
-    return "上游模型触发限流（429），请稍后重试或切换模型路由";
+    return "请求过于频繁或额度不足，请稍后再试或更换模型";
   }
   if (lower.includes("model route not configured") || lower.includes("provider not configured")) {
-    return "尚未绑定可用的正文模型路由，请先在设置中配置供应商与模型路由";
+    return "尚未指定写作模型，请先在设置中配置模型服务并启用模型";
   }
   if (lower.includes("export directory not configured")) {
-    return "当前书籍尚未设置本地 Markdown 导出目录，请先在设置中选择导出目录";
+    return "还没设置本地备份文件夹，请先在设置中选择导出位置";
   }
   if (lower.includes("context window exceeded")) {
-    return "上下文超出模型窗口上限，请在作战简报中排除部分实体后重试";
+    return "参考资料超出模型上限，请在右侧「参考资料」中排除部分设定后重试";
   }
   if (lower.includes("runtime not found")) {
-    return "当前未运行在 Nib 桌面容器内（缺少 MyGo 运行时）";
+    return "请在 Nib 桌面客户端内运行";
   }
   const validationPrefix = /^validation failed(?: on [^:]+)?:\s*/i;
   if (validationPrefix.test(raw)) {

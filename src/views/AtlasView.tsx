@@ -840,7 +840,7 @@ export function AtlasView() {
       {/* Slide-Over Detail Editor for Entities (with Chronological State Events History) */}
       {editor && (
         <div
-          className="fixed inset-0 z-40 flex justify-end bg-black/50 backdrop-blur-[1px]"
+          className="fixed inset-0 z-40 flex justify-end bg-black/50"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) setEditor(null);
           }}

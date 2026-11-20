@@ -5,7 +5,6 @@ import {
   AlertTriangle,
   Ban,
   BookOpen,
-  Check,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -49,6 +48,7 @@ import { DeltaReviewPanel } from "../components/DeltaReviewPanel";
 import { QualityAuditPanel } from "../components/QualityAuditPanel";
 import {
   countWords,
+  formatCompactTokens,
   formatErrorMessage,
   formatNumber,
   formatSeq,
@@ -153,7 +153,6 @@ export function StudioView() {
   const [versions, setVersions] = useState<ChapterVersion[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [selectedVersionId, setSelectedVersionId] = useState<number | null>(null);
-  const [confirmRestoreId, setConfirmRestoreId] = useState<number | null>(null);
   const [restoringId, setRestoringId] = useState<number | null>(null);
 
   // Sync editor content and per-chapter briefing overrides when active chapter switches
@@ -203,7 +202,6 @@ export function StudioView() {
     setDirty(false);
     setReadingMode(false);
     setGenError(null);
-    setConfirmRestoreId(null);
     setPinnedEntityIds(new Set());
     setExcludedEntityIds(new Set());
     setExtraInstruction("");
@@ -795,6 +793,21 @@ export function StudioView() {
   const startGeneration = useCallback(async () => {
     if (!activeChapter || generating) return;
 
+    if (!draftRouteInfo.configured) {
+      const hasEnabledModel = providers.some(
+        (p) => p.enabled && (p.models?.length ?? 0) > 0
+      );
+      notify({
+        tone: "warn",
+        message: "尚未设置写作模型",
+        detail: hasEnabledModel
+          ? "请先在「模型分配」中指定正文写作模型"
+          : "请先在「模型服务」中连接并启用模型",
+      });
+      openSettings(hasEnabledModel ? "routes" : "providers");
+      return;
+    }
+
     const genChapterId = activeChapter.id;
     const runId = ++streamRunIdRef.current;
     const ac = new AbortController();
@@ -805,7 +818,7 @@ export function StudioView() {
 
     setGenerating(true);
     setGenError(null);
-    setGenStageText("正在编译作战简报…");
+    setGenStageText("正在整理参考资料…");
     setGenModelName(draftRouteInfo.configured ? draftRouteInfo.label : "");
     setLastUsage(null);
 
@@ -821,7 +834,7 @@ export function StudioView() {
         case "started": {
           const model = chunk.modelName || draftRouteInfo.label;
           setGenModelName(model);
-          setGenStageText(`流式出稿中 · ${model}`);
+          setGenStageText(`正在写作（${model}）`);
           break;
         }
         case "delta": {
@@ -1001,6 +1014,7 @@ export function StudioView() {
   }, [
     activeChapter,
     generating,
+    providers,
     draftRouteInfo,
     extraInstruction,
     pinnedEntityIds,
@@ -1049,12 +1063,11 @@ export function StudioView() {
       setTitle(restored.title);
       setContent(restored.content);
       setDirty(false);
-      setConfirmRestoreId(null);
       await loadVersions();
       notify({
         tone: "ok",
-        message: "已回滚到此版本快照",
-        detail: "原正文已自动归档至历史快照",
+        message: "已恢复到此历史版本",
+        detail: "原正文已自动存入历史版本",
       });
     } catch (err) {
       notify({ tone: "danger", message: "回滚快照失败", detail: formatErrorMessage(err) });
@@ -1231,18 +1244,15 @@ export function StudioView() {
           <div className="mx-auto w-full max-w-[var(--prose-max-width)]">
             {/* Subtle chapter breadcrumb & quick switcher */}
             <div className="mb-5 flex items-center justify-between gap-2 text-xs text-ink-muted select-none">
-              <div className="flex min-w-0 items-center gap-2">
+              <div className="flex min-w-0 items-center gap-2.5">
                 {activeVolumeTitle && (
-                  <>
-                    <span className="truncate">{activeVolumeTitle}</span>
-                    <span>·</span>
-                  </>
+                  <span className="truncate text-ink-muted">{activeVolumeTitle}</span>
                 )}
-                <span className="nib-mono text-ink-secondary">
+                <span className="text-ink-secondary">
                   第 {formatSeq(activeChapter.globalSeq)} 章
                 </span>
                 <span
-                  className={`rounded-full border px-2 py-0.5 text-[10.5px] ${statusMeta.badgeClass}`}
+                  className={`rounded-full border px-2 py-0.5 text-xs ${statusMeta.badgeClass}`}
                 >
                   {statusMeta.label}
                 </span>
@@ -1250,25 +1260,25 @@ export function StudioView() {
 
               <div className="flex items-center gap-1">
                 {paragraphAuditMaps.flaggedParagraphs.length > 0 && (
-                  <div className="mr-1 flex items-center gap-0.5 rounded-md border border-border-subtle bg-surface px-1 py-0.5">
+                  <div className="mr-1 flex items-center gap-0.5 rounded-lg border border-border-subtle bg-surface px-1 py-0.5">
                     <button
                       type="button"
                       onClick={() => cycleFlaggedParagraph(-1)}
-                      title="上一处 AI 味或审校告警 (Alt+[)"
-                      className="rounded px-1.5 py-0.5 text-[10.5px] text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                      title="上一处建议 (Alt+[)"
+                      className="rounded px-1.5 py-0.5 text-xs text-ink-secondary hover:bg-elevated hover:text-ink-primary"
                     >
-                      [ 上一处
+                      上一处
                     </button>
-                    <span className="nib-mono px-1 text-[10.5px] text-warn">
-                      {paragraphAuditMaps.flaggedParagraphs.length} 处病灶
+                    <span className="nib-mono px-1 text-xs text-warn">
+                      {paragraphAuditMaps.flaggedParagraphs.length} 处建议
                     </span>
                     <button
                       type="button"
                       onClick={() => cycleFlaggedParagraph(1)}
-                      title="下一处 AI 味或审校告警 (Alt+])"
-                      className="rounded px-1.5 py-0.5 text-[10.5px] text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                      title="下一处建议 (Alt+])"
+                      className="rounded px-1.5 py-0.5 text-xs text-ink-secondary hover:bg-elevated hover:text-ink-primary"
                     >
-                      下一处 ]
+                      下一处
                     </button>
                   </div>
                 )}
@@ -1276,8 +1286,8 @@ export function StudioView() {
                   type="button"
                   disabled={generating}
                   onClick={() => setReadingMode((v) => !v)}
-                  title={readingMode ? "切回编辑模式" : "排版审校与局部润色视图"}
-                  className={`flex items-center gap-1 rounded px-2 py-1 text-[11px] transition-colors disabled:opacity-30 ${
+                  title={readingMode ? "切回编辑模式" : "切换校对视图"}
+                  className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors disabled:opacity-30 ${
                     readingMode
                       ? "bg-accent-soft text-accent"
                       : "text-ink-muted hover:bg-surface hover:text-ink-primary"
@@ -1291,7 +1301,7 @@ export function StudioView() {
                   ) : (
                     <>
                       <BookOpen className="h-3 w-3" />
-                      <span>排版审校</span>
+                      <span>校对视图</span>
                     </>
                   )}
                 </button>
@@ -1497,12 +1507,12 @@ export function StudioView() {
               {formatNumber(liveWordCount)} 字
             </span>
 
-            <span className="text-border-strong">·</span>
+            <span className="h-3 w-px bg-border-subtle" aria-hidden="true" />
 
             <button
               type="button"
-              onClick={() => openSettings("routes")}
-              title="配置正文模型路由"
+              onClick={() => openSettings(draftRouteInfo.configured ? "routes" : "providers")}
+              title="调整正文写作模型"
               className={`truncate transition-colors hover:text-ink-primary ${
                 draftRouteInfo.configured ? "nib-mono text-ink-secondary" : "text-warn"
               }`}
@@ -1510,27 +1520,27 @@ export function StudioView() {
               {genModelName || draftRouteInfo.label}
             </button>
 
-            <span className="text-border-strong">·</span>
+            <span className="h-3 w-px bg-border-subtle" aria-hidden="true" />
 
             {generating ? (
-              <span className="text-accent">流式生成中</span>
+              <span className="text-accent">写作中</span>
             ) : saving ? (
               <span className="text-ink-muted">保存中…</span>
             ) : dirty ? (
               <span className="text-warn">未保存</span>
             ) : activeChapter.status === "partial" ? (
-              <span className="text-warn">partial</span>
+              <span className="text-warn">未写完</span>
             ) : (
               <span className="text-ink-muted">已保存</span>
             )}
 
             {lastUsage && !generating && (
               <span
-                title={`输入 ${lastUsage.promptTokens} / 输出 ${lastUsage.completionTokens} tokens`}
-                className="nib-mono hidden text-[11px] text-ink-muted lg:inline"
+                title={`输入 ${formatNumber(lastUsage.promptTokens)} / 输出 ${formatNumber(lastUsage.completionTokens)} Token`}
+                className="nib-mono hidden text-xs text-ink-muted lg:inline"
               >
-                ↑{formatNumber(lastUsage.promptTokens)} ↓
-                {formatNumber(lastUsage.completionTokens)}
+                输入 {formatCompactTokens(lastUsage.promptTokens)} / 输出{" "}
+                {formatCompactTokens(lastUsage.completionTokens)} Token
               </span>
             )}
           </div>
@@ -1621,7 +1631,7 @@ export function StudioView() {
           className="flex shrink-0 flex-col border-l border-border-subtle bg-surface"
           style={{ width: "var(--studio-drawer-width)" }}
         >
-          {/* Drawer Header Tabs: 简报 / 质检 / 变更单 / 快照 */}
+          {/* Drawer Header Tabs: 参考 / 检查 / 设定更新 / 历史 */}
           <div className="flex items-center justify-between border-b border-border-subtle px-2 py-2">
             <div className="flex items-center gap-0.5">
               <button
@@ -1634,7 +1644,7 @@ export function StudioView() {
                 }`}
               >
                 <FileText className="h-3.5 w-3.5" />
-                <span>简报</span>
+                <span>参考</span>
               </button>
               <button
                 type="button"
@@ -1646,9 +1656,9 @@ export function StudioView() {
                 }`}
               >
                 <ShieldCheck className="h-3.5 w-3.5" />
-                <span>质检</span>
+                <span>检查</span>
                 {paragraphAuditMaps.totalFlags > 0 && (
-                  <span className="nib-mono rounded-full bg-warn-soft px-1 text-[10px] font-semibold text-warn">
+                  <span className="nib-mono rounded-full bg-warn-soft px-1.5 text-xs font-medium text-warn">
                     {paragraphAuditMaps.totalFlags}
                   </span>
                 )}
@@ -1663,7 +1673,7 @@ export function StudioView() {
                 }`}
               >
                 <FileDiff className="h-3.5 w-3.5" />
-                <span>变更单</span>
+                <span>设定更新</span>
                 {pendingDelta && (
                   <span
                     className={`h-1.5 w-1.5 rounded-full ${
@@ -1682,9 +1692,9 @@ export function StudioView() {
                 }`}
               >
                 <History className="h-3.5 w-3.5" />
-                <span>快照</span>
+                <span>历史</span>
                 {versions.length > 0 && (
-                  <span className="nib-mono text-[10px] opacity-80">
+                  <span className="nib-mono text-xs opacity-80">
                     {versions.length}
                   </span>
                 )}
@@ -1758,33 +1768,33 @@ export function StudioView() {
               {/* Extra Instruction & Memory Retrieval Controls */}
               <div className="mb-3 flex flex-col gap-2.5">
                 <div>
-                  <label className="mb-1 block text-[11px] font-medium text-ink-secondary">
-                    本次出稿补充指令
+                  <label className="mb-1 block text-xs font-medium text-ink-secondary">
+                    本章写作补充要求
                   </label>
                   <textarea
                     rows={2}
                     value={extraInstruction}
                     onChange={(e) => setExtraInstruction(e.target.value)}
-                    placeholder="例如：本段重点压低配角台词字数，突出实战招式细节"
-                    className="w-full resize-none rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                    placeholder="例如：压低配角台词字数，突出招式细节"
+                    className="w-full resize-none rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
                   />
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-[11px] font-medium text-ink-secondary">
-                    记忆检索关键词（P6 槽位，逗号分隔）
+                  <label className="mb-1 block text-xs font-medium text-ink-secondary">
+                    补充关联词（逗号分隔）
                   </label>
                   <input
                     type="text"
                     value={searchKeywordsText}
                     onChange={(e) => setSearchKeywordsText(e.target.value)}
                     placeholder="例如：血玉令牌, 破障丹, 残阵"
-                    className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                    className="w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
                   />
                 </div>
 
-                <label className="flex cursor-pointer items-center justify-between rounded-md border border-border-subtle bg-canvas/60 px-2.5 py-1.5 text-xs text-ink-secondary select-none">
-                  <span>含同批待审状态（pending）</span>
+                <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border-subtle bg-canvas/60 px-2.5 py-1.5 text-xs text-ink-secondary select-none">
+                  <span>包含未确认的连载变动</span>
                   <input
                     type="checkbox"
                     checked={includePending}
@@ -1948,8 +1958,8 @@ export function StudioView() {
                             )}
                           </div>
                           <div className="flex shrink-0 items-center gap-1.5">
-                            <span className="nib-mono text-[11px] text-ink-muted">
-                              {formatNumber(slot.tokenEst)}t
+                            <span className="nib-mono text-xs text-ink-muted">
+                              {formatCompactTokens(slot.tokenEst)} Token
                             </span>
                             <ChevronDown
                               className={`h-3.5 w-3.5 text-ink-muted transition-transform ${
@@ -2033,7 +2043,6 @@ export function StudioView() {
                             type="button"
                             onClick={() => {
                               setSelectedVersionId(ver.id);
-                              setConfirmRestoreId(null);
                             }}
                             className={`flex flex-col gap-1 rounded-lg border px-3 py-2 text-left transition-colors ${
                               selected
@@ -2070,46 +2079,20 @@ export function StudioView() {
                   {selectedVersion && (
                     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                       <div className="flex items-center justify-between border-b border-border-subtle bg-surface px-3.5 py-2">
-                        <span className="nib-mono text-[11px] text-ink-secondary">
-                          快照 #{selectedVersion.id} ·{" "}
+                        <span className="nib-mono text-xs text-ink-secondary">
                           {formatNumber(selectedVersion.wordCount)} 字
                         </span>
-                        {confirmRestoreId === selectedVersion.id ? (
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              disabled={restoringId === selectedVersion.id}
-                              onClick={() =>
-                                void handleRestoreVersion(selectedVersion.id)
-                              }
-                              className="flex items-center gap-1 rounded bg-accent px-2 py-0.5 text-[11px] font-semibold text-canvas"
-                            >
-                              <Check className="h-3 w-3" />
-                              <span>
-                                {restoringId === selectedVersion.id
-                                  ? "回滚中…"
-                                  : "确认回滚"}
-                              </span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setConfirmRestoreId(null)}
-                              className="rounded p-0.5 text-ink-muted hover:text-ink-primary"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            disabled={generating}
-                            onClick={() => setConfirmRestoreId(selectedVersion.id)}
-                            className="flex items-center gap-1 rounded-md border border-border-subtle bg-elevated px-2.5 py-1 text-[11px] font-medium text-ink-primary transition-colors hover:border-accent hover:text-accent disabled:opacity-40"
-                          >
-                            <RotateCcw className="h-3 w-3" />
-                            <span>回滚到此版本</span>
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          disabled={generating || restoringId === selectedVersion.id}
+                          onClick={() => void handleRestoreVersion(selectedVersion.id)}
+                          className="flex items-center gap-1 rounded-lg border border-border-subtle bg-elevated px-2.5 py-1 text-xs font-medium text-ink-primary transition-colors hover:border-accent hover:text-accent disabled:opacity-40"
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                          <span>
+                            {restoringId === selectedVersion.id ? "恢复中…" : "恢复此版本"}
+                          </span>
+                        </button>
                       </div>
 
                       <div className="flex-1 overflow-y-auto bg-canvas/50 px-4 py-3">

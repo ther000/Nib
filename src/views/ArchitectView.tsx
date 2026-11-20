@@ -565,8 +565,8 @@ export function ArchitectView() {
         <div className="flex items-center justify-between border-b border-border-subtle px-3 py-2.5">
           <div className="flex items-center gap-1.5 text-xs font-medium text-ink-secondary">
             <Layers className="h-3.5 w-3.5 text-ink-muted" />
-            <span>卷章结构</span>
-            <span className="nib-mono text-[11px] text-ink-muted">
+            <span>目录</span>
+            <span className="nib-mono text-xs text-ink-muted">
               {chapters.length}
             </span>
           </div>
@@ -574,7 +574,7 @@ export function ArchitectView() {
             type="button"
             onClick={openCreateVolume}
             title="新建卷"
-            className="flex items-center gap-1 rounded px-1.5 py-1 text-[11px] font-medium text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+            className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
           >
             <Plus className="h-3.5 w-3.5 text-accent" />
             <span>新建卷</span>
@@ -784,20 +784,62 @@ export function ArchitectView() {
       {/* Center Workspace */}
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-canvas">
         {!activeChapter ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-            <div className="text-sm text-ink-secondary">
-              {volumes.length === 0
-                ? "先在左侧创建第一卷，开始编排章节与节拍"
-                : "在左侧选择或新建一章开始编排"}
-            </div>
-            {volumes.length === 0 && (
-              <button
-                type="button"
-                onClick={openCreateVolume}
-                className="rounded-md bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90"
-              >
-                新建第一卷
-              </button>
+          <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
+            {volumes.length === 0 ? (
+              <>
+                <div className="text-[13px] text-ink-secondary">
+                  先新建第一卷，再开始安排章节与大纲
+                </div>
+                <button
+                  type="button"
+                  onClick={openCreateVolume}
+                  className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-[13px] font-semibold text-canvas transition-opacity hover:opacity-90"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>新建第一卷</span>
+                </button>
+              </>
+            ) : (
+              <div className="flex w-full max-w-[380px] flex-col items-center gap-3">
+                <div className="text-[13px] text-ink-secondary">
+                  {activeVolume ? `「${activeVolume.title}」还没有章节` : "选择或新建一章开始写大纲"}
+                </div>
+                {activeVolume && (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void handleCreateChapter(activeVolume.id);
+                    }}
+                    className="flex w-full items-center gap-2"
+                  >
+                    <input
+                      type="text"
+                      value={newChapterTitle}
+                      disabled={creatingChapter}
+                      onChange={(e) => setNewChapterTitle(e.target.value)}
+                      placeholder="输入第一章标题，回车新建"
+                      className="min-w-0 flex-1 rounded-lg border border-border-subtle bg-surface px-3 py-2 text-[13px] text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                    />
+                    <button
+                      type="submit"
+                      disabled={creatingChapter || !newChapterTitle.trim()}
+                      className="shrink-0 rounded-lg bg-accent px-4 py-2 text-[13px] font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-45"
+                    >
+                      新建
+                    </button>
+                  </form>
+                )}
+                {activeVolume && (
+                  <button
+                    type="button"
+                    onClick={() => setOutlineModalOpen(true)}
+                    className="flex items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3.5 py-1.5 text-xs text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary"
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-accent" />
+                    <span>用 AI 批量生成章纲</span>
+                  </button>
+                )}
+              </div>
             )}
           </div>
         ) : (
@@ -835,7 +877,7 @@ export function ArchitectView() {
 
                   <div className="flex shrink-0 items-center gap-2">
                     <span
-                      className={`rounded-full border px-2 py-0.5 text-[11px] ${
+                      className={`rounded-full border px-2 py-0.5 text-xs ${
                         getChapterStatusMeta(activeChapter.status).badgeClass
                       }`}
                     >
@@ -845,8 +887,8 @@ export function ArchitectView() {
                       type="button"
                       disabled={savingMeta || savingBeats || (!metaDirty && !beatsDirty)}
                       onClick={() => void handleSaveAll()}
-                      title="保存编排 (Ctrl+S)"
-                      className="flex items-center gap-1 rounded-md border border-border-subtle bg-elevated px-2.5 py-1 text-xs font-medium text-ink-primary transition-colors hover:border-border-strong disabled:opacity-45"
+                      title="保存大纲 (Ctrl+S)"
+                      className="flex items-center gap-1 rounded-lg border border-border-subtle bg-elevated px-2.5 py-1 text-xs font-medium text-ink-primary transition-colors hover:border-border-strong disabled:opacity-45"
                     >
                       <Save className="h-3.5 w-3.5 text-accent" />
                       <span>{savingMeta || savingBeats ? "保存中…" : "保存"}</span>
@@ -860,9 +902,9 @@ export function ArchitectView() {
                         }
                         setActiveTab("studio");
                       }}
-                      className="flex items-center gap-1 rounded-md bg-accent px-3 py-1 text-xs font-semibold text-canvas transition-opacity hover:opacity-90"
+                      className="flex items-center gap-1 rounded-lg bg-accent px-3 py-1 text-xs font-semibold text-canvas transition-opacity hover:opacity-90"
                     >
-                      <span>进入审改</span>
+                      <span>开始写作</span>
                       <ArrowRight className="h-3.5 w-3.5" />
                     </button>
                   </div>
@@ -871,8 +913,8 @@ export function ArchitectView() {
                 {/* Emotion, Hook Type, Hook Note */}
                 <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-[170px_170px_1fr]">
                   <div>
-                    <label className="mb-1 block text-[11px] font-medium text-ink-secondary">
-                      情绪极性
+                    <label className="mb-1 block text-xs font-medium text-ink-secondary">
+                      本章节奏
                     </label>
                     <select
                       value={metaEmotion}
@@ -880,7 +922,7 @@ export function ArchitectView() {
                         setMetaEmotion(e.target.value);
                         setMetaDirty(true);
                       }}
-                      className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                      className="w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
                     >
                       {EMOTION_TAGS.map((opt) => (
                         <option key={opt.value} value={opt.value}>
@@ -891,8 +933,8 @@ export function ArchitectView() {
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-[11px] font-medium text-ink-secondary">
-                      章末钩子类型
+                    <label className="mb-1 block text-xs font-medium text-ink-secondary">
+                      章末悬念
                     </label>
                     <select
                       value={metaHookType}
@@ -900,7 +942,7 @@ export function ArchitectView() {
                         setMetaHookType(e.target.value);
                         setMetaDirty(true);
                       }}
-                      className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                      className="w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
                     >
                       {HOOK_TYPES.map((opt) => (
                         <option key={opt.value} value={opt.value}>
@@ -911,8 +953,8 @@ export function ArchitectView() {
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-[11px] font-medium text-ink-secondary">
-                      钩子要求（末 200 字兑现）
+                    <label className="mb-1 block text-xs font-medium text-ink-secondary">
+                      结尾留白说明
                     </label>
                     <input
                       type="text"
@@ -921,16 +963,16 @@ export function ArchitectView() {
                         setMetaHookNote(e.target.value);
                         setMetaDirty(true);
                       }}
-                      placeholder="例如：刚收战利品，宗门追兵血玉令牌亮起"
-                      className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                      placeholder="例如：刚收完战利品，宗门追兵的血玉令牌亮起"
+                      className="w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
                     />
                   </div>
                 </div>
 
                 {/* Outline Summary */}
                 <div className="mt-3">
-                  <label className="mb-1 block text-[11px] font-medium text-ink-secondary">
-                    本章大纲摘要
+                  <label className="mb-1 block text-xs font-medium text-ink-secondary">
+                    本章梗概
                   </label>
                   <textarea
                     rows={2}
@@ -939,8 +981,8 @@ export function ArchitectView() {
                       setMetaOutline(e.target.value);
                       setMetaDirty(true);
                     }}
-                    placeholder="本章核心推进目标、因果承接与结果落袋"
-                    className="w-full resize-y rounded-md border border-border-subtle bg-canvas px-3 py-2 text-[13px] leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                    placeholder="本章主要剧情推进与结尾结果"
+                    className="w-full resize-y rounded-lg border border-border-subtle bg-canvas px-3 py-2 text-[13px] leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
                   />
                 </div>
               </section>
@@ -949,12 +991,12 @@ export function ArchitectView() {
               <section ref={beatListRef} className="flex flex-col gap-3 pb-10">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2.5">
-                    <h2 className="text-sm font-medium text-ink-primary">节拍卡</h2>
+                    <h2 className="text-sm font-medium text-ink-primary">剧情节拍</h2>
                     <span className="nib-mono text-xs text-ink-muted">
-                      {beats.length} 节拍 · 目标 {formatNumber(totalBeatWords)} 字
+                      {beats.length} 段 目标 {formatNumber(totalBeatWords)} 字
                     </span>
                     {beatsDirty && (
-                      <span className="rounded bg-warn-soft px-1.5 py-0.5 text-[10px] text-warn">
+                      <span className="rounded bg-warn-soft px-1.5 py-0.5 text-xs text-warn">
                         未保存
                       </span>
                     )}
@@ -1072,7 +1114,7 @@ export function ArchitectView() {
                             </select>
 
                             <div className="flex items-center gap-1.5 text-xs text-ink-secondary">
-                              <span className="text-[11px] text-ink-muted">POV</span>
+                              <span className="text-xs text-ink-muted">视角人物</span>
                               <select
                                 value={beat.povEntityId ?? ""}
                                 onChange={(e) => {
@@ -1169,7 +1211,7 @@ export function ArchitectView() {
                             data-entity-picker
                             className="relative mt-2.5 flex flex-wrap items-center gap-1.5"
                           >
-                            <span className="text-[11px] text-ink-muted">出场实体</span>
+                            <span className="text-xs text-ink-muted">登场角色与道具</span>
                             {beat.entityIds.map((eid) => {
                               const ent = entityMap.get(eid);
                               if (!ent) return null;
@@ -1279,7 +1321,7 @@ export function ArchitectView() {
       {/* Create / Edit Volume Modal */}
       {volumeDialog && (
         <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/55 p-4"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) setVolumeDialog(null);
           }}

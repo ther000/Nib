@@ -61,7 +61,10 @@ export function CreateBookModal() {
       return;
     }
     const parsedWords = Number.parseInt(targetWords, 10);
-    const finalWords = Number.isFinite(parsedWords) && parsedWords > 0 ? parsedWords : 2500;
+    if (!Number.isFinite(parsedWords) || parsedWords < 300 || parsedWords > 50000) {
+      notify({ tone: "warn", message: "每章目标字数需在 300 到 50,000 字之间" });
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -70,15 +73,15 @@ export function CreateBookModal() {
         genre,
         premise: premise.trim(),
         goldenFinger: goldenFinger.trim(),
-        targetChapterWords: finalWords,
+        targetChapterWords: parsedWords,
         exportDir: exportDir.trim(),
       });
       await refreshBooks(created.id);
       await openBook(created.id, "architect");
       closeCreateBook();
-      notify({ tone: "ok", message: `已创建《${created.title}》` });
+      notify({ tone: "ok", message: `已新建《${created.title}》` });
     } catch (err) {
-      notify({ tone: "danger", message: "创建书籍失败", detail: formatErrorMessage(err) });
+      notify({ tone: "danger", message: "新建书籍失败", detail: formatErrorMessage(err) });
     } finally {
       setSubmitting(false);
     }
@@ -86,19 +89,19 @@ export function CreateBookModal() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-[2px]"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) closeCreateBook();
       }}
     >
-      <div className="flex max-h-[88vh] w-full max-w-[580px] flex-col overflow-hidden rounded-xl border border-border-strong bg-elevated shadow-[var(--shadow-elevated)]">
+      <div className="flex max-h-[88vh] w-full max-w-[560px] flex-col overflow-hidden rounded-xl border border-border-strong bg-elevated shadow-[var(--shadow-elevated)]">
         <div className="flex items-center justify-between border-b border-border-subtle px-5 py-3.5">
-          <h2 className="text-[15px] font-medium text-ink-primary">新建书籍</h2>
+          <h2 className="text-base font-medium text-ink-primary">新建书籍</h2>
           <button
             type="button"
             onClick={closeCreateBook}
             aria-label="关闭"
-            className="rounded-md p-1 text-ink-muted transition-colors hover:bg-surface hover:text-ink-primary"
+            className="rounded-lg p-1 text-ink-muted transition-colors hover:bg-surface hover:text-ink-primary"
           >
             <X className="h-4 w-4" />
           </button>
@@ -118,16 +121,16 @@ export function CreateBookModal() {
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="例如：太初剑渊"
-                className="w-full rounded-md border border-border-subtle bg-canvas px-3 py-2 text-sm text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                className="w-full rounded-lg border border-border-subtle bg-canvas px-3 py-2 text-[13px] text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
               />
             </div>
 
             {/* Genre Pack */}
             <div>
               <label className="mb-1.5 block text-xs font-medium text-ink-secondary">
-                题材包
+                题材风格
               </label>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-2.5">
                 {genrePresets.map((preset) => {
                   const selected = preset.id === genre;
                   return (
@@ -138,7 +141,7 @@ export function CreateBookModal() {
                       className={`rounded-lg border px-3 py-2.5 text-left transition-colors ${
                         selected
                           ? "border-accent bg-accent-soft"
-                          : "border-border-subtle bg-canvas/60 hover:border-border-strong"
+                          : "border-border-subtle bg-canvas hover:border-border-strong"
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2">
@@ -149,11 +152,11 @@ export function CreateBookModal() {
                         >
                           {preset.name}
                         </span>
-                        <span className="text-[11px] text-ink-muted">
+                        <span className="text-xs text-ink-muted">
                           {preset.loopCycleChapters}
                         </span>
                       </div>
-                      <div className="mt-1 line-clamp-1 text-[11px] text-ink-secondary">
+                      <div className="mt-1 line-clamp-1 text-xs text-ink-secondary">
                         {preset.tagline}
                       </div>
                     </button>
@@ -165,64 +168,69 @@ export function CreateBookModal() {
             {/* Premise */}
             <div>
               <label className="mb-1.5 block text-xs font-medium text-ink-secondary">
-                核心设定 / 简介
+                故事简介
               </label>
               <textarea
                 rows={2}
                 value={premise}
                 onChange={(e) => setPremise(e.target.value)}
-                placeholder="世界观核心矛盾、主角开局处境与长期目标"
-                className="w-full resize-none rounded-md border border-border-subtle bg-canvas px-3 py-2 text-[13px] leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                placeholder="主角开局处境、核心矛盾与目标（可稍后补充）"
+                className="w-full resize-none rounded-lg border border-border-subtle bg-canvas px-3 py-2 text-[13px] leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
               />
             </div>
 
             {/* Golden Finger */}
             <div>
               <label className="mb-1.5 block text-xs font-medium text-ink-secondary">
-                金手指 / 核心依仗
+                金手指与核心依仗
               </label>
               <textarea
                 rows={2}
                 value={goldenFinger}
                 onChange={(e) => setGoldenFinger(e.target.value)}
-                placeholder="外挂机制、触发条件与使用代价"
-                className="w-full resize-none rounded-md border border-border-subtle bg-canvas px-3 py-2 text-[13px] leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                placeholder="主角的特殊能力、触发条件与限制（选填）"
+                className="w-full resize-none rounded-lg border border-border-subtle bg-canvas px-3 py-2 text-[13px] leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
               />
             </div>
 
             {/* Target Words + Export Dir */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-[140px_1fr]">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-[148px_1fr]">
               <div>
                 <label className="mb-1.5 block text-xs font-medium text-ink-secondary">
-                  单章目标字数
+                  每章目标字数
                 </label>
-                <input
-                  type="number"
-                  min={300}
-                  max={50000}
-                  step={100}
-                  value={targetWords}
-                  onChange={(e) => setTargetWords(e.target.value)}
-                  className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-3 py-2 text-[13px] text-ink-primary focus:border-accent focus:outline-none"
-                />
+                <div className="relative">
+                  <input
+                    type="number"
+                    min={300}
+                    max={50000}
+                    step={100}
+                    value={targetWords}
+                    onChange={(e) => setTargetWords(e.target.value)}
+                    className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas py-2 pr-8 pl-3 text-[13px] text-ink-primary focus:border-accent focus:outline-none"
+                  />
+                  <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-xs text-ink-muted">
+                    字
+                  </span>
+                </div>
               </div>
 
               <div>
                 <label className="mb-1.5 block text-xs font-medium text-ink-secondary">
-                  本地 Markdown 导出目录（可选）
+                  本地备份文件夹（选填）
                 </label>
-                <div className="flex gap-1.5">
+                <div className="flex gap-2">
                   <input
                     type="text"
                     value={exportDir}
                     onChange={(e) => setExportDir(e.target.value)}
-                    placeholder="留空可稍后在设置中指定"
-                    className="min-w-0 flex-1 rounded-md border border-border-subtle bg-canvas px-3 py-2 text-[13px] text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                    placeholder="选择后，定稿会自动备份为 Markdown"
+                    className="min-w-0 flex-1 rounded-lg border border-border-subtle bg-canvas px-3 py-2 text-[13px] text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
                   />
                   <button
                     type="button"
                     onClick={() => void handlePickExportDir()}
-                    className="flex shrink-0 items-center gap-1.5 rounded-md border border-border-subtle bg-surface px-2.5 text-xs text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary"
+                    className="flex shrink-0 items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 text-xs text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary"
                   >
                     <FolderOpen className="h-3.5 w-3.5" />
                     <span>选择</span>
@@ -236,16 +244,16 @@ export function CreateBookModal() {
             <button
               type="button"
               onClick={closeCreateBook}
-              className="rounded-md px-3.5 py-1.5 text-xs font-medium text-ink-secondary transition-colors hover:bg-surface hover:text-ink-primary"
+              className="rounded-lg px-3.5 py-1.5 text-[13px] font-medium text-ink-secondary transition-colors hover:bg-surface hover:text-ink-primary"
             >
               取消
             </button>
             <button
               type="submit"
               disabled={submitting}
-              className="rounded-md bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
+              className="rounded-lg bg-accent px-4 py-1.5 text-[13px] font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
             >
-              {submitting ? "创建中…" : "创建书籍"}
+              {submitting ? "新建中…" : "新建"}
             </button>
           </div>
         </form>

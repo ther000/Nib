@@ -297,6 +297,41 @@ export function SettingsModal() {
     });
   };
 
+  const autoAssignEmptyRoutes = async (
+    providerId: number,
+    modelName: string
+  ): Promise<number> => {
+    const trimmed = modelName.trim();
+    if (providerId <= 0 || !trimmed) return 0;
+    const unboundStages = PIPELINE_STAGES.filter((def) => {
+      const existing = modelRoutes.find((r) => r.stage === def.stage);
+      return !existing || !existing.providerId || !existing.modelName.trim();
+    });
+    if (unboundStages.length === 0) return 0;
+
+    let assigned = 0;
+    for (const def of unboundStages) {
+      const existing = modelRoutes.find((r) => r.stage === def.stage);
+      try {
+        await SettingsService.saveModelRoute({
+          stage: def.stage,
+          providerId,
+          modelName: trimmed,
+          temperature: existing?.temperature ?? def.defaultTemp,
+          maxTokens: existing?.maxTokens ?? def.defaultMaxTokens,
+          updatedAt: existing?.updatedAt ?? "",
+        });
+        assigned += 1;
+      } catch {
+        // ignore individual stage failure
+      }
+    }
+    if (assigned > 0) {
+      await refreshSettingsData();
+    }
+    return assigned;
+  };
+
   const persistEnabledModels = async (nextEnabled: string[]) => {
     const cleaned = dedupeModels(nextEnabled);
     setProvForm((prev) => ({ ...prev, enabledModels: cleaned }));
@@ -318,6 +353,16 @@ export function SettingsModal() {
         enabled: savedRecord.enabled,
       });
       await refreshSettingsData();
+      if (cleaned.length > 0 && savedRecord.enabled) {
+        const assigned = await autoAssignEmptyRoutes(savedRecord.id, cleaned[0]!);
+        if (assigned > 0) {
+          notify({
+            tone: "ok",
+            message: `已自动将默认写作模型设为 ${cleaned[0]}`,
+            detail: "可在「模型分配」中按环节单独调整",
+          });
+        }
+      }
     } catch (err) {
       notify({
         tone: "danger",
@@ -365,13 +410,19 @@ export function SettingsModal() {
           : prev
       );
       if (res.count > 0) {
-        const enabledCount = (res.enabledModels ?? []).length;
+        const enabledList = dedupeModels(res.enabledModels ?? []);
+        let autoBound = 0;
+        if (enabledList.length > 0) {
+          autoBound = await autoAssignEmptyRoutes(providerId, enabledList[0]!);
+        }
         notify({
           tone: "ok",
           message: autoTriggered
-            ? enabledCount > 0
-              ? `已保存并默认启用 ${enabledCount} 个模型`
-              : `已保存并拉取 ${res.count} 个模型，请勾选需要启用的模型`
+            ? enabledList.length > 0
+              ? autoBound > 0
+                ? `已连接并启用 ${enabledList.length} 个模型，默认设为 ${enabledList[0]}`
+                : `已保存并默认启用 ${enabledList.length} 个模型`
+              : `已保存并拉取 ${res.count} 个模型，请开启需要使用的模型`
             : res.message || `已拉取 ${res.count} 个模型`,
         });
       } else {
@@ -503,14 +554,22 @@ export function SettingsModal() {
   const handleSaveRoute = async (stage: string) => {
     const draft = routeDrafts[stage];
     if (!draft) return;
+    if (!Number.isFinite(draft.temperature) || draft.temperature < 0 || draft.temperature > 2) {
+      notify({ tone: "warn", message: "创意度需在 0.0 到 2.0 之间" });
+      return;
+    }
+    if (!Number.isFinite(draft.maxTokens) || draft.maxTokens < 256 || draft.maxTokens > 200000) {
+      notify({ tone: "warn", message: "输出上限需在 256 到 200,000 Token 之间" });
+      return;
+    }
     setSavingStage(stage);
     try {
       const saved = await SettingsService.saveModelRoute({
         stage: draft.stage,
         providerId: draft.providerId && draft.providerId > 0 ? draft.providerId : undefined,
         modelName: draft.modelName.trim(),
-        temperature: Number.isFinite(draft.temperature) ? draft.temperature : 0.7,
-        maxTokens: Number.isFinite(draft.maxTokens) ? draft.maxTokens : 4096,
+        temperature: draft.temperature,
+        maxTokens: draft.maxTokens,
         updatedAt: draft.updatedAt,
       });
       setRouteDrafts((prev) => ({ ...prev, [stage]: saved }));
@@ -523,9 +582,9 @@ export function SettingsModal() {
       await refreshSettingsData();
       const stageLabel =
         PIPELINE_STAGES.find((s) => s.stage === stage)?.label ?? stage;
-      notify({ tone: "ok", message: `已保存「${stageLabel}」路由` });
+      notify({ tone: "ok", message: `已保存「${stageLabel}」配置` });
     } catch (err) {
-      notify({ tone: "danger", message: "保存模型路由失败", detail: formatErrorMessage(err) });
+      notify({ tone: "danger", message: "保存模型分配失败", detail: formatErrorMessage(err) });
     } finally {
       setSavingStage(null);
     }
@@ -537,17 +596,17 @@ export function SettingsModal() {
       const dir = await SettingsService.pickExportDir();
       if (dir) setBookExportDir(dir);
     } catch (err) {
-      notify({ tone: "danger", message: "选择导出目录失败", detail: formatErrorMessage(err) });
+      notify({ tone: "danger", message: "选择导出文件夹失败", detail: formatErrorMessage(err) });
     }
   };
 
   const handleSaveBookSettings = async () => {
     if (!activeBook) return;
     const parsedWords = Number.parseInt(bookTargetWords, 10);
-    const finalWords =
-      Number.isFinite(parsedWords) && parsedWords >= 300
-        ? parsedWords
-        : activeBook.targetChapterWords;
+    if (!Number.isFinite(parsedWords) || parsedWords < 300 || parsedWords > 50000) {
+      notify({ tone: "warn", message: "每章目标字数需在 300 到 50,000 字之间" });
+      return;
+    }
 
     setSavingBookSettings(true);
     try {
@@ -557,13 +616,13 @@ export function SettingsModal() {
         genre: activeBook.genre,
         premise: activeBook.premise,
         goldenFinger: activeBook.goldenFinger,
-        targetChapterWords: finalWords,
+        targetChapterWords: parsedWords,
         exportDir: bookExportDir.trim(),
       });
       await refreshBooks(activeBook.id);
-      notify({ tone: "ok", message: "书籍工作区配置已保存" });
+      notify({ tone: "ok", message: "书籍设置已保存" });
     } catch (err) {
-      notify({ tone: "danger", message: "保存配置失败", detail: formatErrorMessage(err) });
+      notify({ tone: "danger", message: "保存设置失败", detail: formatErrorMessage(err) });
     } finally {
       setSavingBookSettings(false);
     }
@@ -595,7 +654,7 @@ export function SettingsModal() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-[2px]"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) closeSettings();
       }}
@@ -610,38 +669,38 @@ export function SettingsModal() {
             <button
               type="button"
               onClick={() => setTab("providers")}
-              className={`flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium transition-colors ${
+              className={`flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] font-medium transition-colors ${
                 tab === "providers"
                   ? "bg-accent-soft text-accent"
                   : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
               }`}
             >
               <KeyRound className="h-3.5 w-3.5" />
-              <span>API 供应商</span>
+              <span>模型服务</span>
             </button>
             <button
               type="button"
               onClick={() => setTab("routes")}
-              className={`flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium transition-colors ${
+              className={`flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] font-medium transition-colors ${
                 tab === "routes"
                   ? "bg-accent-soft text-accent"
                   : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
               }`}
             >
               <GitBranch className="h-3.5 w-3.5" />
-              <span>模型路由</span>
+              <span>模型分配</span>
             </button>
             <button
               type="button"
               onClick={() => setTab("workspace")}
-              className={`flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium transition-colors ${
+              className={`flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] font-medium transition-colors ${
                 tab === "workspace"
                   ? "bg-accent-soft text-accent"
                   : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
               }`}
             >
               <Sliders className="h-3.5 w-3.5" />
-              <span>阅读与工作区</span>
+              <span>阅读与备份</span>
             </button>
           </nav>
         </aside>
@@ -651,16 +710,16 @@ export function SettingsModal() {
           <div className="flex items-center justify-between border-b border-border-subtle px-5 py-3">
             <h2 className="text-sm font-medium text-ink-primary">
               {tab === "providers"
-                ? "API 供应商管理"
+                ? "模型服务"
                 : tab === "routes"
-                ? "5 环节独立模型路由"
-                : "阅读排版与工作区"}
+                ? "各环节模型分配"
+                : "阅读排版与本地备份"}
             </h2>
             <button
               type="button"
               onClick={closeSettings}
               aria-label="关闭设置"
-              className="rounded p-1 text-ink-muted transition-colors hover:bg-surface hover:text-ink-primary"
+              className="rounded-lg p-1 text-ink-muted transition-colors hover:bg-surface hover:text-ink-primary"
             >
               <X className="h-4 w-4" />
             </button>
@@ -674,14 +733,14 @@ export function SettingsModal() {
                 <button
                   type="button"
                   onClick={startNewProvider}
-                  className={`mb-2 flex items-center justify-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                  className={`mb-2 flex items-center justify-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
                     selectedProviderId === "new"
                       ? "border-accent bg-accent-soft text-accent"
                       : "border-dashed border-border-strong text-ink-secondary hover:border-accent hover:text-accent"
                   }`}
                 >
                   <Plus className="h-3.5 w-3.5" />
-                  <span>新增供应商</span>
+                  <span>新建服务</span>
                 </button>
 
                 <div className="flex flex-1 flex-col gap-1 overflow-y-auto">
@@ -713,11 +772,12 @@ export function SettingsModal() {
                             }`}
                           />
                         </div>
-                        <div className="flex items-center justify-between gap-1 text-[10.5px] text-ink-muted">
+                        <div className="flex items-center justify-between gap-1 text-xs text-ink-muted">
                           <span className="truncate">
-                            {PROVIDER_PROTOCOLS.find((x) => x.value === p.protocol)
-                              ?.label ?? p.protocol}
-                            {(p.models?.length ?? 0) > 0 && ` · ${p.models.length} 模型`}
+                            {(p.models?.length ?? 0) > 0
+                              ? `已启用 ${p.models.length} 个模型`
+                              : PROVIDER_PROTOCOLS.find((x) => x.value === p.protocol)
+                                  ?.label ?? p.protocol}
                           </span>
                           {tr && (
                             <span
@@ -741,7 +801,7 @@ export function SettingsModal() {
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div>
                       <label className="mb-1 block text-xs text-ink-secondary">
-                        供应商名称
+                        服务名称
                       </label>
                       <input
                         type="text"
@@ -749,18 +809,18 @@ export function SettingsModal() {
                         onChange={(e) =>
                           setProvForm({ ...provForm, name: e.target.value })
                         }
-                        placeholder="如：DeepSeek / OpenRouter / Ollama"
-                        className="w-full rounded-md border border-border-subtle bg-canvas px-3 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                        placeholder="如：DeepSeek、OpenRouter"
+                        className="w-full rounded-lg border border-border-subtle bg-canvas px-3 py-1.5 text-[13px] text-ink-primary focus:border-accent focus:outline-none"
                       />
                     </div>
                     <div>
                       <label className="mb-1 block text-xs text-ink-secondary">
-                        接口协议
+                        接口类型
                       </label>
                       <select
                         value={provForm.protocol}
                         onChange={(e) => handleProtocolChange(e.target.value)}
-                        className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                        className="w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-[13px] text-ink-primary focus:border-accent focus:outline-none"
                       >
                         {PROVIDER_PROTOCOLS.map((proto) => (
                           <option key={proto.value} value={proto.value}>
@@ -773,7 +833,7 @@ export function SettingsModal() {
 
                   <div>
                     <label className="mb-1 block text-xs text-ink-secondary">
-                      Base URL
+                      接口地址
                     </label>
                     <input
                       type="text"
@@ -782,16 +842,16 @@ export function SettingsModal() {
                         setProvForm({ ...provForm, baseUrl: e.target.value })
                       }
                       placeholder="https://api.deepseek.com/v1"
-                      className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-3 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                      className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-3 py-1.5 text-[13px] text-ink-primary focus:border-accent focus:outline-none"
                     />
                   </div>
 
                   <div>
                     <div className="mb-1 flex items-center justify-between gap-2">
-                      <label className="text-xs text-ink-secondary">API Key</label>
+                      <label className="text-xs text-ink-secondary">密钥（API Key）</label>
                       {provForm.id > 0 && provForm.hasApiKey && (
-                        <span className="nib-mono rounded bg-ok-soft px-1.5 py-0.5 text-[10.5px] text-ok">
-                          已保存：{provForm.apiKeyMasked}
+                        <span className="nib-mono rounded bg-ok-soft px-1.5 py-0.5 text-xs text-ok">
+                          已保存 {provForm.apiKeyMasked}
                         </span>
                       )}
                     </div>
@@ -805,10 +865,10 @@ export function SettingsModal() {
                         placeholder={
                           provForm.id > 0 && provForm.hasApiKey
                             ? "留空保留已保存密钥"
-                            : "输入 API Key（本地模型可留空）"
+                            : "输入密钥（本地模型可留空）"
                         }
                         autoComplete="off"
-                        className="nib-mono w-full rounded-md border border-border-subtle bg-canvas py-1.5 pr-9 pl-3 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                        className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas py-1.5 pr-9 pl-3 text-[13px] text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
                       />
                       <button
                         type="button"
@@ -987,7 +1047,7 @@ export function SettingsModal() {
                                 }`}
                               >
                                 <span
-                                  className={`inline-block h-3 w-3 rounded-full bg-canvas shadow-sm transition-transform ${
+                                  className={`inline-block h-3 w-3 rounded-full bg-canvas transition-transform ${
                                     isEnabled ? "translate-x-3.5" : "translate-x-0.5"
                                   }`}
                                 />
@@ -1078,12 +1138,12 @@ export function SettingsModal() {
                   <div className="mt-1 flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle pt-3.5">
                     {provForm.id > 0 ? (
                       confirmDeleteProv ? (
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-2">
                           <button
                             type="button"
                             disabled={savingProv}
                             onClick={() => void handleDeleteProvider()}
-                            className="rounded bg-danger px-2.5 py-1 text-xs font-medium text-white"
+                            className="rounded-lg border border-danger/40 bg-danger-soft px-2.5 py-1 text-xs font-medium text-danger transition-colors hover:bg-danger/20"
                           >
                             确认删除
                           </button>
@@ -1099,7 +1159,7 @@ export function SettingsModal() {
                         <button
                           type="button"
                           onClick={() => setConfirmDeleteProv(true)}
-                          className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-ink-muted transition-colors hover:bg-danger-soft hover:text-danger"
+                          className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-ink-muted transition-colors hover:bg-danger-soft hover:text-danger"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                           <span>删除</span>
@@ -1115,7 +1175,7 @@ export function SettingsModal() {
                           type="button"
                           disabled={testingId === provForm.id}
                           onClick={() => void handleTestProvider(provForm.id)}
-                          className="flex items-center gap-1.5 rounded-md border border-border-subtle bg-surface px-3 py-1.5 text-xs font-medium text-ink-primary transition-colors hover:border-border-strong disabled:opacity-50"
+                          className="flex items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 py-1.5 text-xs font-medium text-ink-primary transition-colors hover:border-border-strong disabled:opacity-50"
                         >
                           {testingId === provForm.id ? (
                             <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
@@ -1123,7 +1183,7 @@ export function SettingsModal() {
                             <Wifi className="h-3.5 w-3.5 text-accent" />
                           )}
                           <span>
-                            {testingId === provForm.id ? "探测中…" : "测试连通性"}
+                            {testingId === provForm.id ? "连接中…" : "测试连接"}
                           </span>
                         </button>
                       )}
@@ -1132,7 +1192,7 @@ export function SettingsModal() {
                         type="button"
                         disabled={savingProv || (provForm.id > 0 && fetchingModelsId === provForm.id)}
                         onClick={() => void handleSaveProvider()}
-                        className="flex items-center gap-1.5 rounded-md bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
+                        className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
                       >
                         <Save className="h-3.5 w-3.5" />
                         <span>
@@ -1140,7 +1200,7 @@ export function SettingsModal() {
                             ? "保存中…"
                             : provForm.id > 0 && fetchingModelsId === provForm.id
                             ? "拉取模型中…"
-                            : "保存供应商"}
+                            : "保存"}
                         </span>
                       </button>
                     </div>
@@ -1150,23 +1210,23 @@ export function SettingsModal() {
             </div>
           )}
 
-          {/* Tab 2: 5-Stage Model Routes */}
+          {/* Tab 2: 5-Stage Model Assignment */}
           {tab === "routes" && (
             <div className="flex-1 overflow-y-auto px-5 py-4">
               {providers.length === 0 && (
                 <div className="mb-4 flex items-center justify-between rounded-lg border border-warn/35 bg-warn-soft px-3.5 py-2.5 text-xs text-warn">
-                  <span>请先添加一个 API 供应商，再绑定各创作环节模型。</span>
+                  <span>请先添加模型服务，再为各写作环节指定模型。</span>
                   <button
                     type="button"
                     onClick={() => setTab("providers")}
                     className="font-medium underline underline-offset-2"
                   >
-                    去添加
+                    去设置
                   </button>
                 </div>
               )}
 
-              <div className="flex flex-col gap-3">
+              <div className="divide-y divide-border-subtle">
                 {PIPELINE_STAGES.map((stageDef) => {
                   const route = routeDrafts[stageDef.stage];
                   if (!route) return null;
@@ -1180,17 +1240,14 @@ export function SettingsModal() {
                   return (
                     <div
                       key={stageDef.stage}
-                      className="rounded-lg border border-border-subtle bg-surface/65 p-3.5"
+                      className="py-4 first:pt-1 last:pb-1"
                     >
                       <div className="mb-2.5 flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-baseline gap-2.5">
                           <span className="text-[13px] font-medium text-ink-primary">
                             {stageDef.label}
                           </span>
-                          <span className="nib-mono rounded bg-elevated px-1.5 py-0.5 text-[10px] text-ink-muted">
-                            {stageDef.stage}
-                          </span>
-                          <span className="text-[11px] text-ink-secondary">
+                          <span className="text-xs text-ink-muted">
                             {stageDef.desc}
                           </span>
                         </div>
@@ -1199,7 +1256,7 @@ export function SettingsModal() {
                           type="button"
                           disabled={isSaving || !isDirty}
                           onClick={() => void handleSaveRoute(stageDef.stage)}
-                          className="flex items-center gap-1 rounded-md bg-accent-soft border border-accent/35 px-2.5 py-1 text-[11px] font-medium text-accent transition-colors hover:border-accent disabled:opacity-35"
+                          className="flex items-center gap-1 rounded-lg border border-accent/35 bg-accent-soft px-2.5 py-1 text-xs font-medium text-accent transition-colors hover:border-accent disabled:opacity-35"
                         >
                           <Save className="h-3 w-3" />
                           <span>{isSaving ? "保存中…" : "保存"}</span>
@@ -1209,8 +1266,8 @@ export function SettingsModal() {
                       <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-[170px_1fr_92px_104px]">
                         {/* Provider Select */}
                         <div>
-                          <label className="mb-1 block text-[10.5px] text-ink-muted">
-                            供应商
+                          <label className="mb-1 block text-xs text-ink-muted">
+                            模型服务
                           </label>
                           <select
                             value={route.providerId ?? ""}
@@ -1231,9 +1288,9 @@ export function SettingsModal() {
                                 modelName: nextModel,
                               });
                             }}
-                            className="w-full rounded-md border border-border-subtle bg-canvas px-2 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                            className="w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
                           >
-                            <option value="">未绑定</option>
+                            <option value="">未选择</option>
                             {providers.map((p) => (
                               <option key={p.id} value={p.id}>
                                 {p.name}
@@ -1244,8 +1301,8 @@ export function SettingsModal() {
 
                         {/* Model Input + Datalist */}
                         <div>
-                          <label className="mb-1 block text-[10.5px] text-ink-muted">
-                            模型名
+                          <label className="mb-1 block text-xs text-ink-muted">
+                            模型
                           </label>
                           <input
                             type="text"
@@ -1257,7 +1314,7 @@ export function SettingsModal() {
                               })
                             }
                             placeholder="选择或输入模型 ID"
-                            className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                            className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
                           />
                           <datalist id={`models-${stageDef.stage}`}>
                             {modelSuggestions.map((m) => (
@@ -1268,8 +1325,8 @@ export function SettingsModal() {
 
                         {/* Temperature */}
                         <div>
-                          <label className="mb-1 block text-[10.5px] text-ink-muted">
-                            温度
+                          <label className="mb-1 block text-xs text-ink-muted">
+                            创意度
                           </label>
                           <input
                             type="number"
@@ -1282,14 +1339,14 @@ export function SettingsModal() {
                                 temperature: Number.parseFloat(e.target.value) || 0,
                               })
                             }
-                            className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-2 py-1.5 text-right text-xs text-ink-primary focus:border-accent focus:outline-none"
+                            className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-right text-xs text-ink-primary focus:border-accent focus:outline-none"
                           />
                         </div>
 
                         {/* Max Tokens */}
                         <div>
-                          <label className="mb-1 block text-[10.5px] text-ink-muted">
-                            Max Tokens
+                          <label className="mb-1 block text-xs text-ink-muted">
+                            输出上限
                           </label>
                           <input
                             type="number"
@@ -1302,7 +1359,7 @@ export function SettingsModal() {
                                 maxTokens: Number.parseInt(e.target.value, 10) || 0,
                               })
                             }
-                            className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-2 py-1.5 text-right text-xs text-ink-primary focus:border-accent focus:outline-none"
+                            className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-right text-xs text-ink-primary focus:border-accent focus:outline-none"
                           />
                         </div>
                       </div>

@@ -14,9 +14,9 @@ import { useApp } from "../stores/AppContext";
 import type { WorkspaceTab } from "../lib/constants";
 
 const WORKSPACE_TABS: Array<{ id: WorkspaceTab; label: string; shortcut: string }> = [
-  { id: "architect", label: "编排", shortcut: "Ctrl+1" },
-  { id: "studio", label: "审改", shortcut: "Ctrl+2" },
-  { id: "atlas", label: "账本", shortcut: "Ctrl+3" },
+  { id: "architect", label: "大纲", shortcut: "Ctrl+1" },
+  { id: "studio", label: "写作", shortcut: "Ctrl+2" },
+  { id: "atlas", label: "设定", shortcut: "Ctrl+3" },
 ];
 
 export function TopBar() {
@@ -127,7 +127,7 @@ export function TopBar() {
                       >
                         <div className="min-w-0 flex-1">
                           <div className="truncate font-medium">{book.title}</div>
-                          <div className="mt-0.5 flex items-center gap-2 text-[11px] text-ink-secondary">
+                          <div className="mt-0.5 flex items-center gap-2 text-xs text-ink-secondary">
                             <span>{getGenreName(book.genre)}</span>
                             <span className="nib-mono">
                               {book.targetChapterWords.toLocaleString("zh-CN")} 字/章
@@ -181,7 +181,7 @@ export function TopBar() {
       {inWorkspace ? (
         <nav
           aria-label="工作区切换"
-          className="nib-no-drag flex items-center gap-0.5 rounded-md border border-border-subtle bg-canvas/70 p-0.5"
+          className="nib-no-drag flex items-center gap-0.5 rounded-lg border border-border-subtle bg-canvas/70 p-0.5"
         >
           {WORKSPACE_TABS.map((tab) => {
             const active = activeTab === tab.id;
@@ -191,7 +191,7 @@ export function TopBar() {
                 type="button"
                 title={`${tab.label} (${tab.shortcut})`}
                 onClick={() => setActiveTab(tab.id)}
-                className={`rounded px-3.5 py-1 text-xs font-medium transition-colors ${
+                className={`rounded-[6px] px-3.5 py-1 text-xs font-medium transition-colors ${
                   active
                     ? "bg-accent-soft text-accent"
                     : "text-ink-secondary hover:text-ink-primary"

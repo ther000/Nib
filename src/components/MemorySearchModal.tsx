@@ -219,7 +219,7 @@ export function MemorySearchModal() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 px-4 pt-[13vh] backdrop-blur-[2px]"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 px-4 pt-[13vh]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) closeMemorySearch();
       }}

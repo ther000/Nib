@@ -313,7 +313,7 @@ export function AuditProseParagraph({
       {isFocused && activeIssue && !pendingDiff && (
         <div
           onClick={(e) => e.stopPropagation()}
-          className="mt-2.5 flex items-start justify-between gap-3 rounded-lg border border-border-strong bg-elevated px-3.5 py-2.5 font-ui text-xs shadow-[var(--shadow-elevated)]"
+          className="mt-2.5 flex items-start justify-between gap-3 rounded-lg border border-border-strong bg-elevated px-3.5 py-2.5 font-ui text-xs"
         >
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-1.5">
@@ -395,7 +395,7 @@ export function AuditProseParagraph({
       {pendingDiff && (
         <div
           onClick={(e) => e.stopPropagation()}
-          className="mt-3 rounded-xl border border-accent/45 bg-elevated p-3.5 font-ui text-xs shadow-[var(--shadow-elevated)]"
+          className="mt-3 rounded-xl border border-accent/45 bg-elevated p-3.5 font-ui text-xs"
         >
           <div className="flex items-center justify-between gap-2 border-b border-border-subtle pb-2">
             <div className="flex min-w-0 items-center gap-1.5">
