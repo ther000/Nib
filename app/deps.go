@@ -146,6 +146,16 @@ type BatchEngine interface {
 	RetryBatchItem(ctx context.Context, itemID int64) (domain.BatchRun, error)
 }
 
+// GenesisEngine 定义「AI 一句话开书」企划生成与一键落库接口（由 internal/pipeline 实现，零 MyGo 依赖）。
+type GenesisEngine interface {
+	GenerateBookGenesis(
+		ctx context.Context,
+		req domain.BookGenesisRequest,
+		emit func(domain.GenesisChunk) error,
+	) (domain.BookGenesisPlan, error)
+	ApplyBookGenesis(ctx context.Context, in domain.ApplyGenesisInput) (domain.ApplyGenesisResult, error)
+}
+
 // DirPickerFunc 封装原生目录选择弹窗，默认使用 mygo.Dialog.Open，可在单测中替换。
 type DirPickerFunc func(ctx context.Context) (string, error)
 
@@ -162,6 +172,7 @@ type RuntimeDeps struct {
 	StyleEngine    StyleEngine
 	BatchStore     BatchStore
 	BatchEngine    BatchEngine
+	GenesisEngine  GenesisEngine
 	DirPicker      DirPickerFunc
 }
 
@@ -448,6 +459,46 @@ func (r *Runtime) trackBatchEngine(callCtx context.Context) (BatchEngine, contex
 		return nil, nil, nil, nil, ErrRuntimeNotReady
 	}
 	eng := r.deps.BatchEngine
+	baseCtx := r.baseCtx
+	r.activeWG.Add(1)
+	r.mu.RUnlock()
+
+	engCtx, cancel := context.WithCancel(callCtx)
+	var stopWatch func() bool
+	if baseCtx != nil {
+		stopWatch = context.AfterFunc(baseCtx, cancel)
+	}
+	release := func() {
+		if stopWatch != nil {
+			stopWatch()
+		}
+		cancel()
+		r.activeWG.Done()
+	}
+	return eng, engCtx, cancel, release, nil
+}
+
+func (r *Runtime) trackGenesisEngine(callCtx context.Context) (GenesisEngine, context.Context, context.CancelFunc, func(), error) {
+	if r == nil {
+		return nil, nil, nil, nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	if !r.ready || r.closed {
+		r.mu.RUnlock()
+		return nil, nil, nil, nil, ErrRuntimeNotReady
+	}
+	eng := r.deps.GenesisEngine
+	if eng == nil {
+		if ge, ok := r.deps.BatchEngine.(GenesisEngine); ok {
+			eng = ge
+		} else if ge, ok := r.deps.Pipeline.(GenesisEngine); ok {
+			eng = ge
+		}
+	}
+	if eng == nil {
+		r.mu.RUnlock()
+		return nil, nil, nil, nil, ErrRuntimeNotReady
+	}
 	baseCtx := r.baseCtx
 	r.activeWG.Add(1)
 	r.mu.RUnlock()

@@ -18,6 +18,18 @@ export interface ApplyDeltaResult {
   markedDirtyChapterIds: number[];
 }
 
+export interface ApplyGenesisInput {
+  plan: BookGenesisPlan;
+  exportDir: string;
+}
+
+export interface ApplyGenesisResult {
+  book: Book;
+  volume: Volume;
+  entities: Entity[];
+  chapters: Chapter[];
+}
+
 export interface ApplySurgicalDiffInput {
   chapterId: number;
   diffId: string;
@@ -128,6 +140,24 @@ export interface Book {
   exportDir: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface BookGenesisPlan {
+  title: string;
+  genre: GenreID;
+  premise: string;
+  goldenFinger: string;
+  targetChapterWords: number;
+  entities: GenesisEntity[];
+  firstVolume: GenesisVolume;
+  initialOutlines: GeneratedChapterOutline[];
+}
+
+export interface BookGenesisRequest {
+  idea: string;
+  genre: GenreID;
+  chapterCount: number;
+  targetChapterWords: number;
 }
 
 export interface Briefing {
@@ -421,6 +451,29 @@ export interface GeneratedChapterOutline {
   hookNote: string;
   outlineSummary: string;
   beats: Beat[];
+}
+
+export interface GenesisChunk {
+  kind: GenChunkKind;
+  delta?: string;
+  plan?: BookGenesisPlan;
+  usage?: TokenUsage;
+  error?: string;
+}
+
+export interface GenesisEntity {
+  kind: EntityKind;
+  name: string;
+  aliases: string[];
+  isInvariant: boolean;
+  summary: string;
+  attributes: Record<string, string>;
+}
+
+export interface GenesisVolume {
+  title: string;
+  goal: string;
+  climaxPlan: string;
 }
 
 export interface GenreFieldSpec {
@@ -747,6 +800,8 @@ export interface VolumePacingReport {
 
 /** LibraryService 提供书、卷、章、节拍卡及单向 Markdown 导出的桌面 RPC 绑定。 */
 export const LibraryService = {
+  /** ApplyBookGenesis 将作者确认后的开书企划一次性写入书库。 */
+  applyBookGenesis: bind<[ApplyGenesisInput], ApplyGenesisResult>("LibraryService.ApplyBookGenesis", (in_: ApplyGenesisInput) => [in_]),
   /** BatchGenerateOutlines 调用 outline 模型路由流式批量生成 1~10 章结构化章纲与节拍卡并落库为 outlined 状态。 */
   batchGenerateOutlines: bind<[BatchOutlineRequest, Channel<OutlineChunk>], Chapter[]>("LibraryService.BatchGenerateOutlines", (req: BatchOutlineRequest, ch: Channel<OutlineChunk>) => [req, ch]),
   /** CreateBook 校验参数并创建一本新书。 */
@@ -761,6 +816,8 @@ export const LibraryService = {
   exportBookMarkdown: bind<[number], ExportResult>("LibraryService.ExportBookMarkdown", (bookID: number) => [bookID]),
   /** FinalizeChapter 将章节状态置为 finalized，并在书籍配置了导出目录时触发单向 Markdown 同步。 */
   finalizeChapter: bind<[number], Chapter>("LibraryService.FinalizeChapter", (chapterID: number) => [chapterID]),
+  /** GenerateBookGenesis 根据一句话灵感流式生成完整开书企划（书名、简介、金手指、初始设定、第一卷与初始章纲）。 */
+  generateBookGenesis: bind<[BookGenesisRequest, Channel<GenesisChunk>], BookGenesisPlan>("LibraryService.GenerateBookGenesis", (req: BookGenesisRequest, ch: Channel<GenesisChunk>) => [req, ch]),
   /** GetChapter 读取单章详情（含正文与最近作战简报）。 */
   getChapter: bind<[number], Chapter>("LibraryService.GetChapter", (id: number) => [id]),
   /** GetVolumePacing 计算指定卷的情绪极性折线数据，并自动诊断连续蓄压过载、缺高潮爆发与超期未收伏笔。 */

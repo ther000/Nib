@@ -383,6 +383,59 @@ func (s *LibraryService) BatchGenerateOutlines(
 	return chapters, nil
 }
 
+// GenerateBookGenesis 根据一句话灵感流式生成完整开书企划（书名、简介、金手指、初始设定、第一卷与初始章纲）。
+func (s *LibraryService) GenerateBookGenesis(
+	ctx context.Context,
+	req domain.BookGenesisRequest,
+	ch *mygo.Channel[domain.GenesisChunk],
+) (domain.BookGenesisPlan, error) {
+	if err := req.Validate(); err != nil {
+		return domain.BookGenesisPlan{}, err
+	}
+	eng, genCtx, cancel, release, err := s.rt.trackGenesisEngine(ctx)
+	if err != nil {
+		return domain.BookGenesisPlan{}, err
+	}
+	defer release()
+
+	emit := func(chunk domain.GenesisChunk) error {
+		if ch == nil {
+			return nil
+		}
+		if sendErr := ch.Send(chunk); sendErr != nil {
+			cancel()
+			return sendErr
+		}
+		return nil
+	}
+
+	return eng.GenerateBookGenesis(genCtx, req, emit)
+}
+
+// ApplyBookGenesis 将作者确认后的开书企划一次性写入书库。
+func (s *LibraryService) ApplyBookGenesis(ctx context.Context, in domain.ApplyGenesisInput) (domain.ApplyGenesisResult, error) {
+	if err := in.Validate(); err != nil {
+		return domain.ApplyGenesisResult{}, err
+	}
+	eng, genCtx, _, release, err := s.rt.trackGenesisEngine(ctx)
+	if err != nil {
+		return domain.ApplyGenesisResult{}, err
+	}
+	defer release()
+
+	res, err := eng.ApplyBookGenesis(genCtx, in)
+	if err != nil {
+		return domain.ApplyGenesisResult{}, err
+	}
+	if res.Entities == nil {
+		res.Entities = []domain.Entity{}
+	}
+	if res.Chapters == nil {
+		res.Chapters = []domain.Chapter{}
+	}
+	return res, nil
+}
+
 func (s *LibraryService) syncChapterMarkdownIfConfigured(ctx context.Context, st Store, chap domain.Chapter) error {
 	exp := s.rt.exporter()
 	if exp == nil {

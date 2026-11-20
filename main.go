@@ -136,6 +136,7 @@ func initRuntime(rt *app.Runtime, dbPath string) (func(), error) {
 		StyleEngine:    runner,
 		BatchStore:     st,
 		BatchEngine:    runner,
+		GenesisEngine:  runner,
 	})
 	return runner.Close, nil
 }
