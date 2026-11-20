@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  BarChart3,
   CheckCircle2,
   Eye,
   EyeOff,
@@ -27,14 +26,12 @@ import {
   type ProviderProtocol,
   type ProviderPublic,
   type ProviderTestResult,
-  type UsageSummary,
 } from "../mygo";
 import { useApp, type SettingsTab } from "../stores/AppContext";
 import {
   PIPELINE_STAGES,
   PROVIDER_PROTOCOLS,
   formatErrorMessage,
-  formatNumber,
 } from "../lib/constants";
 
 interface ProviderFormState {
@@ -141,35 +138,6 @@ export function SettingsModal() {
   const [bookExportDir, setBookExportDir] = useState("");
   const [bookTargetWords, setBookTargetWords] = useState("2500");
   const [savingBookSettings, setSavingBookSettings] = useState(false);
-
-  // Usage summary state
-  const [usageScope, setUsageScope] = useState<"book" | "all">("book");
-  const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
-  const [usageLoading, setUsageLoading] = useState(false);
-
-  const loadUsageSummary = async (scope: "book" | "all") => {
-    const bid = scope === "book" && activeBook ? activeBook.id : 0;
-    setUsageLoading(true);
-    try {
-      const res = await SettingsService.getUsageSummary(bid);
-      setUsageSummary(res);
-    } catch (err) {
-      notify({
-        tone: "danger",
-        message: "加载 Token 统计失败",
-        detail: formatErrorMessage(err),
-      });
-    } finally {
-      setUsageLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!settingsOpen || tab !== "usage") return;
-    const effectiveScope = activeBook ? usageScope : "all";
-    void loadUsageSummary(effectiveScope);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settingsOpen, tab, usageScope, activeBook?.id]);
 
   // Sync tab when modal opens
   useEffect(() => {
@@ -675,18 +643,6 @@ export function SettingsModal() {
               <Sliders className="h-3.5 w-3.5" />
               <span>阅读与工作区</span>
             </button>
-            <button
-              type="button"
-              onClick={() => setTab("usage")}
-              className={`flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium transition-colors ${
-                tab === "usage"
-                  ? "bg-accent-soft text-accent"
-                  : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
-              }`}
-            >
-              <BarChart3 className="h-3.5 w-3.5" />
-              <span>Token 与成本统计</span>
-            </button>
           </nav>
         </aside>
 
@@ -698,8 +654,6 @@ export function SettingsModal() {
                 ? "API 供应商管理"
                 : tab === "routes"
                 ? "5 环节独立模型路由"
-                : tab === "usage"
-                ? "Token 消耗与调用统计"
                 : "阅读排版与工作区"}
             </h2>
             <button
@@ -1539,210 +1493,6 @@ export function SettingsModal() {
                     </div>
                   </section>
                 )}
-              </div>
-            </div>
-          )}
-
-          {/* Tab 4: Token & Cost Usage Summary */}
-          {tab === "usage" && (
-            <div className="flex-1 overflow-y-auto px-5 py-4">
-              <div className="flex flex-col gap-5">
-                {/* Scope switcher + refresh */}
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1 rounded-md border border-border-subtle bg-canvas p-0.5 text-xs">
-                    {activeBook && (
-                      <button
-                        type="button"
-                        onClick={() => setUsageScope("book")}
-                        className={`rounded px-2.5 py-1 transition-colors ${
-                          usageScope === "book"
-                            ? "bg-accent-soft font-medium text-accent"
-                            : "text-ink-secondary hover:text-ink-primary"
-                        }`}
-                      >
-                        当前书籍《{activeBook.title}》
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setUsageScope("all")}
-                      className={`rounded px-2.5 py-1 transition-colors ${
-                        !activeBook || usageScope === "all"
-                          ? "bg-accent-soft font-medium text-accent"
-                          : "text-ink-secondary hover:text-ink-primary"
-                      }`}
-                    >
-                      全局汇总
-                    </button>
-                  </div>
-
-                  <button
-                    type="button"
-                    disabled={usageLoading}
-                    onClick={() =>
-                      void loadUsageSummary(activeBook ? usageScope : "all")
-                    }
-                    className="flex items-center gap-1 rounded-md border border-border-subtle bg-surface px-2.5 py-1 text-xs text-ink-secondary hover:text-ink-primary"
-                  >
-                    <RefreshCw
-                      className={`h-3.5 w-3.5 ${
-                        usageLoading ? "animate-spin text-accent" : ""
-                      }`}
-                    />
-                    <span>刷新</span>
-                  </button>
-                </div>
-
-                {/* KPI Strip */}
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  <div className="rounded-lg border border-border-subtle bg-surface/65 p-3">
-                    <div className="text-[11px] text-ink-muted">总调用次数</div>
-                    <div className="nib-mono mt-1 text-lg font-semibold text-ink-primary">
-                      {formatNumber(usageSummary?.totalCalls ?? 0)}
-                    </div>
-                  </div>
-                  <div className="rounded-lg border border-border-subtle bg-surface/65 p-3">
-                    <div className="text-[11px] text-ink-muted">输入 Prompt</div>
-                    <div className="nib-mono mt-1 text-lg font-semibold text-ink-primary">
-                      {formatNumber(usageSummary?.totalPromptTokens ?? 0)}
-                    </div>
-                  </div>
-                  <div className="rounded-lg border border-border-subtle bg-surface/65 p-3">
-                    <div className="text-[11px] text-ink-muted">输出 Completion</div>
-                    <div className="nib-mono mt-1 text-lg font-semibold text-ink-primary">
-                      {formatNumber(usageSummary?.totalCompletionTokens ?? 0)}
-                    </div>
-                  </div>
-                  <div className="rounded-lg border border-accent/35 bg-accent-soft/40 p-3">
-                    <div className="text-[11px] text-accent">总 Tokens</div>
-                    <div className="nib-mono mt-1 text-lg font-semibold text-accent">
-                      {formatNumber(usageSummary?.totalTokens ?? 0)}
-                    </div>
-                  </div>
-                </div>
-
-                {/* By Stage Table */}
-                <section>
-                  <div className="mb-2 text-xs font-medium text-ink-secondary">
-                    按创作环节分布
-                  </div>
-                  <div className="overflow-hidden rounded-lg border border-border-subtle bg-canvas/70">
-                    <table className="w-full text-left text-xs">
-                      <thead className="border-b border-border-subtle bg-surface/70 text-[11px] text-ink-muted">
-                        <tr>
-                          <th className="px-3 py-2 font-medium">环节</th>
-                          <th className="px-3 py-2 text-right font-medium">调用</th>
-                          <th className="px-3 py-2 text-right font-medium">Prompt</th>
-                          <th className="px-3 py-2 text-right font-medium">Completion</th>
-                          <th className="px-3 py-2 text-right font-medium">总计</th>
-                          <th className="px-3 py-2 text-right font-medium">平均延迟</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border-subtle">
-                        {(usageSummary?.byStage ?? []).length === 0 ? (
-                          <tr>
-                            <td
-                              colSpan={6}
-                              className="px-3 py-6 text-center text-ink-muted"
-                            >
-                              暂无调用记录
-                            </td>
-                          </tr>
-                        ) : (
-                          (usageSummary?.byStage ?? []).map((row) => {
-                            const label =
-                              PIPELINE_STAGES.find((s) => s.stage === row.stage)
-                                ?.label ??
-                              (row.stage === "style" ? "文风提取" : row.stage);
-                            return (
-                              <tr key={row.stage}>
-                                <td className="px-3 py-2 font-medium text-ink-primary">
-                                  <span>{label}</span>
-                                  <span className="nib-mono ml-1.5 text-[10px] text-ink-muted">
-                                    {row.stage}
-                                  </span>
-                                </td>
-                                <td className="nib-mono px-3 py-2 text-right text-ink-secondary">
-                                  {formatNumber(row.calls)}
-                                </td>
-                                <td className="nib-mono px-3 py-2 text-right text-ink-secondary">
-                                  {formatNumber(row.promptTokens)}
-                                </td>
-                                <td className="nib-mono px-3 py-2 text-right text-ink-secondary">
-                                  {formatNumber(row.completionTokens)}
-                                </td>
-                                <td className="nib-mono px-3 py-2 text-right font-medium text-ink-primary">
-                                  {formatNumber(row.totalTokens)}
-                                </td>
-                                <td className="nib-mono px-3 py-2 text-right text-ink-muted">
-                                  {row.avgLatencyMs > 0
-                                    ? `${formatNumber(row.avgLatencyMs)}ms`
-                                    : "—"}
-                                </td>
-                              </tr>
-                            );
-                          })
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-
-                {/* By Provider / Model Table */}
-                <section>
-                  <div className="mb-2 text-xs font-medium text-ink-secondary">
-                    按供应商 / 模型分布
-                  </div>
-                  <div className="overflow-hidden rounded-lg border border-border-subtle bg-canvas/70">
-                    <table className="w-full text-left text-xs">
-                      <thead className="border-b border-border-subtle bg-surface/70 text-[11px] text-ink-muted">
-                        <tr>
-                          <th className="px-3 py-2 font-medium">供应商</th>
-                          <th className="px-3 py-2 font-medium">模型</th>
-                          <th className="px-3 py-2 text-right font-medium">调用</th>
-                          <th className="px-3 py-2 text-right font-medium">Prompt</th>
-                          <th className="px-3 py-2 text-right font-medium">Completion</th>
-                          <th className="px-3 py-2 text-right font-medium">总计</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border-subtle">
-                        {(usageSummary?.byModel ?? []).length === 0 ? (
-                          <tr>
-                            <td
-                              colSpan={6}
-                              className="px-3 py-6 text-center text-ink-muted"
-                            >
-                              暂无模型统计数据
-                            </td>
-                          </tr>
-                        ) : (
-                          (usageSummary?.byModel ?? []).map((row, idx) => (
-                            <tr key={`${row.providerName}-${row.modelName}-${idx}`}>
-                              <td className="px-3 py-2 text-ink-primary">
-                                {row.providerName || "—"}
-                              </td>
-                              <td className="nib-mono px-3 py-2 text-ink-secondary">
-                                {row.modelName || "—"}
-                              </td>
-                              <td className="nib-mono px-3 py-2 text-right text-ink-secondary">
-                                {formatNumber(row.calls)}
-                              </td>
-                              <td className="nib-mono px-3 py-2 text-right text-ink-secondary">
-                                {formatNumber(row.promptTokens)}
-                              </td>
-                              <td className="nib-mono px-3 py-2 text-right text-ink-secondary">
-                                {formatNumber(row.completionTokens)}
-                              </td>
-                              <td className="nib-mono px-3 py-2 text-right font-medium text-ink-primary">
-                                {formatNumber(row.totalTokens)}
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
               </div>
             </div>
           )}

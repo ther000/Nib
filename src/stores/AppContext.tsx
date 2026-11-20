@@ -47,7 +47,7 @@ export interface ToastItem {
   onAction?: () => void;
 }
 
-export type SettingsTab = "providers" | "routes" | "workspace" | "usage";
+export type SettingsTab = "providers" | "routes" | "workspace";
 export type AppViewMode = "home" | "workspace";
 
 interface AppContextValue {
