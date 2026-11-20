@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"nib/internal/domain"
 	"nib/internal/genres"
@@ -15,7 +16,13 @@ import (
 const (
 	defaultExtractMaxTokens = 2048
 	maxRepairPreviewRunes   = 4000
+	usageRecordTimeout      = 5 * time.Second
 )
+
+// tokenUsageRecorder 由实现 RecordTokenUsage 的仓储（如 *store.Store）自动满足。
+type tokenUsageRecorder interface {
+	RecordTokenUsage(ctx context.Context, entry domain.TokenUsageLog) error
+}
 
 // Store 定义完章记忆增量抽取所需的最小仓储接口（直接由 *store.Store 满足）。
 type Store interface {
@@ -103,7 +110,7 @@ func (e *Extractor) ExtractChapterDelta(ctx context.Context, chapterID int64) (d
 
 	sysPrompt, userPrompt := buildExtractionPrompts(book, chap, snapshots, openForeshadowings)
 
-	rawResp, err := e.collectLLMResponse(ctx, provider, route, sysPrompt, userPrompt)
+	rawResp, err := e.collectLLMResponse(ctx, book.ID, chap.ID, provider, route, sysPrompt, userPrompt)
 	if err != nil {
 		return domain.ChapterDelta{}, err
 	}
@@ -115,7 +122,7 @@ func (e *Extractor) ExtractChapterDelta(ctx context.Context, chapterID int64) (d
 		}
 		// 自动触发 1 次 JSON 纠错重问（遵循 docs/05 §5 风险缓解策略）。
 		repairSys, repairUser := buildRepairPrompts(rawResp, parseErr)
-		repairedResp, repairCallErr := e.collectLLMResponse(ctx, provider, route, repairSys, repairUser)
+		repairedResp, repairCallErr := e.collectLLMResponse(ctx, book.ID, chap.ID, provider, route, repairSys, repairUser)
 		if repairCallErr != nil {
 			return domain.ChapterDelta{}, fmt.Errorf("完章抽取 JSON 纠错请求失败（原正文未受影响）: %w", repairCallErr)
 		}
@@ -160,6 +167,8 @@ func (e *Extractor) resolveExtractRouteAndProvider(ctx context.Context) (domain.
 
 func (e *Extractor) collectLLMResponse(
 	ctx context.Context,
+	bookID int64,
+	chapterID int64,
 	provider domain.Provider,
 	route domain.ModelRoute,
 	systemPrompt string,
@@ -177,15 +186,42 @@ func (e *Extractor) collectLLMResponse(
 		MaxTokens:   maxTokens,
 	}
 
+	start := time.Now()
 	var buf strings.Builder
-	_, err := e.llm.Stream(ctx, provider, req, func(ev llm.StreamEvent) error {
+	var lastUsage domain.TokenUsage
+	usage, err := e.llm.Stream(ctx, provider, req, func(ev llm.StreamEvent) error {
 		if ev.Delta != "" {
 			buf.WriteString(ev.Delta)
 		}
+		if ev.Usage != nil {
+			lastUsage = *ev.Usage
+		}
 		return nil
 	})
+	if usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0 {
+		lastUsage = usage
+	}
 	if err != nil {
 		return "", err
+	}
+
+	if rec, ok := e.store.(tokenUsageRecorder); ok && bookID > 0 {
+		latencyMs := time.Since(start).Milliseconds()
+		if latencyMs < 0 {
+			latencyMs = 0
+		}
+		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), usageRecordTimeout)
+		_ = rec.RecordTokenUsage(saveCtx, domain.TokenUsageLog{
+			BookID:           bookID,
+			ChapterID:        chapterID,
+			Stage:            domain.StageExtract,
+			ProviderName:     provider.Name,
+			ModelName:        route.ModelName,
+			PromptTokens:     max(0, lastUsage.PromptTokens),
+			CompletionTokens: max(0, lastUsage.CompletionTokens),
+			LatencyMs:        latencyMs,
+		})
+		cancel()
 	}
 	return buf.String(), nil
 }

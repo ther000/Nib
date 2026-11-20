@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertTriangle,
   ArrowDown,
   ArrowRight,
   ArrowUp,
   Check,
   ChevronDown,
   ChevronRight,
-  Flag,
   Layers,
   Pencil,
   Plus,
@@ -23,6 +21,9 @@ import {
   type Volume,
 } from "../mygo";
 import { useApp } from "../stores/AppContext";
+import { VolumePacingChart } from "../components/architect/VolumePacingChart";
+import { BatchSchedulerPanel } from "../components/architect/BatchSchedulerPanel";
+import { BatchOutlineModal } from "../components/architect/BatchOutlineModal";
 import {
   BEAT_STAGES,
   EMOTION_TAGS,
@@ -32,10 +33,7 @@ import {
   formatSeq,
   getBeatAccentClass,
   getChapterStatusMeta,
-  getEmotionColorClass,
-  getEmotionMeta,
   getEntityKindLabel,
-  isForeshadowingOverdue,
 } from "../lib/constants";
 
 interface VolumeDialogState {
@@ -85,15 +83,21 @@ export function ArchitectView() {
     activeChapter,
     activeChapterId,
     entities,
-    foreshadowings,
     selectChapter,
+    jumpToChapter,
     refreshBookData,
+    refreshChapters,
+    refreshForeshadowings,
     updateChapterInCache,
     setActiveTab,
     openAtlasSubTab,
     notify,
     registerSaveHandler,
   } = useApp();
+
+  // Phase 4 outline modal & pacing refresh counter
+  const [outlineModalOpen, setOutlineModalOpen] = useState(false);
+  const [pacingRefreshKey, setPacingRefreshKey] = useState(0);
 
   // Tree state
   const [collapsedVolIds, setCollapsedVolIds] = useState<Set<number>>(new Set());
@@ -153,32 +157,10 @@ export function ArchitectView() {
     return chaptersByVolume.get(activeVolume.id) ?? [];
   }, [activeVolume, chaptersByVolume]);
 
-  const overdueForChapter = useMemo(() => {
-    if (!activeChapter) return [];
-    return foreshadowings.filter((fs) =>
-      isForeshadowingOverdue(fs, activeChapter.globalSeq)
-    );
-  }, [foreshadowings, activeChapter]);
-
-  // Pacing diagnostics for current volume (warn on 3+ consecutive suppress or setup)
-  const pacingWarning = useMemo(() => {
-    let runTag = "";
-    let runLen = 0;
-    for (const c of activeVolumeChapters) {
-      if (c.emotionTag === runTag && (runTag === "suppress" || runTag === "setup")) {
-        runLen += 1;
-        if (runLen >= 3) {
-          return runTag === "suppress"
-            ? `本卷存在连续 ${runLen} 章蓄压，建议尽快安排反转或爆发`
-            : `本卷存在连续 ${runLen} 章铺垫，节奏偏缓`;
-        }
-      } else {
-        runTag = c.emotionTag;
-        runLen = 1;
-      }
-    }
-    return null;
-  }, [activeVolumeChapters]);
+  const nextGlobalSeq = useMemo(
+    () => chapters.reduce((m, c) => (c.globalSeq > m ? c.globalSeq : m), 0) + 1,
+    [chapters]
+  );
 
   // Sync metadata form when active chapter changes
   useEffect(() => {
@@ -286,6 +268,7 @@ export function ArchitectView() {
       });
       updateChapterInCache(updated);
       setMetaDirty(false);
+      setPacingRefreshKey((k) => k + 1);
       return true;
     } catch (err) {
       notify({ tone: "danger", message: "保存章节元信息失败", detail: formatErrorMessage(err) });
@@ -820,69 +803,15 @@ export function ArchitectView() {
         ) : (
           <div className="flex-1 overflow-y-auto px-8 py-6">
             <div className="mx-auto flex w-full max-w-[880px] flex-col gap-6">
-              {/* Volume Pacing Strip */}
-              {activeVolume && activeVolumeChapters.length > 0 && (
-                <div className="flex flex-col gap-2 rounded-lg border border-border-subtle bg-surface/60 px-4 py-2.5">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className="font-medium text-ink-primary">
-                        {activeVolume.title}
-                      </span>
-                      {activeVolume.goal && (
-                        <span className="truncate text-ink-muted">
-                          · {activeVolume.goal}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex shrink-0 items-center gap-3">
-                      {overdueForChapter.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => openAtlasSubTab("foreshadowings")}
-                          title="前往账本伏笔看板查看超期伏笔"
-                          className="flex items-center gap-1 rounded-full border border-warn/40 bg-warn-soft px-2 py-0.5 text-[11px] font-medium text-warn transition-colors hover:border-warn"
-                        >
-                          <Flag className="h-3 w-3" />
-                          <span>{overdueForChapter.length} 条伏笔超期</span>
-                        </button>
-                      )}
-                      {pacingWarning && (
-                        <div className="flex items-center gap-1 text-[11px] text-warn">
-                          <AlertTriangle className="h-3 w-3" />
-                          <span>{pacingWarning}</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
-                    {activeVolumeChapters.map((c) => {
-                      const isCurrent = c.id === activeChapter.id;
-                      const em = getEmotionMeta(c.emotionTag);
-                      return (
-                        <button
-                          key={c.id}
-                          type="button"
-                          onClick={() => void selectChapter(c.id)}
-                          title={`第${c.globalSeq}章 ${c.title} · ${em.label}`}
-                          className={`flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] transition-colors ${
-                            isCurrent
-                              ? "border-accent bg-accent-soft text-accent"
-                              : "border-border-subtle bg-canvas/70 text-ink-secondary hover:border-border-strong hover:text-ink-primary"
-                          }`}
-                        >
-                          <span className="nib-mono">{formatSeq(c.globalSeq)}</span>
-                          <span
-                            className={`rounded px-1 py-0.2 text-[10px] border ${getEmotionColorClass(
-                              c.emotionTag
-                            )}`}
-                          >
-                            {em.shortLabel ?? em.label}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
+              {/* Volume Pacing SVG Chart & Diagnostics */}
+              {activeVolume && (
+                <VolumePacingChart
+                  volume={activeVolume}
+                  activeChapterId={activeChapter.id}
+                  refreshTrigger={pacingRefreshKey + chapters.length}
+                  onSelectChapter={(cid) => void selectChapter(cid)}
+                  onOpenForeshadowings={() => openAtlasSubTab("foreshadowings")}
+                />
               )}
 
               {/* Chapter Metadata Card */}
@@ -1310,6 +1239,42 @@ export function ArchitectView() {
           </div>
         )}
       </main>
+
+      {/* Right Panel: Serial Micro-Batch Scheduler (280px) */}
+      {activeBook && (
+        <BatchSchedulerPanel
+          bookId={activeBook.id}
+          volumeChapters={activeVolumeChapters}
+          hasVolume={activeVolume !== null}
+          onOpenOutlineModal={() => setOutlineModalOpen(true)}
+          onJumpToChapterStudio={jumpToChapter}
+          onBatchUpdated={async () => {
+            await Promise.all([
+              refreshChapters(activeBook.id),
+              refreshForeshadowings(activeBook.id),
+            ]);
+            setPacingRefreshKey((k) => k + 1);
+          }}
+          onNotify={notify}
+        />
+      )}
+
+      {/* Batch Outline Generation Modal */}
+      {activeBook && (
+        <BatchOutlineModal
+          open={outlineModalOpen}
+          bookId={activeBook.id}
+          volume={activeVolume}
+          defaultStartSeq={nextGlobalSeq}
+          onClose={() => setOutlineModalOpen(false)}
+          onGenerated={async (created) => {
+            const firstId = created[0]?.id ?? activeChapterId;
+            await refreshBookData(activeBook.id, firstId);
+            setPacingRefreshKey((k) => k + 1);
+          }}
+          onNotify={notify}
+        />
+      )}
 
       {/* Create / Edit Volume Modal */}
       {volumeDialog && (

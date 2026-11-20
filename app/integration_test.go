@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1302,5 +1303,333 @@ func TestPhase3StyleAndDeaiEndToEndWorkflow(t *testing.T) {
 	mdText := string(mdBytes)
 	if strings.Contains(mdText, "嘴角勾起一抹弧度") || !strings.Contains(mdText, "指尖扣紧那枚微温玉瓶") {
 		t.Fatalf("exported markdown not updated with surgical polish replacement:\n%s", mdText)
+	}
+}
+
+func TestPhase4BatchAndPacingEndToEndWorkflow(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "nib-phase4.db")
+
+	const (
+		rawSecretKey = "sk-phase4-batch-key-8844aa11"
+		outlineModel = "mock-outline-v1"
+		draftModel   = "mock-draft-v1"
+		criticModel  = "mock-critic-v1"
+		extractModel = "mock-extract-v1"
+	)
+
+	var draftPromptsMu sync.Mutex
+	var draftPrompts []string
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer "+rawSecretKey {
+			http.Error(w, `{"error":{"message":"unauthorized"}}`, http.StatusUnauthorized)
+			return
+		}
+
+		var body struct {
+			Model    string `json:"model"`
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+
+		var contentOut string
+		switch body.Model {
+		case outlineModel:
+			raw, _ := json.Marshal(map[string]any{
+				"outlines": []map[string]any{
+					{
+						"title":           "坊市暗算",
+						"emotion_tag":     "suppress",
+						"hook_type":       "crisis",
+						"hook_note":       "黑煞执事封锁坊市南门",
+						"outline_summary": "林渊探查破障丹遭伏击受轻伤。",
+						"beats": []map[string]any{
+							{"stage": "setup", "summary": "林渊夜入坊市查探丹药", "target_words": 500},
+							{"stage": "suppress", "summary": "黑煞执事截杀震伤左肩", "target_words": 600},
+						},
+					},
+					{
+						"title":           "破阵反杀",
+						"emotion_tag":     "burst",
+						"hook_type":       "mystery",
+						"hook_note":       "血玉令牌背面古阵纹亮起",
+						"outline_summary": "林渊带伤引动残阵反杀王执事。",
+						"beats": []map[string]any{
+							{"stage": "burst", "summary": "残阵雷光轰杀强敌夺宝", "target_words": 700},
+						},
+					},
+				},
+			})
+			contentOut = string(raw)
+		case draftModel:
+			userMsg := ""
+			for _, m := range body.Messages {
+				if m.Role == "user" {
+					userMsg += m.Content
+				}
+			}
+			draftPromptsMu.Lock()
+			draftPrompts = append(draftPrompts, userMsg)
+			draftPromptsMu.Unlock()
+			contentOut = "夜雨浇透青石板，林渊按住阵盘退后半步。\n\n雷光轰鸣炸开，敌修护体灵光寸寸崩裂。"
+		case criticModel:
+			raw, _ := json.Marshal(map[string]any{
+				"hook_passed":     true,
+				"hook_verdict":    "结尾冲突紧凑，符合钩子要求",
+				"critic_findings": []any{},
+			})
+			contentOut = string(raw)
+		case extractModel:
+			raw, _ := json.Marshal(map[string]any{
+				"causal_summary": "林渊在坊市交手中左肩受阴雷暗伤，夺得血玉令牌。",
+				"new_entities":   []any{},
+				"state_patches": []map[string]any{
+					{
+						"entity_name": "林渊",
+						"attr_key":    "injury",
+						"prev_value":  "完好",
+						"new_value":   "左肩阴雷暗伤（微批接力pending）",
+						"severity":    "normal",
+						"reason":      "首章伏击受创",
+					},
+				},
+				"foreshadowing_updates": []any{},
+			})
+			contentOut = string(raw)
+		default:
+			http.Error(w, "unknown model", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		payload, _ := json.Marshal(map[string]any{
+			"choices": []map[string]any{{"delta": map[string]string{"content": contentOut}}},
+		})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", payload)
+		usagePayload, _ := json.Marshal(map[string]any{
+			"choices": []map[string]any{{"finish_reason": "stop"}},
+			"usage":   map[string]int{"prompt_tokens": 240, "completion_tokens": 110, "total_tokens": 350},
+		})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", usagePayload)
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer mockServer.Close()
+
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open failed: %v", err)
+	}
+	if err := st.RecoverInterruptedBatchRuns(ctx); err != nil {
+		t.Fatalf("RecoverInterruptedBatchRuns failed: %v", err)
+	}
+
+	llmClient := llm.NewClient(llm.WithHTTPClient(mockServer.Client()))
+	comp := compiler.New(st, compiler.WithMemorySource(st), compiler.WithStyleSource(st))
+	extractor := memory.NewExtractor(st, llmClient)
+
+	var progressMu sync.Mutex
+	var progressList []domain.BatchProgress
+	runner := pipeline.New(
+		st,
+		comp,
+		llmClient,
+		exporter.New(),
+		pipeline.WithStyleStore(st),
+		pipeline.WithBatchStore(st),
+		pipeline.WithDeltaExtractor(extractor),
+		pipeline.WithProgressListener(func(p domain.BatchProgress) {
+			progressMu.Lock()
+			progressList = append(progressList, p)
+			progressMu.Unlock()
+		}),
+	)
+
+	rt := app.NewRuntime()
+	rt.Init(app.RuntimeDeps{
+		Store:          st,
+		Exporter:       exporter.NewStoreExporter(st),
+		LLM:            llmClient,
+		Compiler:       comp,
+		Pipeline:       runner,
+		MemoryStore:    st,
+		DeltaExtractor: extractor,
+		StyleStore:     st,
+		StyleEngine:    runner,
+		BatchStore:     st,
+		BatchEngine:    runner,
+	})
+	defer func() {
+		runner.Close()
+		if err := rt.Close(); err != nil {
+			t.Errorf("rt.Close failed: %v", err)
+		}
+	}()
+
+	lib := app.NewLibraryService(rt)
+	atlas := app.NewAtlasService(rt)
+	settings := app.NewSettingsService(rt)
+	memSvc := app.NewMemoryService(rt)
+	batchSvc := app.NewBatchService(rt)
+
+	// 1. 建书、建卷、建主角实体 + 配置供应商与 4 个模型路由
+	book, err := lib.CreateBook(ctx, domain.CreateBookInput{
+		Title:   "微批斩仙",
+		Genre:   domain.GenreXianxia,
+		Premise: "散修靠微批接力稳推长篇。",
+	})
+	if err != nil {
+		t.Fatalf("CreateBook failed: %v", err)
+	}
+	vol, err := lib.UpsertVolume(ctx, domain.UpsertVolumeInput{
+		BookID: book.ID,
+		Seq:    1,
+		Title:  "坊市风云",
+		Goal:   "反杀黑煞执事夺取密库令牌",
+	})
+	if err != nil {
+		t.Fatalf("UpsertVolume failed: %v", err)
+	}
+	hero, err := atlas.UpsertEntity(ctx, domain.UpsertEntityInput{
+		BookID:     book.ID,
+		Kind:       domain.EntityKindCharacter,
+		Name:       "林渊",
+		Summary:    "谨慎散修",
+		Attributes: map[string]string{"injury": "完好"},
+	})
+	if err != nil {
+		t.Fatalf("UpsertEntity failed: %v", err)
+	}
+
+	prov, err := settings.UpsertProvider(ctx, domain.UpsertProviderInput{
+		Name:     "MockBatchRelay",
+		Protocol: domain.ProtocolOpenAICompat,
+		BaseURL:  mockServer.URL + "/v1",
+		APIKey:   rawSecretKey,
+		Models:   []string{outlineModel, draftModel, criticModel, extractModel},
+		Enabled:  true,
+	})
+	if err != nil {
+		t.Fatalf("UpsertProvider failed: %v", err)
+	}
+	pid := prov.ID
+	for stage, model := range map[domain.PipelineStage]string{
+		domain.StageOutline: outlineModel,
+		domain.StageDraft:   draftModel,
+		domain.StageCritic:  criticModel,
+		domain.StageExtract: extractModel,
+	} {
+		if _, err := settings.SaveModelRoute(ctx, domain.ModelRoute{
+			Stage:       stage,
+			ProviderID:  &pid,
+			ModelName:   model,
+			Temperature: 0.5,
+			MaxTokens:   2048,
+		}); err != nil {
+			t.Fatalf("SaveModelRoute(%s) failed: %v", stage, err)
+		}
+	}
+
+	// 2. 批量生成 2 章结构化章纲与节拍卡
+	outlinedChaps, err := lib.BatchGenerateOutlines(ctx, domain.BatchOutlineRequest{
+		BookID:   book.ID,
+		VolumeID: vol.ID,
+		StartSeq: 1,
+		Count:    2,
+		ArcGoal:  "先抑后扬反杀夺宝",
+	}, nil)
+	if err != nil {
+		t.Fatalf("BatchGenerateOutlines failed: %v", err)
+	}
+	if len(outlinedChaps) != 2 {
+		t.Fatalf("expected 2 outlined chapters, got %d", len(outlinedChaps))
+	}
+	// 将林渊绑定到第 2 章的节拍上，以验证第 2 章编译 P2 槽位时能接力读到第 1 章刚抽出的 pending 伤势！
+	if _, err := lib.ReplaceBeats(ctx, outlinedChaps[1].ID, []domain.Beat{
+		{Stage: domain.BeatStageBurst, Summary: "林渊带伤反杀", POVEntityID: &hero.ID, EntityIDs: []int64{hero.ID}, TargetWords: 700},
+	}); err != nil {
+		t.Fatalf("ReplaceBeats ch2 failed: %v", err)
+	}
+
+	// 3. 验证卷节奏曲线与超期伏笔诊断 (GetVolumePacing)
+	if _, err := memSvc.UpsertForeshadowing(ctx, domain.UpsertForeshadowingInput{
+		BookID:            book.ID,
+		Title:             "古宗密库超期伏笔",
+		PlantedChapterSeq: 1,
+		TargetResolveSeq:  2,
+		Status:            domain.ForeshadowingPlanted,
+	}); err != nil {
+		t.Fatalf("UpsertForeshadowing failed: %v", err)
+	}
+	pacing, err := lib.GetVolumePacing(ctx, vol.ID)
+	if err != nil {
+		t.Fatalf("GetVolumePacing failed: %v", err)
+	}
+	if len(pacing.Points) != 2 || len(pacing.Alerts) == 0 {
+		t.Fatalf("expected 2 pacing points and overdue foreshadow alert, got %+v", pacing)
+	}
+
+	// 4. 启动 2 章 full_pipeline 串行微批，验证 ch1 pending 记忆接力传给 ch2，且最终落库 pending 变更单与 Token 统计
+	run, err := batchSvc.StartBatchRun(ctx, book.ID, []int64{outlinedChaps[0].ID, outlinedChaps[1].ID}, string(domain.BatchModeFullPipeline))
+	if err != nil {
+		t.Fatalf("StartBatchRun failed: %v", err)
+	}
+	runner.WaitAllBatches()
+
+	finalRun, err := batchSvc.GetBatchRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("GetBatchRun failed: %v", err)
+	}
+	if finalRun.Status != domain.BatchRunCompleted || finalRun.DoneItems != 2 {
+		t.Fatalf("expected completed batch run with 2 done items, got %+v", finalRun)
+	}
+
+	// 关键校验：第 2 章出稿 Prompt 必须通过 IncludePending=true 接力读取到第 1 章刚抽出的 pending 伤势！
+	draftPromptsMu.Lock()
+	defer draftPromptsMu.Unlock()
+	if len(draftPrompts) != 2 {
+		t.Fatalf("expected 2 draft prompts, got %d", len(draftPrompts))
+	}
+	if !strings.Contains(draftPrompts[1], "左肩阴雷暗伤（微批接力pending）") {
+		t.Fatalf("expected chapter 2 prompt to relay chapter 1 pending state, got:\n%s", draftPrompts[1])
+	}
+
+	// 关键校验：Token 统计聚合（outline + draft*2 + critic*2 + extract*2）已持久化并可查！
+	usageSummary, err := settings.GetUsageSummary(ctx, book.ID)
+	if err != nil {
+		t.Fatalf("GetUsageSummary failed: %v", err)
+	}
+	if usageSummary.TotalCalls < 7 || usageSummary.TotalTokens <= 0 || len(usageSummary.ByStage) < 4 {
+		t.Fatalf("unexpected usage summary after full batch: %+v", usageSummary)
+	}
+	var sawExtractStage bool
+	for _, stStat := range usageSummary.ByStage {
+		if stStat.Stage == string(domain.StageExtract) && stStat.Calls >= 2 && stStat.TotalTokens > 0 {
+			sawExtractStage = true
+		}
+	}
+	if !sawExtractStage {
+		t.Fatalf("expected StageExtract logged in GetUsageSummary.ByStage, got %+v", usageSummary.ByStage)
+	}
+	progressMu.Lock()
+	pCount := len(progressList)
+	progressMu.Unlock()
+	if pCount < 6 {
+		t.Fatalf("expected batch progress broadcasts >= 6, got %d", pCount)
 	}
 }

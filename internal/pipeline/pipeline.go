@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"nib/internal/domain"
@@ -83,27 +84,70 @@ func WithStyleStore(ss StyleStore) Option {
 	}
 }
 
-// Runner 编排单章流式出稿、异常/中止保底落库、单向 Markdown 导出，以及 Phase 3 文风抽取、本地 AI 味检测、Critic 盲审与手术式局部润色。
-type Runner struct {
-	store       Store
-	styleStore  StyleStore
-	compiler    Compiler
-	llm         LLMStreamer
-	exporter    Exporter
-	saveTimeout time.Duration
+// WithBatchStore 显式注入 Phase 4 微批调度与 Token 统计仓储接口（若 store 本身实现 BatchStore，New 会自动挂载）。
+func WithBatchStore(bs BatchStore) Option {
+	return func(r *Runner) {
+		if bs != nil {
+			r.batchStore = bs
+		}
+	}
 }
 
-// New 创建单章生成流水线执行器。exporter 允许为 nil（未配置导出器时跳过导出）。
+// WithDeltaExtractor 注入完章记忆增量抽取器，供 full_pipeline 串行微批接力使用。
+func WithDeltaExtractor(ext DeltaExtractor) Option {
+	return func(r *Runner) {
+		if ext != nil {
+			r.extractor = ext
+		}
+	}
+}
+
+// WithProgressListener 注入串行微批实时进度监听回调（生产环境接入 app.EmitBatchProgress）。
+func WithProgressListener(fn func(domain.BatchProgress)) Option {
+	return func(r *Runner) {
+		if fn != nil {
+			r.progressListener = fn
+		}
+	}
+}
+
+// Runner 编排单章流式出稿、异常/中止保底落库、单向 Markdown 导出、Phase 3 审校润色，以及 Phase 4 批量章纲与串行微批调度。
+type Runner struct {
+	store            Store
+	styleStore       StyleStore
+	batchStore       BatchStore
+	outlineStore     OutlineStore
+	extractor        DeltaExtractor
+	compiler         Compiler
+	llm              LLMStreamer
+	exporter         Exporter
+	progressListener func(domain.BatchProgress)
+	saveTimeout      time.Duration
+
+	batchMu       sync.Mutex
+	batchCancels  map[int64]activeBatchHandle
+	batchTokenSeq uint64
+	batchWG       sync.WaitGroup
+}
+
+// New 创建流水线执行器。若 store 同时实现 StyleStore / BatchStore / OutlineStore，将自动挂载。
 func New(store Store, comp Compiler, streamer LLMStreamer, exp Exporter, opts ...Option) *Runner {
 	r := &Runner{
-		store:       store,
-		compiler:    comp,
-		llm:         streamer,
-		exporter:    exp,
-		saveTimeout: defaultSaveTimeout,
+		store:        store,
+		compiler:     comp,
+		llm:          streamer,
+		exporter:     exp,
+		saveTimeout:  defaultSaveTimeout,
+		batchCancels: make(map[int64]activeBatchHandle),
 	}
 	if ss, ok := store.(StyleStore); ok {
 		r.styleStore = ss
+	}
+	if bs, ok := store.(BatchStore); ok {
+		r.batchStore = bs
+	}
+	if os, ok := store.(OutlineStore); ok {
+		r.outlineStore = os
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -208,6 +252,7 @@ func (r *Runner) GenerateChapter(
 	var finalUsage domain.TokenUsage
 	var finishReason string
 	var stoppedByCallback bool
+	draftStart := time.Now()
 
 	streamUsage, streamErr := r.llm.Stream(ctx, provider, chatReq, func(ev llm.StreamEvent) error {
 		if ev.FinishReason != "" {
@@ -248,6 +293,9 @@ func (r *Runner) GenerateChapter(
 
 	if hasUsage(streamUsage) {
 		finalUsage = streamUsage
+	}
+	if hasUsage(finalUsage) {
+		r.recordTokenUsage(ctx, chap.BookID, chap.ID, domain.StageDraft, provider.Name, route.ModelName, finalUsage, time.Since(draftStart).Milliseconds())
 	}
 
 	generated := contentBuf.String()

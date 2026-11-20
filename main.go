@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"path/filepath"
 	"sync"
@@ -43,8 +44,12 @@ func main() {
 	)
 
 	var shutdownOnce sync.Once
+	var batchCloser func()
 	runShutdown := func() {
 		shutdownOnce.Do(func() {
+			if batchCloser != nil {
+				batchCloser()
+			}
 			if err := rt.Close(); err != nil {
 				log.Printf("nib: close runtime failed: %v", err)
 			}
@@ -57,8 +62,11 @@ func main() {
 			log.Printf("nib: resolve user data dir failed: %v", err)
 		} else {
 			dbPath := filepath.Join(dataDir, "nib.db")
-			if err := initRuntime(rt, dbPath); err != nil {
-				log.Printf("nib: init runtime (%s) failed: %v", dbPath, err)
+			closer, initErr := initRuntime(rt, dbPath)
+			if initErr != nil {
+				log.Printf("nib: init runtime (%s) failed: %v", dbPath, initErr)
+			} else {
+				batchCloser = closer
 			}
 		}
 
@@ -87,19 +95,31 @@ func main() {
 	runShutdown()
 }
 
-// initRuntime 在 WhenReady 回调内打开并迁移本地 SQLite，装配全部 Phase 1–3 纯 Go 核心引擎。
-func initRuntime(rt *app.Runtime, dbPath string) error {
+// initRuntime 在 WhenReady 回调内打开并迁移本地 SQLite，恢复异常中断的微批队列，装配全部 Phase 1–4 纯 Go 核心引擎。
+func initRuntime(rt *app.Runtime, dbPath string) (func(), error) {
 	st, err := store.Open(dbPath)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if err := st.RecoverInterruptedBatchRuns(context.Background()); err != nil {
+		log.Printf("nib: recover interrupted batch runs warning: %v", err)
 	}
 
 	storeExp := exporter.NewStoreExporter(st)
 	pipeExp := exporter.New()
 	llmClient := llm.NewClient()
 	comp := compiler.New(st, compiler.WithMemorySource(st), compiler.WithStyleSource(st))
-	runner := pipeline.New(st, comp, llmClient, pipeExp, pipeline.WithStyleStore(st))
 	extractor := memory.NewExtractor(st, llmClient)
+	runner := pipeline.New(
+		st,
+		comp,
+		llmClient,
+		pipeExp,
+		pipeline.WithStyleStore(st),
+		pipeline.WithBatchStore(st),
+		pipeline.WithDeltaExtractor(extractor),
+		pipeline.WithProgressListener(app.EmitBatchProgress),
+	)
 
 	rt.Init(app.RuntimeDeps{
 		Store:          st,
@@ -111,6 +131,8 @@ func initRuntime(rt *app.Runtime, dbPath string) error {
 		DeltaExtractor: extractor,
 		StyleStore:     st,
 		StyleEngine:    runner,
+		BatchStore:     st,
+		BatchEngine:    runner,
 	})
-	return nil
+	return runner.Close, nil
 }

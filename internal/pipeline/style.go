@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"nib/internal/domain"
 	"nib/internal/genres"
@@ -219,7 +220,7 @@ func (r *Runner) RunCriticAudit(ctx context.Context, chapterID int64) (domain.Ch
 	paragraphs := linter.SplitParagraphs(chap.Content)
 	sysPrompt, userPrompt := buildCriticPrompts(book, chap, briefing, paragraphs)
 
-	rawResp, err := r.collectStageLLMResponse(ctx, provider, route, defaultCriticMaxTokens, sysPrompt, userPrompt)
+	rawResp, err := r.collectStageLLMResponse(ctx, chap.BookID, chap.ID, domain.StageCritic, provider, route, defaultCriticMaxTokens, sysPrompt, userPrompt)
 	if err != nil {
 		return domain.ChapterAudit{}, err
 	}
@@ -231,7 +232,7 @@ func (r *Runner) RunCriticAudit(ctx context.Context, chapterID int64) (domain.Ch
 		}
 		// 自动执行 1 次 JSON 纠错重问。
 		repSys, repUser := buildStyleJSONRepairPrompts("Critic 审校报告（需包含 hook_passed、hook_verdict、critic_findings）", rawResp, parseErr)
-		repResp, repErr := r.collectStageLLMResponse(ctx, provider, route, defaultCriticMaxTokens, repSys, repUser)
+		repResp, repErr := r.collectStageLLMResponse(ctx, chap.BookID, chap.ID, domain.StageCritic, provider, route, defaultCriticMaxTokens, repSys, repUser)
 		if repErr != nil {
 			return domain.ChapterAudit{}, fmt.Errorf("Critic 审校 JSON 纠错请求失败: %w", repErr)
 		}
@@ -325,7 +326,7 @@ func (r *Runner) GenerateSurgicalDiffs(ctx context.Context, chapterID int64, tar
 
 	sysPrompt, userPrompt := buildSurgicalPolishPrompts(book, profile, rules, paragraphs, targets, reasonsByPara)
 
-	rawResp, err := r.collectStageLLMResponse(ctx, provider, route, defaultPolishMaxTokens, sysPrompt, userPrompt)
+	rawResp, err := r.collectStageLLMResponse(ctx, chap.BookID, chap.ID, domain.StagePolish, provider, route, defaultPolishMaxTokens, sysPrompt, userPrompt)
 	if err != nil {
 		return domain.ChapterAudit{}, err
 	}
@@ -336,7 +337,7 @@ func (r *Runner) GenerateSurgicalDiffs(ctx context.Context, chapterID int64, tar
 			return domain.ChapterAudit{}, domain.ErrGenerationCanceled
 		}
 		repSys, repUser := buildStyleJSONRepairPrompts("手术式局部润色建议（需包含 diffs 数组：paragraph_index, reason, replacement）", rawResp, parseErr)
-		repResp, repErr := r.collectStageLLMResponse(ctx, provider, route, defaultPolishMaxTokens, repSys, repUser)
+		repResp, repErr := r.collectStageLLMResponse(ctx, chap.BookID, chap.ID, domain.StagePolish, provider, route, defaultPolishMaxTokens, repSys, repUser)
 		if repErr != nil {
 			return domain.ChapterAudit{}, fmt.Errorf("手术润色 JSON 纠错请求失败: %w", repErr)
 		}
@@ -559,6 +560,9 @@ func (r *Runner) tryResolveAnyStyleRoute(ctx context.Context) (domain.ModelRoute
 
 func (r *Runner) collectStageLLMResponse(
 	ctx context.Context,
+	bookID int64,
+	chapterID int64,
+	stage domain.PipelineStage,
 	provider domain.Provider,
 	route domain.ModelRoute,
 	defaultMaxToks int,
@@ -576,15 +580,26 @@ func (r *Runner) collectStageLLMResponse(
 		Temperature: route.Temperature,
 		MaxTokens:   maxTokens,
 	}
+	start := time.Now()
 	var buf strings.Builder
-	_, err := r.llm.Stream(ctx, provider, req, func(ev llm.StreamEvent) error {
+	var lastUsage domain.TokenUsage
+	usage, err := r.llm.Stream(ctx, provider, req, func(ev llm.StreamEvent) error {
 		if ev.Delta != "" {
 			buf.WriteString(ev.Delta)
 		}
+		if ev.Usage != nil {
+			lastUsage = *ev.Usage
+		}
 		return nil
 	})
+	if hasUsage(usage) {
+		lastUsage = usage
+	}
 	if err != nil {
 		return "", err
+	}
+	if bookID > 0 && stage.ValidUsageStage() {
+		r.recordTokenUsage(ctx, bookID, chapterID, stage, provider.Name, route.ModelName, lastUsage, time.Since(start).Milliseconds())
 	}
 	return buf.String(), nil
 }
@@ -624,7 +639,7 @@ func (r *Runner) extractQualitativeStyleWithLLM(
 		fmt.Fprintf(&user, "【样章 %d】\n%s\n\n", i+1, s)
 	}
 
-	raw, err := r.collectStageLLMResponse(ctx, provider, route, defaultCriticMaxTokens, sys, user.String())
+	raw, err := r.collectStageLLMResponse(ctx, book.ID, 0, domain.StageStyle, provider, route, defaultCriticMaxTokens, sys, user.String())
 	if err != nil {
 		return qualitativeStyleLLMResult{}, err
 	}
