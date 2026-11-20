@@ -74,9 +74,19 @@ func WithSaveTimeout(d time.Duration) Option {
 	}
 }
 
-// Runner 编排单章流式出稿、异常/中止保底落库与单向 Markdown 导出。
+// WithStyleStore 显式注入 Phase 3 文风与质检仓储接口（若 store 本身实现 StyleStore，New 会自动挂载）。
+func WithStyleStore(ss StyleStore) Option {
+	return func(r *Runner) {
+		if ss != nil {
+			r.styleStore = ss
+		}
+	}
+}
+
+// Runner 编排单章流式出稿、异常/中止保底落库、单向 Markdown 导出，以及 Phase 3 文风抽取、本地 AI 味检测、Critic 盲审与手术式局部润色。
 type Runner struct {
 	store       Store
+	styleStore  StyleStore
 	compiler    Compiler
 	llm         LLMStreamer
 	exporter    Exporter
@@ -91,6 +101,9 @@ func New(store Store, comp Compiler, streamer LLMStreamer, exp Exporter, opts ..
 		llm:         streamer,
 		exporter:    exp,
 		saveTimeout: defaultSaveTimeout,
+	}
+	if ss, ok := store.(StyleStore); ok {
+		r.styleStore = ss
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -335,6 +348,11 @@ func (r *Runner) GenerateChapter(
 	var exportWarning string
 	if err := r.tryExportChapter(book, vol, savedChap); err != nil {
 		exportWarning = fmt.Sprintf("正文已保存，但单向导出失败: %v", err)
+	}
+
+	// Phase 3：完章落库后自动触发 0 成本本地 AI 味扫描并落库质检报告（不阻塞主出稿返回）。
+	if r.styleStore != nil {
+		_, _ = r.LintChapterLocal(ctx, chapterID)
 	}
 
 	_ = emit(domain.GenChunk{

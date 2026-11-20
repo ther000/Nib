@@ -22,6 +22,7 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  ShieldCheck,
   Square,
   X,
 } from "lucide-react";
@@ -29,15 +30,23 @@ import {
   LibraryService,
   MemoryService,
   StudioService,
+  StyleService,
   type ApplyDeltaResult,
+  type ApplySurgicalDiffResult,
   type Briefing,
+  type ChapterAudit,
   type ChapterDelta,
   type ChapterVersion,
+  type CriticFinding,
   type GenChunk,
+  type LintIssue,
+  type SurgicalDiff,
   type TokenUsage,
 } from "../mygo";
 import { useApp } from "../stores/AppContext";
+import { AuditProseParagraph } from "../components/AuditProseParagraph";
 import { DeltaReviewPanel } from "../components/DeltaReviewPanel";
+import { QualityAuditPanel } from "../components/QualityAuditPanel";
 import {
   countWords,
   formatErrorMessage,
@@ -48,9 +57,10 @@ import {
   getEntityKindLabel,
   getVersionSourceLabel,
   parseKeywordList,
+  splitParagraphs,
 } from "../lib/constants";
 
-type DrawerTab = "briefing" | "delta" | "versions";
+type DrawerTab = "briefing" | "audit" | "delta" | "versions";
 
 export function StudioView() {
   const {
@@ -129,6 +139,16 @@ export function StudioView() {
   const [deltaLoading, setDeltaLoading] = useState(false);
   const deltaReqIdRef = useRef(0);
 
+  // Phase 3 Quality Audit & Surgical Diff state
+  const [chapterAudit, setChapterAudit] = useState<ChapterAudit | null>(null);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [activeParagraphIndex, setActiveParagraphIndex] = useState<number | null>(null);
+  const [polishingParagraphs, setPolishingParagraphs] = useState(false);
+  const [applyingDiffId, setApplyingDiffId] = useState<string | null>(null);
+  const auditReqIdRef = useRef(0);
+  const polishAbortRef = useRef<AbortController | null>(null);
+  const polishRunIdRef = useRef(0);
+
   // Versions state
   const [versions, setVersions] = useState<ChapterVersion[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
@@ -161,6 +181,12 @@ export function StudioView() {
       setGenerating(false);
       setGenStageText("");
     }
+    if (polishAbortRef.current) {
+      polishRunIdRef.current += 1;
+      polishAbortRef.current.abort();
+      polishAbortRef.current = null;
+      setPolishingParagraphs(false);
+    }
 
     if (!activeChapter) {
       setTitle("");
@@ -168,6 +194,8 @@ export function StudioView() {
       setDirty(false);
       setGenError(null);
       setLastUsage(null);
+      setChapterAudit(null);
+      setActiveParagraphIndex(null);
       return;
     }
     setTitle(activeChapter.title);
@@ -182,6 +210,8 @@ export function StudioView() {
     setSearchKeywordsText("");
     setExpandedSlots(new Set());
     setPendingDelta(null);
+    setChapterAudit(null);
+    setActiveParagraphIndex(null);
   }, [activeChapter?.id]);
 
   // Keep synced if chapter updated externally while not editing or streaming
@@ -228,6 +258,11 @@ export function StudioView() {
         userStoppedRef.current = true;
         abortRef.current.abort();
         abortRef.current = null;
+      }
+      if (polishAbortRef.current) {
+        polishRunIdRef.current += 1;
+        polishAbortRef.current.abort();
+        polishAbortRef.current = null;
       }
     };
   }, []);
@@ -315,6 +350,259 @@ export function StudioView() {
     void loadPendingDelta(activeChapterId);
   }, [activeChapterId, loadPendingDelta]);
 
+  // Phase 3: Load persisted ChapterAudit or run 0-cost local lint
+  const runLocalLint = useCallback(
+    async (targetChapterId?: number | null, silent = false) => {
+      const cid = targetChapterId ?? activeChapterId;
+      if (!cid) return;
+      const reqId = ++auditReqIdRef.current;
+      setAuditLoading(true);
+      try {
+        const res = await StyleService.lintChapterLocal(cid);
+        if (mountedRef.current && auditReqIdRef.current === reqId && activeChapterIdRef.current === cid) {
+          setChapterAudit(res);
+          if (!silent) {
+            notify({
+              tone: res.lintIssues.length === 0 ? "ok" : "info",
+              message: `本地扫描完成 · 去 AI 味 ${res.deaiScore}/100`,
+              detail:
+                res.lintIssues.length > 0
+                  ? `检出 ${res.lintIssues.length} 处套话或结构排版告警`
+                  : "未检出高频 AI 套话与排版病灶",
+            });
+          }
+        }
+      } catch (err) {
+        if (!silent && mountedRef.current) {
+          notify({
+            tone: "danger",
+            message: "本地 AI 味扫描失败",
+            detail: formatErrorMessage(err),
+          });
+        }
+      } finally {
+        if (mountedRef.current && auditReqIdRef.current === reqId) {
+          setAuditLoading(false);
+        }
+      }
+    },
+    [activeChapterId, notify]
+  );
+
+  const loadChapterAudit = useCallback(
+    async (targetChapterId?: number | null) => {
+      const cid = targetChapterId ?? activeChapterId;
+      if (!cid) {
+        setChapterAudit(null);
+        return;
+      }
+      const reqId = ++auditReqIdRef.current;
+      setAuditLoading(true);
+      try {
+        const audit = await StyleService.getChapterAudit(cid);
+        if (mountedRef.current && auditReqIdRef.current === reqId && activeChapterIdRef.current === cid) {
+          setChapterAudit(audit);
+          if (audit.id === 0 && activeChapter?.content?.trim()) {
+            void runLocalLint(cid, true);
+          }
+        }
+      } catch {
+        if (mountedRef.current && auditReqIdRef.current === reqId && activeChapterIdRef.current === cid) {
+          if (activeChapter?.content?.trim()) {
+            void runLocalLint(cid, true);
+          }
+        }
+      } finally {
+        if (mountedRef.current && auditReqIdRef.current === reqId) {
+          setAuditLoading(false);
+        }
+      }
+    },
+    [activeChapterId, activeChapter?.content, runLocalLint]
+  );
+
+  useEffect(() => {
+    void loadChapterAudit(activeChapterId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChapterId]);
+
+  const scrollToParagraph = useCallback((pIdx: number) => {
+    setReadingMode(true);
+    setActiveParagraphIndex(pIdx);
+    requestAnimationFrame(() => {
+      const el = canvasScrollRef.current?.querySelector(
+        `[data-paragraph-index="${pIdx}"]`
+      );
+      if (el instanceof HTMLElement) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    });
+  }, []);
+
+  const stopSurgicalPolish = useCallback(() => {
+    if (polishAbortRef.current) {
+      polishAbortRef.current.abort();
+      polishAbortRef.current = null;
+    }
+  }, []);
+
+  // Flush unsaved manual edits before running backend lint / critic / surgical polish
+  const ensureSavedBeforeAudit = useCallback(async (): Promise<boolean> => {
+    if (!activeChapter || generating) return false;
+    if (!dirty) return true;
+    try {
+      const saved = await LibraryService.saveChapterDraft({
+        chapterId: activeChapter.id,
+        title: title.trim() || activeChapter.title,
+        content,
+        backupSource: "manual_backup",
+      });
+      updateChapterInCache(saved);
+      setDirty(false);
+      return true;
+    } catch (err) {
+      notify({
+        tone: "danger",
+        message: "保存当前修改失败",
+        detail: formatErrorMessage(err),
+      });
+      return false;
+    }
+  }, [activeChapter, generating, dirty, title, content, updateChapterInCache, notify]);
+
+  const handleRunSurgicalPolish = useCallback(
+    async (targetParagraphs: number[]) => {
+      if (!activeChapter || polishingParagraphs) return;
+      const savedOk = await ensureSavedBeforeAudit();
+      if (!savedOk) return;
+      const targetChapterId = activeChapter.id;
+      const runId = ++polishRunIdRef.current;
+      const ac = new AbortController();
+      polishAbortRef.current = ac;
+      setPolishingParagraphs(true);
+
+      try {
+        const updated = await StyleService.generateSurgicalDiffs.with({
+          signal: ac.signal,
+        })(targetChapterId, targetParagraphs);
+        if (
+          !mountedRef.current ||
+          polishRunIdRef.current !== runId ||
+          activeChapterIdRef.current !== targetChapterId
+        ) {
+          return;
+        }
+        setChapterAudit(updated);
+        const pending = (updated.diffs ?? []).filter((d) => d.status === "pending");
+        if (pending.length > 0) {
+          const targetIdx =
+            targetParagraphs[0] !== undefined
+              ? targetParagraphs[0]
+              : pending[0]!.paragraphIndex;
+          scrollToParagraph(targetIdx);
+          notify({
+            tone: "ok",
+            message: `已生成 ${pending.length} 条手术式局部润色建议`,
+            detail: "按 Tab 采纳替换，按 Esc 忽略",
+          });
+        } else {
+          notify({
+            tone: "info",
+            message: "未生成新的局部润色建议",
+          });
+        }
+      } catch (err) {
+        if (ac.signal.aborted) {
+          if (mountedRef.current && polishRunIdRef.current === runId) {
+            notify({ tone: "info", message: "已取消手术润色生成" });
+          }
+          return;
+        }
+        if (!mountedRef.current || polishRunIdRef.current !== runId) return;
+        notify({
+          tone: "danger",
+          message: "生成手术润色失败",
+          detail: formatErrorMessage(err),
+        });
+      } finally {
+        if (polishAbortRef.current === ac) polishAbortRef.current = null;
+        if (mountedRef.current && polishRunIdRef.current === runId) {
+          setPolishingParagraphs(false);
+        }
+      }
+    },
+    [
+      activeChapter,
+      polishingParagraphs,
+      ensureSavedBeforeAudit,
+      scrollToParagraph,
+      notify,
+    ]
+  );
+
+  // Load versions
+  const loadVersions = useCallback(async () => {
+    if (!activeChapterId) {
+      setVersions([]);
+      return;
+    }
+    setVersionsLoading(true);
+    try {
+      const list = await StudioService.listChapterVersions(activeChapterId);
+      setVersions(list);
+      setSelectedVersionId((prev) =>
+        prev && list.some((v) => v.id === prev) ? prev : list[0]?.id ?? null
+      );
+    } catch (err) {
+      notify({ tone: "danger", message: "读取历史快照失败", detail: formatErrorMessage(err) });
+    } finally {
+      setVersionsLoading(false);
+    }
+  }, [activeChapterId, notify]);
+
+  const handleDiffAppliedResult = useCallback(
+    (res: ApplySurgicalDiffResult) => {
+      updateChapterInCache(res.chapter);
+      setTitle(res.chapter.title);
+      setContent(res.chapter.content);
+      setDirty(false);
+      setChapterAudit(res.audit);
+      if (studioDrawerOpen && drawerTab === "versions") {
+        void loadVersions();
+      }
+    },
+    [updateChapterInCache, studioDrawerOpen, drawerTab, loadVersions]
+  );
+
+  const handleApplyInlineDiff = useCallback(
+    async (diffId: string, accept: boolean, customReplacement?: string) => {
+      if (!activeChapter || applyingDiffId) return;
+      setApplyingDiffId(diffId);
+      try {
+        const res = await StyleService.applySurgicalDiff({
+          chapterId: activeChapter.id,
+          diffId,
+          accept,
+          customReplacement,
+        });
+        handleDiffAppliedResult(res);
+        notify({
+          tone: accept ? "ok" : "info",
+          message: accept ? "已采纳手术润色并归档快照" : "已忽略该条润色建议",
+        });
+      } catch (err) {
+        notify({
+          tone: "danger",
+          message: "应用手术润色失败",
+          detail: formatErrorMessage(err),
+        });
+      } finally {
+        setApplyingDiffId(null);
+      }
+    },
+    [activeChapter, applyingDiffId, handleDiffAppliedResult, notify]
+  );
+
   const handleDeltaApplied = useCallback(
     async (result: ApplyDeltaResult) => {
       setPendingDelta(null);
@@ -358,26 +646,6 @@ export function StudioView() {
     ]
   );
 
-  // Load versions
-  const loadVersions = useCallback(async () => {
-    if (!activeChapterId) {
-      setVersions([]);
-      return;
-    }
-    setVersionsLoading(true);
-    try {
-      const list = await StudioService.listChapterVersions(activeChapterId);
-      setVersions(list);
-      setSelectedVersionId((prev) =>
-        prev && list.some((v) => v.id === prev) ? prev : list[0]?.id ?? null
-      );
-    } catch (err) {
-      notify({ tone: "danger", message: "读取历史快照失败", detail: formatErrorMessage(err) });
-    } finally {
-      setVersionsLoading(false);
-    }
-  }, [activeChapterId, notify]);
-
   // Debounced auto-load briefing when drawer is open on briefing tab
   useEffect(() => {
     if (!studioDrawerOpen || drawerTab !== "briefing" || !activeChapterId) return;
@@ -406,6 +674,7 @@ export function StudioView() {
       });
       updateChapterInCache(saved);
       setDirty(false);
+      void runLocalLint(saved.id, true);
       if (studioDrawerOpen && drawerTab === "versions") {
         void loadVersions();
       }
@@ -423,6 +692,7 @@ export function StudioView() {
     title,
     content,
     updateChapterInCache,
+    runLocalLint,
     studioDrawerOpen,
     drawerTab,
     loadVersions,
@@ -718,6 +988,7 @@ export function StudioView() {
         setGenStageText("");
         if (activeChapterIdRef.current === genChapterId) {
           void loadPendingDelta(genChapterId);
+          void runLocalLint(genChapterId, true);
           if (studioDrawerOpen && drawerTab === "versions") {
             void loadVersions();
           }
@@ -743,6 +1014,7 @@ export function StudioView() {
     studioDrawerOpen,
     drawerTab,
     loadPendingDelta,
+    runLocalLint,
     loadVersions,
     loadBriefing,
   ]);
@@ -833,13 +1105,93 @@ export function StudioView() {
 
   const liveWordCount = useMemo(() => countWords(content), [content]);
   const streamingParagraphs = useMemo(
-    () =>
-      content
-        .split(/\n+/)
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0),
+    () => splitParagraphs(content),
     [content]
   );
+
+  // Per-paragraph maps for inline underlines, critic callouts, and pending surgical diffs
+  const paragraphAuditMaps = useMemo(() => {
+    const lintByPara = new Map<number, LintIssue[]>();
+    const criticByPara = new Map<number, CriticFinding[]>();
+    const pendingDiffByPara = new Map<number, SurgicalDiff>();
+    const flaggedSet = new Set<number>();
+
+    for (const iss of chapterAudit?.lintIssues ?? []) {
+      if (iss.paragraphIndex < 0) continue;
+      flaggedSet.add(iss.paragraphIndex);
+      const list = lintByPara.get(iss.paragraphIndex);
+      if (list) list.push(iss);
+      else lintByPara.set(iss.paragraphIndex, [iss]);
+    }
+    for (const cf of chapterAudit?.criticFindings ?? []) {
+      if (cf.paragraphIndex < 0) continue;
+      flaggedSet.add(cf.paragraphIndex);
+      const list = criticByPara.get(cf.paragraphIndex);
+      if (list) list.push(cf);
+      else criticByPara.set(cf.paragraphIndex, [cf]);
+    }
+    for (const df of chapterAudit?.diffs ?? []) {
+      if (df.status === "pending" && df.paragraphIndex >= 0) {
+        flaggedSet.add(df.paragraphIndex);
+        pendingDiffByPara.set(df.paragraphIndex, df);
+      }
+    }
+
+    const flaggedParagraphs = Array.from(flaggedSet).sort((a, b) => a - b);
+    const totalFlags =
+      (chapterAudit?.lintIssues?.length ?? 0) +
+      (chapterAudit?.criticFindings?.length ?? 0) +
+      pendingDiffByPara.size;
+
+    return {
+      lintByPara,
+      criticByPara,
+      pendingDiffByPara,
+      flaggedParagraphs,
+      totalFlags,
+    };
+  }, [chapterAudit]);
+
+  const cycleFlaggedParagraph = useCallback(
+    (dir: 1 | -1) => {
+      const list = paragraphAuditMaps.flaggedParagraphs;
+      if (list.length === 0) return;
+      if (activeParagraphIndex === null) {
+        const first = dir === 1 ? list[0] : list[list.length - 1];
+        if (first !== undefined) scrollToParagraph(first);
+        return;
+      }
+      const curPos = list.indexOf(activeParagraphIndex);
+      let nextPos: number;
+      if (curPos === -1) {
+        nextPos = dir === 1 ? 0 : list.length - 1;
+      } else {
+        nextPos = (curPos + dir + list.length) % list.length;
+      }
+      const target = list[nextPos];
+      if (target !== undefined) scrollToParagraph(target);
+    },
+    [paragraphAuditMaps.flaggedParagraphs, activeParagraphIndex, scrollToParagraph]
+  );
+
+  // Alt+] / Alt+[ issue navigation (Tab / Esc on focused diff is handled by AuditProseParagraph)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        if (e.key === "]" || e.code === "BracketRight") {
+          e.preventDefault();
+          cycleFlaggedParagraph(1);
+          return;
+        }
+        if (e.key === "[" || e.code === "BracketLeft") {
+          e.preventDefault();
+          cycleFlaggedParagraph(-1);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cycleFlaggedParagraph]);
 
   const selectedVersion = useMemo(
     () => versions.find((v) => v.id === selectedVersionId) ?? null,
@@ -897,11 +1249,34 @@ export function StudioView() {
               </div>
 
               <div className="flex items-center gap-1">
+                {paragraphAuditMaps.flaggedParagraphs.length > 0 && (
+                  <div className="mr-1 flex items-center gap-0.5 rounded-md border border-border-subtle bg-surface px-1 py-0.5">
+                    <button
+                      type="button"
+                      onClick={() => cycleFlaggedParagraph(-1)}
+                      title="上一处 AI 味或审校告警 (Alt+[)"
+                      className="rounded px-1.5 py-0.5 text-[10.5px] text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                    >
+                      [ 上一处
+                    </button>
+                    <span className="nib-mono px-1 text-[10.5px] text-warn">
+                      {paragraphAuditMaps.flaggedParagraphs.length} 处病灶
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => cycleFlaggedParagraph(1)}
+                      title="下一处 AI 味或审校告警 (Alt+])"
+                      className="rounded px-1.5 py-0.5 text-[10.5px] text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                    >
+                      下一处 ]
+                    </button>
+                  </div>
+                )}
                 <button
                   type="button"
                   disabled={generating}
                   onClick={() => setReadingMode((v) => !v)}
-                  title={readingMode ? "切回编辑模式" : "排版阅读预览"}
+                  title={readingMode ? "切回编辑模式" : "排版审校与局部润色视图"}
                   className={`flex items-center gap-1 rounded px-2 py-1 text-[11px] transition-colors disabled:opacity-30 ${
                     readingMode
                       ? "bg-accent-soft text-accent"
@@ -916,7 +1291,7 @@ export function StudioView() {
                   ) : (
                     <>
                       <BookOpen className="h-3 w-3" />
-                      <span>排版阅读</span>
+                      <span>排版审校</span>
                     </>
                   )}
                 </button>
@@ -1048,7 +1423,7 @@ export function StudioView() {
               </div>
             )}
 
-            {/* Prose Editor / Live Stream Surface / Reading Preview */}
+            {/* Prose Editor / Live Stream Surface / Interactive Paragraph Audit & Surgical Diff */}
             {generating || readingMode ? (
               <article
                 className="nib-prose-column min-h-[480px]"
@@ -1062,12 +1437,39 @@ export function StudioView() {
                   </p>
                 ) : (
                   streamingParagraphs.map((para, idx) => (
-                    <p key={idx}>
-                      {para}
-                      {generating && idx === streamingParagraphs.length - 1 && (
-                        <span className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-[2px] animate-pulse bg-accent align-baseline" />
-                      )}
-                    </p>
+                    <AuditProseParagraph
+                      key={idx}
+                      paragraphIndex={idx}
+                      text={para}
+                      isStreamingLast={
+                        generating && idx === streamingParagraphs.length - 1
+                      }
+                      isFocused={!generating && activeParagraphIndex === idx}
+                      lintIssues={
+                        generating
+                          ? []
+                          : paragraphAuditMaps.lintByPara.get(idx) ?? []
+                      }
+                      criticFindings={
+                        generating
+                          ? []
+                          : paragraphAuditMaps.criticByPara.get(idx) ?? []
+                      }
+                      pendingDiff={
+                        generating
+                          ? null
+                          : paragraphAuditMaps.pendingDiffByPara.get(idx) ?? null
+                      }
+                      polishing={polishingParagraphs}
+                      applyingDiffId={applyingDiffId}
+                      onFocus={(pIdx) => setActiveParagraphIndex(pIdx)}
+                      onRequestPolish={(pIdx) =>
+                        void handleRunSurgicalPolish([pIdx])
+                      }
+                      onApplyDiff={(diffId, accept, customRep) =>
+                        void handleApplyInlineDiff(diffId, accept, customRep)
+                      }
+                    />
                   ))
                 )}
               </article>
@@ -1219,8 +1621,8 @@ export function StudioView() {
           className="flex shrink-0 flex-col border-l border-border-subtle bg-surface"
           style={{ width: "var(--studio-drawer-width)" }}
         >
-          {/* Drawer Header Tabs */}
-          <div className="flex items-center justify-between border-b border-border-subtle px-2.5 py-2">
+          {/* Drawer Header Tabs: 简报 / 质检 / 变更单 / 快照 */}
+          <div className="flex items-center justify-between border-b border-border-subtle px-2 py-2">
             <div className="flex items-center gap-0.5">
               <button
                 type="button"
@@ -1232,7 +1634,24 @@ export function StudioView() {
                 }`}
               >
                 <FileText className="h-3.5 w-3.5" />
-                <span>作战简报</span>
+                <span>简报</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDrawerTab("audit")}
+                className={`flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                  drawerTab === "audit"
+                    ? "bg-accent-soft text-accent"
+                    : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                }`}
+              >
+                <ShieldCheck className="h-3.5 w-3.5" />
+                <span>质检</span>
+                {paragraphAuditMaps.totalFlags > 0 && (
+                  <span className="nib-mono rounded-full bg-warn-soft px-1 text-[10px] font-semibold text-warn">
+                    {paragraphAuditMaps.totalFlags}
+                  </span>
+                )}
               </button>
               <button
                 type="button"
@@ -1263,7 +1682,7 @@ export function StudioView() {
                 }`}
               >
                 <History className="h-3.5 w-3.5" />
-                <span>历史快照</span>
+                <span>快照</span>
                 {versions.length > 0 && (
                   <span className="nib-mono text-[10px] opacity-80">
                     {versions.length}
@@ -1276,6 +1695,7 @@ export function StudioView() {
               type="button"
               onClick={() => {
                 if (drawerTab === "briefing") void loadBriefing();
+                else if (drawerTab === "audit") void runLocalLint(activeChapter.id, false);
                 else if (drawerTab === "delta") void loadPendingDelta();
                 else void loadVersions();
               }}
@@ -1284,7 +1704,7 @@ export function StudioView() {
             >
               <RefreshCw
                 className={`h-3.5 w-3.5 ${
-                  briefingLoading || versionsLoading || deltaLoading
+                  briefingLoading || versionsLoading || deltaLoading || auditLoading
                     ? "animate-spin text-accent"
                     : ""
                 }`}
@@ -1511,6 +1931,8 @@ export function StudioView() {
                                   ? "bg-ok-soft text-ok"
                                   : slot.priority === "P3"
                                   ? "bg-warn-soft text-warn"
+                                  : slot.priority === "P7"
+                                  ? "bg-accent-soft/80 text-accent"
                                   : "bg-elevated text-ink-secondary"
                               }`}
                             >
@@ -1552,7 +1974,30 @@ export function StudioView() {
             </div>
           )}
 
-          {/* Tab 2: Memory Delta Review */}
+          {/* Tab 2: Quality Audit & Surgical Polish */}
+          {drawerTab === "audit" && (
+            <QualityAuditPanel
+              chapterId={activeChapter.id}
+              chapterHasContent={content.trim().length > 0}
+              audit={chapterAudit}
+              loading={auditLoading}
+              activeParagraphIndex={activeParagraphIndex}
+              polishingParagraphs={polishingParagraphs}
+              onAuditUpdated={setChapterAudit}
+              onDiffApplied={handleDiffAppliedResult}
+              onFocusParagraph={scrollToParagraph}
+              onEnsureSavedBeforeAudit={ensureSavedBeforeAudit}
+              onRunLocalLint={async () => {
+                const ok = await ensureSavedBeforeAudit();
+                if (ok) await runLocalLint(activeChapter.id, false);
+              }}
+              onRunSurgicalPolish={handleRunSurgicalPolish}
+              onStopSurgicalPolish={stopSurgicalPolish}
+              onNotify={notify}
+            />
+          )}
+
+          {/* Tab 3: Memory Delta Review */}
           {drawerTab === "delta" && (
             <DeltaReviewPanel
               chapterId={activeChapter.id}

@@ -86,7 +86,7 @@ func main() {
 	runShutdown()
 }
 
-// initRuntime 在 WhenReady 回调内打开并迁移本地 SQLite，装配全部 Phase 1/2 纯 Go 核心引擎。
+// initRuntime 在 WhenReady 回调内打开并迁移本地 SQLite，装配全部 Phase 1–3 纯 Go 核心引擎。
 func initRuntime(rt *app.Runtime, dbPath string) error {
 	st, err := store.Open(dbPath)
 	if err != nil {
@@ -96,8 +96,8 @@ func initRuntime(rt *app.Runtime, dbPath string) error {
 	storeExp := exporter.NewStoreExporter(st)
 	pipeExp := exporter.New()
 	llmClient := llm.NewClient()
-	comp := compiler.New(st, compiler.WithMemorySource(st))
-	runner := pipeline.New(st, comp, llmClient, pipeExp)
+	comp := compiler.New(st, compiler.WithMemorySource(st), compiler.WithStyleSource(st))
+	runner := pipeline.New(st, comp, llmClient, pipeExp, pipeline.WithStyleStore(st))
 	extractor := memory.NewExtractor(st, llmClient)
 
 	rt.Init(app.RuntimeDeps{
@@ -108,6 +108,8 @@ func initRuntime(rt *app.Runtime, dbPath string) error {
 		Pipeline:       runner,
 		MemoryStore:    st,
 		DeltaExtractor: extractor,
+		StyleStore:     st,
+		StyleEngine:    runner,
 	})
 	return nil
 }

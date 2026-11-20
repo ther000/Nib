@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -951,5 +952,355 @@ func TestPhase2MemoryEndToEndWorkflow(t *testing.T) {
 	}
 	if p6, ok := slotByPriority["P6"]; !ok || !strings.Contains(p6.Content, "破障丹") {
 		t.Fatalf("P6 slot missing FTS5 search snippet: %+v", p6)
+	}
+}
+
+func TestPhase3StyleAndDeaiEndToEndWorkflow(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "nib-phase3.db")
+	exportDir := filepath.Join(tmpDir, "exports-p3")
+
+	const (
+		rawSecretKey = "sk-phase3-style-key-5511c2d9"
+		criticModel  = "mock-critic-v1"
+		polishModel  = "mock-polish-v1"
+	)
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer "+rawSecretKey {
+			http.Error(w, `{"error":{"message":"unauthorized"}}`, http.StatusUnauthorized)
+			return
+		}
+
+		var body struct {
+			Model    string `json:"model"`
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+
+		var respJSON []byte
+		switch body.Model {
+		case criticModel:
+			respJSON, _ = json.Marshal(map[string]any{
+				"hook_passed":  false,
+				"hook_verdict": "章末落入鸡汤式说教感悟，未兑现突发危机钩子",
+				"critic_findings": []map[string]any{
+					{
+						"dimension":       "consistency",
+						"severity":        "error",
+						"paragraph_index": 1,
+						"title":           "动作与套话失真",
+						"detail":          "第 1 段连用嘴角勾起一抹弧度与眼神微眯，且忽略了左肩伤势限制。",
+						"suggestion":      "改为单手扣住玉瓶并转身隐入石门阴影。",
+					},
+					{
+						"dimension":       "hook",
+						"severity":        "error",
+						"paragraph_index": 2,
+						"title":           "章末鸡汤升华",
+						"detail":          "结尾使用“他明白真正的考验才刚刚开始”空洞总结。",
+						"suggestion":      "改为石门外传来血煞宗长老破空威压。",
+					},
+				},
+			})
+		case polishModel:
+			respJSON, _ = json.Marshal(map[string]any{
+				"diffs": []map[string]any{
+					{
+						"paragraph_index": 1,
+						"reason":          "剔除高频 AI 套话「嘴角勾起一抹弧度」「眼神微眯」",
+						"replacement":     "林渊指尖扣紧那枚微温玉瓶，侧耳听着廊道动静，转身掠入石室暗门。",
+					},
+					{
+						"paragraph_index": 2,
+						"reason":          "剔除章末鸡汤升华，兑现突发危机钩子",
+						"replacement":     "石门刚合拢半寸，百丈外骤然炸开一道血色神识，整座石窟碎石簌簌坠落。",
+					},
+				},
+			})
+		default:
+			http.Error(w, "unknown model", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+
+		payload, _ := json.Marshal(map[string]any{
+			"choices": []map[string]any{
+				{"delta": map[string]string{"content": string(respJSON)}},
+			},
+		})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", payload)
+		usagePayload, _ := json.Marshal(map[string]any{
+			"choices": []map[string]any{{"finish_reason": "stop"}},
+			"usage":   map[string]int{"prompt_tokens": 260, "completion_tokens": 120, "total_tokens": 380},
+		})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", usagePayload)
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer mockServer.Close()
+
+	// 1. 真实装配 SQLite (001+002+003) + Compiler(WithMemorySource+WithStyleSource) + Pipeline(WithStyleStore) + Services
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open failed: %v", err)
+	}
+	llmClient := llm.NewClient(llm.WithHTTPClient(mockServer.Client()))
+	comp := compiler.New(st, compiler.WithMemorySource(st), compiler.WithStyleSource(st))
+	runner := pipeline.New(st, comp, llmClient, exporter.New(), pipeline.WithStyleStore(st))
+	extractor := memory.NewExtractor(st, llmClient)
+
+	rt := app.NewRuntime()
+	rt.Init(app.RuntimeDeps{
+		Store:          st,
+		Exporter:       exporter.NewStoreExporter(st),
+		LLM:            llmClient,
+		Compiler:       comp,
+		Pipeline:       runner,
+		MemoryStore:    st,
+		DeltaExtractor: extractor,
+		StyleStore:     st,
+		StyleEngine:    runner,
+	})
+	defer func() {
+		if err := rt.Close(); err != nil {
+			t.Errorf("rt.Close failed: %v", err)
+		}
+	}()
+
+	lib := app.NewLibraryService(rt)
+	settings := app.NewSettingsService(rt)
+	studio := app.NewStudioService(rt)
+	styleSvc := app.NewStyleService(rt)
+
+	// 2. 验证 003 迁移预置的 19 条全局 deai_rules (book_id=0)：禁止删除全局规则，但允许开关状态
+	globalRules, err := styleSvc.ListDeaiRules(ctx, 0)
+	if err != nil {
+		t.Fatalf("ListDeaiRules(0) failed: %v", err)
+	}
+	if len(globalRules) != 19 {
+		t.Fatalf("expected 19 seeded global deai_rules, got %d", len(globalRules))
+	}
+	firstGlobal := globalRules[0]
+	if err := styleSvc.DeleteDeaiRule(ctx, firstGlobal.ID); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("expected ErrValidation when deleting global rule, got %v", err)
+	}
+	toggledRule, err := styleSvc.UpsertDeaiRule(ctx, domain.UpsertDeaiRuleInput{
+		ID:            firstGlobal.ID,
+		BookID:        0,
+		Category:      firstGlobal.Category,
+		Pattern:       firstGlobal.Pattern,
+		IsRegex:       firstGlobal.IsRegex,
+		Severity:      firstGlobal.Severity,
+		MaxPerChapter: firstGlobal.MaxPerChapter,
+		Hint:          firstGlobal.Hint,
+		Enabled:       false,
+	})
+	if err != nil || toggledRule.Enabled {
+		t.Fatalf("expected global rule toggled to Enabled=false, got %+v err=%v", toggledRule, err)
+	}
+	// 恢复启用以免影响后续套话检出
+	_, _ = styleSvc.UpsertDeaiRule(ctx, domain.UpsertDeaiRuleInput{
+		ID:            firstGlobal.ID,
+		BookID:        0,
+		Category:      firstGlobal.Category,
+		Pattern:       firstGlobal.Pattern,
+		IsRegex:       firstGlobal.IsRegex,
+		Severity:      firstGlobal.Severity,
+		MaxPerChapter: firstGlobal.MaxPerChapter,
+		Hint:          firstGlobal.Hint,
+		Enabled:       true,
+	})
+
+	// 3. 创建书籍、卷、章节与战斗节拍，运行 ExtractStyleProfile 并验证 Slot P7 装配
+	book, err := lib.CreateBook(ctx, domain.CreateBookInput{
+		Title:     "剑起天渊",
+		Genre:     domain.GenreXuanhuan,
+		Premise:   "散修夺宝破局。",
+		ExportDir: exportDir,
+	})
+	if err != nil {
+		t.Fatalf("CreateBook failed: %v", err)
+	}
+	vol, err := lib.UpsertVolume(ctx, domain.UpsertVolumeInput{
+		BookID: book.ID,
+		Seq:    1,
+		Title:  "青云起",
+	})
+	if err != nil {
+		t.Fatalf("UpsertVolume failed: %v", err)
+	}
+	ch1, err := lib.CreateChapter(ctx, domain.CreateChapterInput{
+		BookID:     book.ID,
+		VolumeID:   vol.ID,
+		Title:      "石室夺丹",
+		EmotionTag: domain.EmotionBurst,
+		HookType:   domain.HookCrisis,
+		HookNote:   "百丈外血色神识降临。",
+	})
+	if err != nil {
+		t.Fatalf("CreateChapter failed: %v", err)
+	}
+	if _, err := lib.ReplaceBeats(ctx, ch1.ID, []domain.Beat{
+		{Stage: domain.BeatStageBurst, Summary: "林渊斩杀王执事夺取玉瓶。", TargetWords: 600},
+		{Stage: domain.BeatStageHook, Summary: "门外强敌神识突然扫过石室。", TargetWords: 300},
+	}); err != nil {
+		t.Fatalf("ReplaceBeats failed: %v", err)
+	}
+
+	sampleTexts := []string{
+		"剑锋擦过石壁，火星迸溅三尺。\n\n“想走？”林渊反手拧断铁锁，短剑直刺对方咽喉。\n\n血光一闪，黑衣执事踉跄跌退，撞碎丹架。",
+	}
+	profile, err := styleSvc.ExtractStyleProfile(ctx, book.ID, sampleTexts)
+	if err != nil {
+		t.Fatalf("ExtractStyleProfile failed: %v", err)
+	}
+	if profile.BookID != book.ID || profile.AvgSentenceChars <= 0 || profile.MaxParagraphChars <= 0 {
+		t.Fatalf("unexpected extracted StyleProfile: %+v", profile)
+	}
+	samples, err := styleSvc.ListStyleSamples(ctx, book.ID, "")
+	if err != nil || len(samples) == 0 {
+		t.Fatalf("expected style samples persisted after ExtractStyleProfile, len=%d err=%v", len(samples), err)
+	}
+
+	briefing, err := studio.PreviewBriefing(ctx, ch1.ID, domain.BriefingOptions{})
+	if err != nil {
+		t.Fatalf("PreviewBriefing failed: %v", err)
+	}
+	var foundP7 bool
+	for _, sl := range briefing.Slots {
+		if sl.Priority == "P7" || sl.Key == "p7_style_dna" {
+			foundP7 = true
+			if !strings.Contains(sl.Content, "剑锋擦过石壁") {
+				t.Fatalf("P7 slot missing extracted combat sample anchor: %s", sl.Content)
+			}
+		}
+	}
+	if !foundP7 {
+		t.Fatalf("PreviewBriefing missing Slot P7 (p7_style_dna)")
+	}
+
+	// 4. 保存含典型 AI 套话与鸡汤结尾的 3 段草稿，执行 0 成本 LintChapterLocal
+	para0 := "残阵灵光骤灭，焦糊味混着血腥气在石室散开。"
+	para1 := "林渊嘴角勾起一抹弧度，眼神微眯，心中涌起一股难以言喻的喜悦。"
+	para2 := "这一刻他意识到，真正的考验才刚刚开始，命运的齿轮开始转动。"
+	initialContent := strings.Join([]string{para0, para1, para2}, "\n\n")
+
+	if _, err := lib.SaveChapterDraft(ctx, domain.SaveChapterDraftInput{
+		ChapterID: ch1.ID,
+		Content:   initialContent,
+		Status:    domain.ChapterStatusReviewing,
+	}); err != nil {
+		t.Fatalf("SaveChapterDraft failed: %v", err)
+	}
+
+	lintAudit, err := styleSvc.LintChapterLocal(ctx, ch1.ID)
+	if err != nil {
+		t.Fatalf("LintChapterLocal failed: %v", err)
+	}
+	if len(lintAudit.LintIssues) < 3 || lintAudit.DeaiScore >= 100 {
+		t.Fatalf("expected >=3 lint issues and score < 100, got issues=%d score=%d", len(lintAudit.LintIssues), lintAudit.DeaiScore)
+	}
+	scoreBeforePolish := lintAudit.DeaiScore
+
+	// 5. 配置 critic 与 polish 路由，执行 RunCriticAudit 与 GenerateSurgicalDiffs
+	prov, err := settings.UpsertProvider(ctx, domain.UpsertProviderInput{
+		Name:     "MockStyleLLM",
+		Protocol: domain.ProtocolOpenAICompat,
+		BaseURL:  mockServer.URL + "/v1",
+		APIKey:   rawSecretKey,
+		Models:   []string{criticModel, polishModel},
+		Enabled:  true,
+	})
+	if err != nil {
+		t.Fatalf("UpsertProvider failed: %v", err)
+	}
+	pid := prov.ID
+	_, _ = settings.SaveModelRoute(ctx, domain.ModelRoute{
+		Stage:       domain.StageCritic,
+		ProviderID:  &pid,
+		ModelName:   criticModel,
+		Temperature: 0.2,
+		MaxTokens:   2048,
+	})
+	_, _ = settings.SaveModelRoute(ctx, domain.ModelRoute{
+		Stage:       domain.StagePolish,
+		ProviderID:  &pid,
+		ModelName:   polishModel,
+		Temperature: 0.55,
+		MaxTokens:   2048,
+	})
+
+	criticAudit, err := styleSvc.RunCriticAudit(ctx, ch1.ID)
+	if err != nil {
+		t.Fatalf("RunCriticAudit failed: %v", err)
+	}
+	if criticAudit.HookPassed || len(criticAudit.CriticFindings) != 2 {
+		t.Fatalf("unexpected CriticAudit: hookPassed=%v findings=%d", criticAudit.HookPassed, len(criticAudit.CriticFindings))
+	}
+
+	diffAudit, err := styleSvc.GenerateSurgicalDiffs(ctx, ch1.ID, nil)
+	if err != nil {
+		t.Fatalf("GenerateSurgicalDiffs failed: %v", err)
+	}
+	if len(diffAudit.Diffs) != 2 {
+		t.Fatalf("expected 2 surgical diffs, got %d", len(diffAudit.Diffs))
+	}
+
+	// 6. 逐条采纳手术润色建议：验证好段落 para0 毫发无伤、surgical_polish 快照已归档、DeaiScore 显著提升、磁盘 .md 已同步
+	for _, d := range diffAudit.Diffs {
+		applyRes, err := styleSvc.ApplySurgicalDiff(ctx, domain.ApplySurgicalDiffInput{
+			ChapterID: ch1.ID,
+			DiffID:    d.ID,
+			Accept:    true,
+		})
+		if err != nil {
+			t.Fatalf("ApplySurgicalDiff(%s) failed: %v", d.ID, err)
+		}
+		if !strings.HasPrefix(applyRes.Chapter.Content, para0) {
+			t.Fatalf("surgical diff corrupted untouched paragraph 0: %q", applyRes.Chapter.Content)
+		}
+	}
+
+	finalAudit, err := styleSvc.GetChapterAudit(ctx, ch1.ID)
+	if err != nil {
+		t.Fatalf("GetChapterAudit failed: %v", err)
+	}
+	if finalAudit.DeaiScore <= scoreBeforePolish || len(finalAudit.LintIssues) != 0 {
+		t.Fatalf("expected clean prose & improved score after surgical polish, got score %d -> %d, issues=%+v",
+			scoreBeforePolish, finalAudit.DeaiScore, finalAudit.LintIssues)
+	}
+
+	versions, err := studio.ListChapterVersions(ctx, ch1.ID)
+	if err != nil || len(versions) == 0 {
+		t.Fatalf("expected chapter_versions archived before surgical polish, err=%v len=%d", err, len(versions))
+	}
+	if versions[0].Source != domain.VersionSourceSurgicalPolish {
+		t.Fatalf("newest version source = %q, want %q", versions[0].Source, domain.VersionSourceSurgicalPolish)
+	}
+
+	expectedMD := filepath.Join(exportDir, "剑起天渊", "第01卷_青云起", "第001章_石室夺丹.md")
+	mdBytes, err := os.ReadFile(expectedMD)
+	if err != nil {
+		t.Fatalf("expected exported markdown at %q: %v", expectedMD, err)
+	}
+	mdText := string(mdBytes)
+	if strings.Contains(mdText, "嘴角勾起一抹弧度") || !strings.Contains(mdText, "指尖扣紧那枚微温玉瓶") {
+		t.Fatalf("exported markdown not updated with surgical polish replacement:\n%s", mdText)
 	}
 }

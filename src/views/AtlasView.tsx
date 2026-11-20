@@ -9,6 +9,7 @@ import {
   Plus,
   Search,
   ShieldAlert,
+  Sparkles,
   Trash2,
   Users,
   X,
@@ -34,6 +35,7 @@ import {
 } from "../lib/constants";
 import { ForeshadowingBoard } from "../components/atlas/ForeshadowingBoard";
 import { ArcSummaryBoard } from "../components/atlas/ArcSummaryBoard";
+import { StyleRulesBoard } from "../components/atlas/StyleRulesBoard";
 
 interface CustomAttrRow {
   localKey: string;
@@ -472,6 +474,7 @@ export function AtlasView() {
       badgeTone: overdueForeshadowCount > 0 ? "danger" : "muted",
     },
     { id: "summaries", label: "弧线摘要", Icon: BookMarked },
+    { id: "style", label: "文风与去AI味规则", Icon: Sparkles },
   ];
 
   return (
@@ -830,6 +833,9 @@ export function AtlasView() {
       {atlasSubTab === "summaries" && (
         <ArcSummaryBoard latestChapterSeq={latestChapterSeq} />
       )}
+
+      {/* Sub-tab 4: 文风与去AI味规则 */}
+      {atlasSubTab === "style" && <StyleRulesBoard />}
 
       {/* Slide-Over Detail Editor for Entities (with Chronological State Events History) */}
       {editor && (

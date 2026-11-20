@@ -662,3 +662,141 @@ func TestCompilePhase2SummaryPyramidTrimmingAndForeshadowBudget(t *testing.T) {
 		t.Fatalf("oldest chapter causal summary should have been trimmed first: %s", p5.Content)
 	}
 }
+
+type fakeStyleDataSource struct {
+	*fakeMemoryDataSource
+	profile          domain.StyleProfile
+	samples          []domain.StyleSample
+	rules            []domain.DeaiRule
+	lastQueriedScene domain.SceneType
+}
+
+func (f *fakeStyleDataSource) GetStyleProfile(_ context.Context, _ int64) (domain.StyleProfile, error) {
+	return f.profile, nil
+}
+
+func (f *fakeStyleDataSource) ListStyleSamples(_ context.Context, _ int64, sceneType domain.SceneType) ([]domain.StyleSample, error) {
+	f.lastQueriedScene = sceneType
+	out := make([]domain.StyleSample, 0, len(f.samples))
+	for _, s := range f.samples {
+		if sceneType != "" && s.SceneType != sceneType {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+func (f *fakeStyleDataSource) ListDeaiRules(_ context.Context, _ int64) ([]domain.DeaiRule, error) {
+	return f.rules, nil
+}
+
+func newPhase3Fixture() *fakeStyleDataSource {
+	p2 := newPhase2Fixture()
+	return &fakeStyleDataSource{
+		fakeMemoryDataSource: p2,
+		profile: domain.StyleProfile{
+			ID:                  1,
+			BookID:              1,
+			AvgSentenceChars:    16.5,
+			MaxParagraphChars:   120,
+			DialogueRatioMin:    0.30,
+			DialogueRatioMax:    0.50,
+			PovRule:             domain.PovThirdLimited,
+			ToneDirectives:      "冷峻克制，动作与招式克制优先于心理描写",
+			ForbiddenTropesNote: "严禁嘴角勾起与章末鸡汤",
+		},
+		samples: []domain.StyleSample{
+			{
+				ID:        1,
+				BookID:    1,
+				SceneType: domain.SceneCombat,
+				Title:     "雨巷反杀锚点一",
+				Excerpt:   "【战斗样章1】铁剑贴着阴雷珠擦过，火星溅入雨水，林渊借反震之力横移三尺，剑脊重重拍碎阵旗。" + strings.Repeat("剑锋破空，招式狠准。", 20),
+			},
+			{
+				ID:        2,
+				BookID:    1,
+				SceneType: domain.SceneCombat,
+				Title:     "残阵斩敌锚点二",
+				Excerpt:   "【战斗样章2】三道阵纹同时亮起，王煞左脚刚踏入死门，护体罡气便被地底引出的阴雷撕开一道缺口。" + strings.Repeat("雷光炸裂，寸步不让。", 20),
+			},
+			{
+				ID:        3,
+				BookID:    1,
+				SceneType: domain.SceneDialogue,
+				Title:     "茶楼博弈锚点",
+				Excerpt:   "【对话样章】“三百灵石买你一条退路。”他放下茶盏。",
+			},
+		},
+		rules: []domain.DeaiRule{
+			{ID: 1, BookID: 0, Category: domain.DeaiCategoryCliche, Pattern: "嘴角勾起", Severity: domain.LintSeverityError, MaxPerChapter: 0, Enabled: true},
+			{ID: 2, BookID: 1, Category: domain.DeaiCategoryCliche, Pattern: "恐怖如斯", Severity: domain.LintSeverityError, MaxPerChapter: 0, Enabled: true},
+		},
+	}
+}
+
+func TestCompilePhase3StyleDNASceneMatchingAndTrimming(t *testing.T) {
+	ds := newPhase3Fixture()
+	comp := New(ds) // 自动通过类型断言激活 MemoryDataSource + StyleDataSource
+
+	brief, err := comp.Compile(context.Background(), 100, domain.BriefingOptions{})
+	if err != nil {
+		t.Fatalf("Phase 3 Compile failed: %v", err)
+	}
+
+	// 本章节拍为“引动残阵雷纹废掉王煞护体罡气并一剑绝杀”，应自动推断主导场景为 combat。
+	if ds.lastQueriedScene != domain.SceneCombat {
+		t.Fatalf("expected dominant scene inferred as combat, got %q", ds.lastQueriedScene)
+	}
+
+	var p7 domain.BriefingSlot
+	foundP7 := false
+	sumEst := 0
+	for _, s := range brief.Slots {
+		sumEst += s.TokenEst
+		if s.Key == "p7_style_dna" {
+			p7 = s
+			foundP7 = true
+		}
+	}
+	if !foundP7 {
+		t.Fatalf("expected p7_style_dna slot in briefing slots")
+	}
+	if brief.TotalTokenEst != sumEst {
+		t.Fatalf("TotalTokenEst (%d) != sum of slots (%d)", brief.TotalTokenEst, sumEst)
+	}
+	if p7.Truncated {
+		t.Fatalf("expected P7 not truncated under default 12000 budget")
+	}
+	for _, must := range []string{"平均句长约 16", "单段上限 120 字", "冷峻克制", "嘴角勾起", "恐怖如斯", "【战斗样章1】", "【战斗样章2】"} {
+		if !strings.Contains(p7.Content, must) {
+			t.Errorf("P7 content missing %q:\n%s", must, p7.Content)
+		}
+	}
+	if strings.Contains(p7.Content, "【对话样章】") {
+		t.Errorf("P7 should only include matching combat scene samples")
+	}
+
+	// 验证预算收紧时 P7 自动从 2 段样章缩减为 1 段样章（遵循 docs/03 §1.3 裁剪策略）。
+	preP7Tokens := brief.TotalTokenEst - p7.TokenEst
+	oneSampleBudget := preP7Tokens + (p7.TokenEst * 2 / 3)
+	tightBrief, err := comp.Compile(context.Background(), 100, domain.BriefingOptions{
+		TokenBudget: oneSampleBudget,
+	})
+	if err != nil {
+		t.Fatalf("tight Phase 3 Compile failed: %v", err)
+	}
+	var tightP7 domain.BriefingSlot
+	for _, s := range tightBrief.Slots {
+		if s.Key == "p7_style_dna" {
+			tightP7 = s
+		}
+	}
+	if !tightP7.Truncated {
+		t.Fatalf("expected P7 Truncated=true when shrinking from 2 samples to 1")
+	}
+	if !strings.Contains(tightP7.Content, "【战斗样章1】") || strings.Contains(tightP7.Content, "【战斗样章2】") {
+		t.Fatalf("expected P7 shrunk to 1 sample excerpt, got:\n%s", tightP7.Content)
+	}
+}

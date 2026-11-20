@@ -2,20 +2,25 @@ import type {
   ArcSummaryLevel,
   BeatStage,
   ChapterStatus,
+  CriticDimension,
+  DeaiCategory,
   DeltaForeshadowAction,
   EmotionTag,
   EntityKind,
   Foreshadowing,
   ForeshadowingStatus,
   HookType,
+  LintSeverity,
   PipelineStage,
+  PovRule,
   ProviderProtocol,
+  SceneType,
   StateEventStatus,
   VersionSource,
 } from "../mygo";
 
 export type WorkspaceTab = "architect" | "studio" | "atlas";
-export type AtlasSubTab = "entities" | "foreshadowings" | "summaries";
+export type AtlasSubTab = "entities" | "foreshadowings" | "summaries" | "style";
 
 export interface OptionMeta<T extends string = string> {
   value: T;
@@ -156,6 +161,74 @@ export const STATE_EVENT_STATUS_LABELS: Record<StateEventStatus, string> = {
   reverted: "已撤回",
 };
 
+export const SCENE_TYPES: OptionMeta<SceneType>[] = [
+  { value: "combat", label: "战斗交锋", shortLabel: "战斗" },
+  { value: "dialogue", label: "博弈对话", shortLabel: "对话" },
+  { value: "daily", label: "过渡日常", shortLabel: "日常" },
+  { value: "suspense", label: "探秘悬念", shortLabel: "悬念" },
+];
+
+export const DEAI_CATEGORIES: OptionMeta<DeaiCategory>[] = [
+  { value: "cliche", label: "高频套话", shortLabel: "套话" },
+  { value: "structure", label: "句式结构病", shortLabel: "结构" },
+  { value: "formatting", label: "排版与推进病", shortLabel: "排版" },
+];
+
+export const LINT_SEVERITIES: Array<
+  OptionMeta<LintSeverity> & { badgeClass: string }
+> = [
+  {
+    value: "error",
+    label: "严重",
+    badgeClass: "bg-danger-soft text-danger border-danger/35",
+  },
+  {
+    value: "warn",
+    label: "警告",
+    badgeClass: "bg-warn-soft text-warn border-warn/35",
+  },
+  {
+    value: "info",
+    label: "提示",
+    badgeClass: "bg-elevated text-ink-secondary border-border-subtle",
+  },
+];
+
+export const POV_RULES: OptionMeta<PovRule>[] = [
+  { value: "third_limited", label: "第三人称限知" },
+  { value: "first_person", label: "第一人称" },
+  { value: "third_omniscient", label: "第三人称全知" },
+];
+
+export const CRITIC_DIMENSIONS: Array<
+  OptionMeta<CriticDimension> & { badgeClass: string }
+> = [
+  {
+    value: "consistency",
+    label: "防吃书一致性",
+    shortLabel: "防吃书",
+    badgeClass: "bg-danger-soft text-danger border-danger/35",
+  },
+  {
+    value: "poison_point",
+    label: "男频毒点排查",
+    shortLabel: "防毒",
+    badgeClass: "bg-warn-soft text-warn border-warn/35",
+  },
+  {
+    value: "beat_coverage",
+    label: "节拍落点核验",
+    shortLabel: "节拍",
+    badgeClass: "bg-accent-soft text-accent border-accent/35",
+  },
+  {
+    value: "hook",
+    label: "章末钩子强检",
+    shortLabel: "钩子",
+    badgeClass: "bg-ok-soft text-ok border-ok/35",
+  },
+];
+
 export const PIPELINE_STAGES: Array<{
   stage: PipelineStage;
   label: string;
@@ -290,6 +363,47 @@ export function parseKeywordList(raw: string): string[] {
     }
   }
   return out;
+}
+
+export function getSceneTypeLabel(scene: SceneType): string {
+  return SCENE_TYPES.find((s) => s.value === scene)?.label ?? scene;
+}
+
+export function getDeaiCategoryLabel(cat: DeaiCategory): string {
+  return DEAI_CATEGORIES.find((c) => c.value === cat)?.label ?? cat;
+}
+
+export function getLintSeverityMeta(sev: LintSeverity) {
+  return (
+    LINT_SEVERITIES.find((s) => s.value === sev) ?? {
+      value: sev,
+      label: sev || "警告",
+      badgeClass: "bg-warn-soft text-warn border-warn/35",
+    }
+  );
+}
+
+export function getCriticDimensionMeta(dim: CriticDimension) {
+  return (
+    CRITIC_DIMENSIONS.find((d) => d.value === dim) ?? {
+      value: dim,
+      label: dim || "审校",
+      shortLabel: dim || "审校",
+      badgeClass: "bg-elevated text-ink-secondary border-border-subtle",
+    }
+  );
+}
+
+/**
+ * Splits chapter prose into non-empty trimmed paragraphs [P0..PN],
+ * matching Go's linter.SplitParagraphs 100%.
+ */
+export function splitParagraphs(text: string): string[] {
+  if (!text) return [];
+  return text
+    .split(/\r?\n+/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
 }
 
 export function getEmotionColorClass(tag: EmotionTag): string {

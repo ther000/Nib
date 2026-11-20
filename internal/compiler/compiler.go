@@ -20,10 +20,12 @@ const (
 	defaultP4Budget       = 1600
 	defaultP5Budget       = 2800
 	defaultP6Budget       = 1000
+	defaultP7Budget       = 1200
 	prevChapter1TailRunes = 1200
 	prevChapter2TailRunes = 400
 	recentCausalLimit     = 15
 	maxSearchHits         = 3
+	maxStyleSampleAnchors = 2
 )
 
 // DataSource 定义上下文编译器所需的最小只读仓储契约，解耦 internal/store 实现细节。
@@ -47,6 +49,13 @@ type MemoryDataSource interface {
 	SearchMemory(ctx context.Context, bookID int64, query string, maxChapterSeq int) ([]domain.MemorySearchHit, error)
 }
 
+// StyleDataSource 定义 Phase 3 文风指纹、场景样章锚点与去 AI 味黑名单规则的只读契约（直接由 *store.Store 满足）。
+type StyleDataSource interface {
+	GetStyleProfile(ctx context.Context, bookID int64) (domain.StyleProfile, error)
+	ListStyleSamples(ctx context.Context, bookID int64, sceneType domain.SceneType) ([]domain.StyleSample, error)
+	ListDeaiRules(ctx context.Context, bookID int64) ([]domain.DeaiRule, error)
+}
+
 // Option 用于定制 Compiler 可选扩展依赖。
 type Option func(*Compiler)
 
@@ -59,17 +68,30 @@ func WithMemorySource(mem MemoryDataSource) Option {
 	}
 }
 
-// Compiler 负责将书卷设定、世界铁律、节拍卡、实体快照、伏笔、前文衔接、摘要金字塔与精准检索编译为透明的作战简报。
-type Compiler struct {
-	src DataSource
-	mem MemoryDataSource
+// WithStyleSource 显式注入 Phase 3 文风与去 AI 味规则数据源。
+func WithStyleSource(style StyleDataSource) Option {
+	return func(c *Compiler) {
+		if style != nil {
+			c.style = style
+		}
+	}
 }
 
-// New 创建上下文编译器实例。若 src 本身实现了 MemoryDataSource，将自动激活 Phase 2 全槽位编译。
+// Compiler 负责将书卷设定、世界铁律、节拍卡、实体快照、伏笔、前文衔接、摘要金字塔、精准检索与文风样章编译为透明的作战简报。
+type Compiler struct {
+	src   DataSource
+	mem   MemoryDataSource
+	style StyleDataSource
+}
+
+// New 创建上下文编译器实例。若 src 本身实现了 MemoryDataSource 或 StyleDataSource，将自动激活对应槽位。
 func New(src DataSource, opts ...Option) *Compiler {
 	c := &Compiler{src: src}
 	if ms, ok := src.(MemoryDataSource); ok {
 		c.mem = ms
+	}
+	if ss, ok := src.(StyleDataSource); ok {
+		c.style = ss
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -360,17 +382,43 @@ func (c *Compiler) Compile(ctx context.Context, chapterID int64, opts domain.Bri
 		Truncated:   p6Truncated,
 		Required:    false,
 	}
+	remaining = max(0, remaining-p6Est)
 
-	slots := buildOrderedSlots(c.mem != nil, p0Slot, p1Slot, p2Slot, p3Slot, p4Slot, p5Slot, p6Slot)
+	// P7（文风）：Style DNA 量化指标 + 去 AI 味黑名单要点 + 匹配当前主导节拍场景的 1~2 段样章锚点。
+	p7Cap := min(scaledBudget(totalBudget, defaultP7Budget), remaining)
+	var p7Content string
+	var p7Truncated bool
+	if c.style != nil {
+		p7Content, p7Truncated, err = c.compileP7StyleSlot(ctx, book.ID, chap, beats, p7Cap)
+		if err != nil {
+			return domain.Briefing{}, fmt.Errorf("compile P7 style slot: %w", err)
+		}
+	}
+	p7Est := EstimateTokens(p7Content)
+	if p7Truncated {
+		warnings = append(warnings, "P7 文风指纹与场景样章已按预算缩减样章锚点数量")
+	}
+	p7Slot := domain.BriefingSlot{
+		Key:         "p7_style_dna",
+		Priority:    "P7",
+		Title:       "文风指纹与场景样章",
+		Content:     p7Content,
+		TokenBudget: p7Cap,
+		TokenEst:    p7Est,
+		Truncated:   p7Truncated,
+		Required:    false,
+	}
+
+	slots := buildOrderedSlots(c.mem != nil, c.style != nil, p0Slot, p1Slot, p2Slot, p3Slot, p4Slot, p5Slot, p6Slot, p7Slot)
 	totalEst := 0
 	for _, s := range slots {
 		totalEst += s.TokenEst
 	}
 
 	// 装配最终发送给模型的 SystemPrompt（P0）与 UserPrompt：
-	// 长程设定与记忆（P2 -> P3 -> P5 -> P6）→ 紧邻前文尾部（P4）→ 本章目标与节拍（P1，放末尾强化遵循）。
-	userSections := make([]string, 0, 6)
-	for _, sec := range []string{p2Content, p3Content, p5Content, p6Content, p4Content, p1Content} {
+	// 长程设定与记忆（P2 -> P3 -> P5 -> P6 -> P7）→ 紧邻前文尾部（P4）→ 本章目标与节拍（P1，放末尾强化遵循）。
+	userSections := make([]string, 0, 7)
+	for _, sec := range []string{p2Content, p3Content, p5Content, p6Content, p7Content, p4Content, p1Content} {
 		if sec != "" {
 			userSections = append(userSections, sec)
 		}
@@ -394,15 +442,22 @@ func (c *Compiler) Compile(ctx context.Context, chapterID int64, opts domain.Bri
 
 func buildOrderedSlots(
 	hasMemory bool,
-	p0, p1, p2, p3, p4, p5, p6 domain.BriefingSlot,
+	hasStyle bool,
+	p0, p1, p2, p3, p4, p5, p6, p7 domain.BriefingSlot,
 ) []domain.BriefingSlot {
+	if hasMemory && hasStyle {
+		return []domain.BriefingSlot{p0, p1, p2, p3, p4, p5, p6, p7}
+	}
 	if hasMemory {
 		return []domain.BriefingSlot{p0, p1, p2, p3, p4, p5, p6}
 	}
-	// 无 MemoryDataSource 的纯 Phase 1 模式下保留核心槽位（若有因果摘要则附带 P5）。
+	// 无 MemoryDataSource 的纯 Phase 1 模式下保留核心槽位（若有因果摘要则附带 P5，若有 StyleDataSource 则附带 P7）。
 	slots := []domain.BriefingSlot{p0, p1, p2, p4}
 	if p5.Content != "" || p5.Truncated {
 		slots = append(slots, p5)
+	}
+	if hasStyle {
+		slots = append(slots, p7)
 	}
 	return slots
 }
@@ -1270,4 +1325,233 @@ func sortedMapKeys(m map[string]string) []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// InferDominantScene 根据章节节拍卡与情绪/钩子特征推断本章主导场景类型（combat / dialogue / suspense / daily）。
+func InferDominantScene(beats []domain.Beat, chap domain.Chapter) domain.SceneType {
+	scores := map[domain.SceneType]int{
+		domain.SceneCombat:   0,
+		domain.SceneDialogue: 0,
+		domain.SceneSuspense: 0,
+		domain.SceneDaily:    1,
+	}
+
+	switch chap.EmotionTag {
+	case domain.EmotionBurst:
+		scores[domain.SceneCombat] += 3
+	case domain.EmotionTurn, domain.EmotionSuppress:
+		scores[domain.SceneDialogue] += 2
+	case domain.EmotionSetup, domain.EmotionHarvest:
+		scores[domain.SceneDaily] += 2
+	}
+	if chap.HookType == domain.HookMystery || chap.HookType == domain.HookCrisis {
+		scores[domain.SceneSuspense] += 2
+	}
+
+	combatWords := []string{"战", "杀", "斩", "剑", "拳", "雷", "阵", "交手", "反杀", "决战", "搏杀", "击溃", "轰", "死战"}
+	dialogueWords := []string{"谈判", "对峙", "交锋", "试探", "嘲讽", "拍卖", "赌", "合同", "报价", "质问", "商议", "博弈", "当众"}
+	suspenseWords := []string{"密库", "线索", "异象", "诡异", "潜入", "追踪", "暗流", "禁制", "秘密", "疑点", "调查", "窥探"}
+	dailyWords := []string{"清点", "休整", "日常", "闭关", "赶路", "坊市", "盘点", "落袋"}
+
+	for _, b := range beats {
+		if b.Stage == domain.BeatStageBurst {
+			scores[domain.SceneCombat] += 2
+		}
+		text := b.Summary + " " + b.ConflictNote
+		for _, kw := range combatWords {
+			if strings.Contains(text, kw) {
+				scores[domain.SceneCombat] += 3
+			}
+		}
+		for _, kw := range dialogueWords {
+			if strings.Contains(text, kw) {
+				scores[domain.SceneDialogue] += 3
+			}
+		}
+		for _, kw := range suspenseWords {
+			if strings.Contains(text, kw) {
+				scores[domain.SceneSuspense] += 3
+			}
+		}
+		for _, kw := range dailyWords {
+			if strings.Contains(text, kw) {
+				scores[domain.SceneDaily] += 2
+			}
+		}
+	}
+
+	order := []domain.SceneType{
+		domain.SceneCombat,
+		domain.SceneDialogue,
+		domain.SceneSuspense,
+		domain.SceneDaily,
+	}
+	best := domain.SceneDaily
+	bestScore := -1
+	for _, sc := range order {
+		if scores[sc] > bestScore {
+			bestScore = scores[sc]
+			best = sc
+		}
+	}
+	return best
+}
+
+func (c *Compiler) compileP7StyleSlot(
+	ctx context.Context,
+	bookID int64,
+	chap domain.Chapter,
+	beats []domain.Beat,
+	budget int,
+) (string, bool, error) {
+	profile, err := c.style.GetStyleProfile(ctx, bookID)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			profile = domain.DefaultStyleProfile(bookID)
+		} else {
+			return "", false, err
+		}
+	}
+
+	rules, err := c.style.ListDeaiRules(ctx, bookID)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		return "", false, err
+	}
+
+	dominantScene := InferDominantScene(beats, chap)
+	samples, err := c.style.ListStyleSamples(ctx, bookID, dominantScene)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		return "", false, err
+	}
+	if len(samples) == 0 {
+		// 若当前主导场景暂无专属样章，回退加载该书全场景样章。
+		samples, _ = c.style.ListStyleSamples(ctx, bookID, "")
+	}
+	if len(samples) > maxStyleSampleAnchors {
+		samples = samples[:maxStyleSampleAnchors]
+	}
+
+	content, truncated := buildP7Content(profile, rules, dominantScene, samples, budget)
+	return content, truncated, nil
+}
+
+func buildP7Content(
+	profile domain.StyleProfile,
+	rules []domain.DeaiRule,
+	dominantScene domain.SceneType,
+	samples []domain.StyleSample,
+	budget int,
+) (string, bool) {
+	const header = "【Style DNA 文风指纹与场景样章锚点】\n"
+	if budget <= EstimateTokens(header) {
+		return "", true
+	}
+
+	avgSent := profile.AvgSentenceChars
+	if avgSent <= 0 {
+		avgSent = domain.DefaultAvgSentenceChars
+	}
+	maxPara := profile.MaxParagraphChars
+	if maxPara <= 0 {
+		maxPara = domain.DefaultMaxParagraphChars
+	}
+	dlgMin := profile.DialogueRatioMin
+	dlgMax := profile.DialogueRatioMax
+	if dlgMax <= 0 {
+		dlgMin = domain.DefaultDialogueRatioMin
+		dlgMax = domain.DefaultDialogueRatioMax
+	}
+	pov := profile.PovRule
+	if !pov.Valid() {
+		pov = domain.PovThirdLimited
+	}
+
+	var dnaBuilder strings.Builder
+	dnaBuilder.WriteString(header)
+	fmt.Fprintf(
+		&dnaBuilder,
+		"量化文风约束：平均句长约 %.0f 字｜单段上限 %d 字｜对话占比 %.0f%%~%.0f%%｜视角：%s（%s）\n",
+		avgSent, maxPara, dlgMin*100, dlgMax*100, pov.Label(), pov,
+	)
+	if strings.TrimSpace(profile.ToneDirectives) != "" {
+		fmt.Fprintf(&dnaBuilder, "叙事语调指令：%s\n", strings.TrimSpace(profile.ToneDirectives))
+	}
+	if strings.TrimSpace(profile.ForbiddenTropesNote) != "" {
+		fmt.Fprintf(&dnaBuilder, "作者自定义禁区：%s\n", strings.TrimSpace(profile.ForbiddenTropesNote))
+	}
+
+	// 汇总当前启用的高频套话黑名单（最多展示前 12 条）。
+	banned := make([]string, 0, 12)
+	for _, r := range rules {
+		if !r.Enabled || r.Category != domain.DeaiCategoryCliche || r.MaxPerChapter > 0 {
+			continue
+		}
+		pat := strings.TrimSpace(r.Pattern)
+		if pat != "" {
+			banned = append(banned, pat)
+			if len(banned) >= 12 {
+				break
+			}
+		}
+	}
+	if len(banned) > 0 {
+		fmt.Fprintf(&dnaBuilder, "禁用套话黑名单：%s\n", strings.Join(banned, "、"))
+	}
+
+	baseDNA := strings.TrimSpace(dnaBuilder.String())
+	if len(samples) == 0 {
+		if EstimateTokens(baseDNA) <= budget {
+			return baseDNA, false
+		}
+		return truncateHeadWithinTokens(baseDNA, budget), true
+	}
+
+	renderWithSamples := func(list []domain.StyleSample) string {
+		if len(list) == 0 {
+			return baseDNA
+		}
+		var b strings.Builder
+		b.WriteString(baseDNA)
+		fmt.Fprintf(&b, "\n\n【场景语感示范（主导场景：%s；只学句式节奏与动作力度，严禁抄袭样章人物或剧情）】", dominantScene.Label())
+		for i, sp := range list {
+			fmt.Fprintf(&b, "\n示范 %d《%s》（%s）：\n%s", i+1, sp.Title, sp.SceneType.Label(), strings.TrimSpace(sp.Excerpt))
+		}
+		return strings.TrimSpace(b.String())
+	}
+
+	// 1. 尝试完整装入 1~2 段样章锚点。
+	full := renderWithSamples(samples)
+	if EstimateTokens(full) <= budget {
+		return full, false
+	}
+
+	// 2. 按 docs/03 §1.3 裁剪策略：超限时缩减为 1 段最贴合锚点。
+	if len(samples) > 1 {
+		oneSample := renderWithSamples(samples[:1])
+		if EstimateTokens(oneSample) <= budget {
+			return oneSample, true
+		}
+	}
+
+	// 3. 若 1 段完整样章仍超出剩余预算，截断第 1 段样章或保留核心量化 DNA。
+	if EstimateTokens(baseDNA) <= budget {
+		rem := budget - EstimateTokens(baseDNA) - 24
+		if rem > 30 {
+			cutExcerpt := truncateHeadWithinTokens(strings.TrimSpace(samples[0].Excerpt), rem)
+			if cutExcerpt != "" {
+				partialSample := domain.StyleSample{
+					SceneType: samples[0].SceneType,
+					Title:     samples[0].Title,
+					Excerpt:   cutExcerpt,
+				}
+				candidate := renderWithSamples([]domain.StyleSample{partialSample})
+				if EstimateTokens(candidate) <= budget {
+					return candidate, true
+				}
+			}
+		}
+		return baseDNA, true
+	}
+
+	return truncateHeadWithinTokens(baseDNA, budget), true
 }
