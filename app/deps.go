@@ -156,24 +156,33 @@ type GenesisEngine interface {
 	ApplyBookGenesis(ctx context.Context, in domain.ApplyGenesisInput) (domain.ApplyGenesisResult, error)
 }
 
+// AutopilotEngine 定义全自动托管写作流水线接口（由 internal/pipeline 实现，零 MyGo 依赖）。
+type AutopilotEngine interface {
+	StartAutopilot(ctx context.Context, req domain.AutopilotRequest) (domain.AutopilotState, error)
+	GetAutopilotState(bookID int64) domain.AutopilotState
+	StopAutopilot(bookID int64) (domain.AutopilotState, error)
+	ResolveAutopilotGate(bookID int64, action domain.AutopilotDecisionAction) (domain.AutopilotState, error)
+}
+
 // DirPickerFunc 封装原生目录选择弹窗，默认使用 mygo.Dialog.Open，可在单测中替换。
 type DirPickerFunc func(ctx context.Context) (string, error)
 
 // RuntimeDeps 汇总 WhenReady 阶段注入到 Runtime 的全部核心依赖。
 type RuntimeDeps struct {
-	Store          Store
-	Exporter       Exporter
-	LLM            LLMClient
-	Compiler       BriefingCompiler
-	Pipeline       PipelineRunner
-	MemoryStore    MemoryStore
-	DeltaExtractor DeltaExtractor
-	StyleStore     StyleStore
-	StyleEngine    StyleEngine
-	BatchStore     BatchStore
-	BatchEngine    BatchEngine
-	GenesisEngine  GenesisEngine
-	DirPicker      DirPickerFunc
+	Store           Store
+	Exporter        Exporter
+	LLM             LLMClient
+	Compiler        BriefingCompiler
+	Pipeline        PipelineRunner
+	MemoryStore     MemoryStore
+	DeltaExtractor  DeltaExtractor
+	StyleStore      StyleStore
+	StyleEngine     StyleEngine
+	BatchStore      BatchStore
+	BatchEngine     BatchEngine
+	GenesisEngine   GenesisEngine
+	AutopilotEngine AutopilotEngine
+	DirPicker       DirPickerFunc
 }
 
 // Runtime 是线程安全的延迟初始化容器。
@@ -516,6 +525,27 @@ func (r *Runtime) trackGenesisEngine(callCtx context.Context) (GenesisEngine, co
 		r.activeWG.Done()
 	}
 	return eng, engCtx, cancel, release, nil
+}
+
+func (r *Runtime) autopilotEngine() (AutopilotEngine, error) {
+	if r == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.ready || r.closed {
+		return nil, ErrRuntimeNotReady
+	}
+	if r.deps.AutopilotEngine != nil {
+		return r.deps.AutopilotEngine, nil
+	}
+	if ae, ok := r.deps.BatchEngine.(AutopilotEngine); ok {
+		return ae, nil
+	}
+	if ae, ok := r.deps.Pipeline.(AutopilotEngine); ok {
+		return ae, nil
+	}
+	return nil, ErrRuntimeNotReady
 }
 
 func (r *Runtime) dirPicker() DirPickerFunc {

@@ -55,6 +55,66 @@ export interface ArcSummary {
 
 export type ArcSummaryLevel = string;
 
+export type AutopilotDecisionAction = string;
+
+export interface AutopilotGate {
+  reason: string;
+  title: string;
+  detail: string;
+  chapterId: number;
+  chapterSeq: number;
+  options: AutopilotGateOption[];
+}
+
+export interface AutopilotGateOption {
+  action: AutopilotDecisionAction;
+  label: string;
+  description: string;
+}
+
+export interface AutopilotLogEntry {
+  time: string;
+  chapterSeq: number;
+  step: AutopilotStep;
+  tone: string;
+  message: string;
+}
+
+export interface AutopilotRequest {
+  bookId: number;
+  volumeId: number;
+  targetChapters: number;
+  autoOutline: boolean;
+  autoPolish: boolean;
+  autoCommitMemory: boolean;
+  maxTokensBudget: number;
+  arcGoal: string;
+}
+
+export interface AutopilotState {
+  bookId: number;
+  status: AutopilotStatus;
+  step: AutopilotStep;
+  targetChapters: number;
+  completedChapters: number;
+  currentChapterId: number;
+  currentChapterSeq: number;
+  currentChapterTitle: string;
+  tokensUsed: number;
+  maxTokensBudget: number;
+  autoCommitMemory: boolean;
+  message: string;
+  error?: string;
+  gate?: AutopilotGate;
+  logs: AutopilotLogEntry[];
+  startedAt?: string;
+  updatedAt?: string;
+}
+
+export type AutopilotStatus = string;
+
+export type AutopilotStep = string;
+
 export type BatchItemState = string;
 
 export type BatchMode = string;
@@ -976,10 +1036,24 @@ export const BatchService = {
   startBatchRun: bind<[number, number[], string], BatchRun>("BatchService.StartBatchRun", (bookID: number, chapterIDs: number[], mode: string) => [bookID, chapterIDs, mode]),
 } as const;
 
+/** AutopilotService 提供全自动托管写作的启动、查询、停止与决策闸门恢复 RPC 绑定。 */
+export const AutopilotService = {
+  /** GetAutopilotState 查询指定书籍当前或最近一次托管任务状态。 */
+  getAutopilotState: bind<[number], AutopilotState>("AutopilotService.GetAutopilotState", (bookID: number) => [bookID]),
+  /** ResolveAutopilotGate 提交作者在决策闸门中的选择，恢复或停止托管流水线。 */
+  resolveAutopilotGate: bind<[number, AutopilotDecisionAction], AutopilotState>("AutopilotService.ResolveAutopilotGate", (bookID: number, action: AutopilotDecisionAction) => [bookID, action]),
+  /** StartAutopilot 启动指定书籍的全自动托管写作循环。 */
+  startAutopilot: bind<[AutopilotRequest], AutopilotState>("AutopilotService.StartAutopilot", (req: AutopilotRequest) => [req]),
+  /** StopAutopilot 请求平滑中止指定书籍的托管任务。 */
+  stopAutopilot: bind<[number], AutopilotState>("AutopilotService.StopAutopilot", (bookID: number) => [bookID]),
+} as const;
+
 // ---- Events ----
 
 /** Events sent by the Go side. Subscribe with `events.name.on(listener)`. */
 export const events = {
+  /** AutopilotProgressEvent 向前端实时广播全自动托管流水线的推进状态与决策闸门（映射为 events.autopilotProgress）。 */
+  autopilotProgress: event<AutopilotState>("autopilot:progress"),
   /** BatchProgressEvent 向前端广播串行微批队列的实时章节推进状态（映射为 src/mygo.ts 中的 events.batchProgress）。 */
   batchProgress: event<BatchProgress>("batch:progress"),
 } as const;

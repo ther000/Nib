@@ -41,6 +41,7 @@ func main() {
 		app.NewMemoryService(rt),
 		app.NewStyleService(rt),
 		app.NewBatchService(rt),
+		app.NewAutopilotService(rt),
 	)
 
 	var shutdownOnce sync.Once
@@ -122,21 +123,23 @@ func initRuntime(rt *app.Runtime, dbPath string) (func(), error) {
 		pipeline.WithBatchStore(st),
 		pipeline.WithDeltaExtractor(extractor),
 		pipeline.WithProgressListener(app.EmitBatchProgress),
+		pipeline.WithAutopilotListener(app.EmitAutopilotProgress),
 	)
 
 	rt.Init(app.RuntimeDeps{
-		Store:          st,
-		Exporter:       storeExp,
-		LLM:            llmClient,
-		Compiler:       comp,
-		Pipeline:       runner,
-		MemoryStore:    st,
-		DeltaExtractor: extractor,
-		StyleStore:     st,
-		StyleEngine:    runner,
-		BatchStore:     st,
-		BatchEngine:    runner,
-		GenesisEngine:  runner,
+		Store:           st,
+		Exporter:        storeExp,
+		LLM:             llmClient,
+		Compiler:        comp,
+		Pipeline:        runner,
+		MemoryStore:     st,
+		DeltaExtractor:  extractor,
+		StyleStore:      st,
+		StyleEngine:     runner,
+		BatchStore:      st,
+		BatchEngine:     runner,
+		GenesisEngine:   runner,
+		AutopilotEngine: runner,
 	})
 	return runner.Close, nil
 }

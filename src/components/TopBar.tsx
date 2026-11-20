@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  Bot,
   Check,
   ChevronDown,
   Feather,
   Home,
+  Loader2,
   Moon,
   Plus,
   Search,
@@ -34,6 +36,8 @@ export function TopBar() {
     openSettings,
     openCreateBook,
     openMemorySearch,
+    openAutopilot,
+    autopilotState,
   } = useApp();
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -206,8 +210,40 @@ export function TopBar() {
         <div className="flex-1" />
       )}
 
-      {/* Right: Memory Search + Theme + Settings (native window buttons sit to the right via --mygo-titlebar-right) */}
+      {/* Right: Autopilot + Memory Search + Theme + Settings (native window buttons sit to the right via --mygo-titlebar-right) */}
       <div className="flex items-center gap-1">
+        {inWorkspace && activeBook && (
+          <button
+            type="button"
+            onClick={openAutopilot}
+            title="AI 自动托管写作"
+            className={`mr-0.5 flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors ${
+              autopilotState?.bookId === activeBook.id &&
+              autopilotState.status === "waiting_decision"
+                ? "border-warn/50 bg-warn-soft text-warn"
+                : autopilotState?.bookId === activeBook.id &&
+                    autopilotState.status === "running"
+                  ? "border-accent/40 bg-accent-soft text-accent"
+                  : "border-border-subtle bg-canvas text-ink-secondary hover:border-border-strong hover:text-ink-primary"
+            }`}
+          >
+            {autopilotState?.bookId === activeBook.id &&
+            autopilotState.status === "running" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Bot className="h-3.5 w-3.5" />
+            )}
+            <span>
+              {autopilotState?.bookId === activeBook.id &&
+              autopilotState.status === "waiting_decision"
+                ? "托管待确认"
+                : autopilotState?.bookId === activeBook.id &&
+                    autopilotState.status === "running"
+                  ? `托管 ${autopilotState.completedChapters}/${autopilotState.targetChapters}`
+                  : "AI 托管"}
+            </span>
+          </button>
+        )}
         {inWorkspace && (
           <button
             type="button"

@@ -64,6 +64,21 @@ func (r *Runner) Close() {
 	for _, cancel := range cancels {
 		cancel()
 	}
+
+	r.autopilotMu.Lock()
+	autoCancels := make([]context.CancelFunc, 0, len(r.autopilots))
+	for _, sess := range r.autopilots {
+		sess.mu.Lock()
+		if sess.active && sess.cancel != nil {
+			autoCancels = append(autoCancels, sess.cancel)
+		}
+		sess.mu.Unlock()
+	}
+	r.autopilotMu.Unlock()
+	for _, cancel := range autoCancels {
+		cancel()
+	}
+
 	r.batchWG.Wait()
 }
 

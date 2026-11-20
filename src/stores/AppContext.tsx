@@ -8,11 +8,15 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { isMyGo } from "mygo-runtime";
 import {
   AtlasService,
+  AutopilotService,
+  events,
   LibraryService,
   MemoryService,
   SettingsService,
+  type AutopilotState,
   type Book,
   type Chapter,
   type Entity,
@@ -88,6 +92,11 @@ interface AppContextValue {
   openMemorySearch: () => void;
   closeMemorySearch: () => void;
   toggleMemorySearch: () => void;
+  autopilotOpen: boolean;
+  openAutopilot: () => void;
+  closeAutopilot: () => void;
+  autopilotState: AutopilotState | null;
+  setAutopilotState: (state: AutopilotState | null) => void;
 
   // Toasts
   toasts: ToastItem[];
@@ -160,6 +169,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("providers");
   const [createBookOpen, setCreateBookOpen] = useState(false);
   const [memorySearchOpen, setMemorySearchOpen] = useState(false);
+  const [autopilotOpen, setAutopilotOpen] = useState(false);
+  const [autopilotState, setAutopilotState] = useState<AutopilotState | null>(null);
 
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const toastSeqRef = useRef(1);
@@ -634,6 +645,58 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const openAutopilot = useCallback(() => setAutopilotOpen(true), []);
+  const closeAutopilot = useCallback(() => setAutopilotOpen(false), []);
+
+  // 订阅后端全自动托管实时进度事件，章节推进或结束时自动刷新书籍数据
+  useEffect(() => {
+    if (!activeBookId) {
+      setAutopilotState(null);
+      return;
+    }
+    let cancelled = false;
+    void AutopilotService.getAutopilotState(activeBookId)
+      .then((state) => {
+        if (!cancelled) setAutopilotState(state);
+      })
+      .catch(() => {
+        if (!cancelled) setAutopilotState(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBookId]);
+
+  useEffect(() => {
+    if (!isMyGo()) return;
+    let lastCompleted = -1;
+    let lastStatus = "";
+    let unsub: (() => void) | null = null;
+    try {
+      unsub = events.autopilotProgress.on((prog) => {
+        if (activeBookId && prog.bookId !== activeBookId) return;
+        setAutopilotState(prog);
+        const progressed = prog.completedChapters !== lastCompleted;
+        const finished =
+          (prog.status === "completed" ||
+            prog.status === "stopped" ||
+            prog.status === "failed") &&
+          prog.status !== lastStatus;
+        lastCompleted = prog.completedChapters;
+        lastStatus = prog.status;
+        if (progressed || finished) {
+          void refreshBookData(prog.bookId);
+          bumpMemoryRevision();
+        }
+      });
+    } catch {
+      // ignore outside mygo runtime
+    }
+    return () => {
+      unsub?.();
+    };
+  }, [activeBookId, refreshBookData, bumpMemoryRevision]);
+
   const value = useMemo<AppContextValue>(
     () => ({
       theme: prefs.theme,
@@ -670,6 +733,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       openMemorySearch,
       closeMemorySearch,
       toggleMemorySearch,
+      autopilotOpen,
+      openAutopilot,
+      closeAutopilot,
+      autopilotState,
+      setAutopilotState,
       toasts,
       notify,
       dismissToast,
@@ -741,6 +809,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       openMemorySearch,
       closeMemorySearch,
       toggleMemorySearch,
+      autopilotOpen,
+      openAutopilot,
+      closeAutopilot,
+      autopilotState,
+      setAutopilotState,
       toasts,
       notify,
       dismissToast,

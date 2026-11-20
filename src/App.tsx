@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { AppProvider, useApp } from "./stores/AppContext";
 import { TopBar } from "./components/TopBar";
+import { AutopilotModal, AutopilotStatusBar } from "./components/AutopilotConsole";
 import { CreateBookModal } from "./components/CreateBookModal";
 import { MemorySearchModal } from "./components/MemorySearchModal";
 import { ToastHost } from "./components/ToastHost";
@@ -110,6 +111,7 @@ function NibShell() {
   return (
     <div className="flex h-full flex-col overflow-hidden bg-canvas text-ink-primary">
       <TopBar />
+      {inWorkspace && <AutopilotStatusBar />}
 
       {bootstrapping ? (
         <main className="flex flex-1 items-center justify-center">
@@ -143,6 +145,7 @@ function NibShell() {
       )}
 
       <CreateBookModal />
+      <AutopilotModal />
       <MemorySearchModal />
       <SettingsModal />
       <ToastHost />

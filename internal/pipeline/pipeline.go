@@ -119,15 +119,19 @@ type Runner struct {
 	outlineStore     OutlineStore
 	extractor        DeltaExtractor
 	compiler         Compiler
-	llm              LLMStreamer
-	exporter         Exporter
-	progressListener func(domain.BatchProgress)
-	saveTimeout      time.Duration
+	llm               LLMStreamer
+	exporter          Exporter
+	progressListener  func(domain.BatchProgress)
+	autopilotListener func(domain.AutopilotState)
+	saveTimeout       time.Duration
 
 	batchMu       sync.Mutex
 	batchCancels  map[int64]activeBatchHandle
 	batchTokenSeq uint64
 	batchWG       sync.WaitGroup
+
+	autopilotMu sync.Mutex
+	autopilots  map[int64]*autopilotSession
 }
 
 // New 创建流水线执行器。若 store 同时实现 StyleStore / BatchStore / OutlineStore，将自动挂载。
@@ -139,6 +143,7 @@ func New(store Store, comp Compiler, streamer LLMStreamer, exp Exporter, opts ..
 		exporter:     exp,
 		saveTimeout:  defaultSaveTimeout,
 		batchCancels: make(map[int64]activeBatchHandle),
+		autopilots:   make(map[int64]*autopilotSession),
 	}
 	if ss, ok := store.(StyleStore); ok {
 		r.styleStore = ss
