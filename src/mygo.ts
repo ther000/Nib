@@ -527,6 +527,7 @@ export interface GenChunk {
   kind: GenChunkKind;
   chapterId: number;
   delta?: string;
+  reasoningDelta?: string;
   wordCount?: number;
   status?: ChapterStatus;
   modelName?: string;
@@ -542,6 +543,7 @@ export type GenChunkKind = string;
 
 export interface GenerateChapterOptions {
   briefing: BriefingOptions;
+  mode?: string;
   extraInstruction?: string;
   temperature?: number;
   maxTokens?: number;
@@ -605,6 +607,17 @@ export interface GenrePreset {
 
 export type HookType = string;
 
+export interface InsertChapterInput {
+  bookId: number;
+  volumeId: number;
+  afterChapterId?: number;
+  title: string;
+  emotionTag: EmotionTag;
+  hookType: HookType;
+  hookNote: string;
+  outlineSummary: string;
+}
+
 export interface LintIssue {
   ruleId: string;
   category: DeaiCategory;
@@ -644,6 +657,13 @@ export interface ModelUsageStat {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+}
+
+export interface MoveChapterInput {
+  chapterId: number;
+  direction?: string;
+  targetVolumeId?: number;
+  targetVolSeq?: number;
 }
 
 export interface OutlineChunk {
@@ -703,6 +723,36 @@ export interface ProviderTestResult {
   latencyMs: number;
   modelUsed: string;
   message: string;
+}
+
+export interface ReplaceBookTextInput {
+  bookId: number;
+  find: string;
+  replace: string;
+  includeTitles?: boolean;
+  includeOutlines?: boolean;
+  dryRun?: boolean;
+}
+
+export interface ReplaceBookTextResult {
+  affectedChapters: number;
+  totalMatches: number;
+}
+
+export interface RewriteSelectionRequest {
+  chapterId: number;
+  selectedText: string;
+  beforeContext?: string;
+  afterContext?: string;
+  action: string;
+  customInstruction?: string;
+}
+
+export interface RewriteSelectionResult {
+  rewrittenText: string;
+  modelName: string;
+  providerName: string;
+  usage?: TokenUsage;
 }
 
 export interface SaveChapterDraftInput {
@@ -913,6 +963,8 @@ export const LibraryService = {
   createChapter: bind<[CreateChapterInput], Chapter>("LibraryService.CreateChapter", (input: CreateChapterInput) => [input]),
   /** DeleteBook 删除指定书籍及其级联数据。 */
   deleteBook: bind<[number], void>("LibraryService.DeleteBook", (id: number) => [id]),
+  /** DeleteChapter 删除指定章节并自动重排剩余章节顺序。 */
+  deleteChapter: bind<[number], void>("LibraryService.DeleteChapter", (chapterID: number) => [chapterID]),
   /** DeleteVolume 删除指定卷及其下属章节。 */
   deleteVolume: bind<[number], void>("LibraryService.DeleteVolume", (id: number) => [id]),
   /** ExportBookMarkdown 手动触发全书卷章树与设定铁律单向 Markdown 镜像导出。 */
@@ -925,6 +977,8 @@ export const LibraryService = {
   getChapter: bind<[number], Chapter>("LibraryService.GetChapter", (id: number) => [id]),
   /** GetVolumePacing 计算指定卷的情绪极性折线数据，并自动诊断连续蓄压过载、缺高潮爆发与超期未收伏笔。 */
   getVolumePacing: bind<[number], VolumePacingReport>("LibraryService.GetVolumePacing", (volumeID: number) => [volumeID]),
+  /** InsertChapter 在指定卷的某章之后（afterChapterId=0 表示卷首）插入新章节并自动重排章序。 */
+  insertChapter: bind<[InsertChapterInput], Chapter>("LibraryService.InsertChapter", (input: InsertChapterInput) => [input]),
   /** ListBeats 返回章节下的全部节拍卡（按 seq 升序）。 */
   listBeats: bind<[number], Beat[]>("LibraryService.ListBeats", (chapterID: number) => [chapterID]),
   /** ListBookChapters 返回全书所有章节（按 global_seq 升序）。 */
@@ -937,8 +991,12 @@ export const LibraryService = {
   listGenrePresets: bind<[], GenrePreset[]>("LibraryService.ListGenrePresets", () => []),
   /** ListVolumes 返回指定书籍下的全部卷（按 seq 升序）。 */
   listVolumes: bind<[number], Volume[]>("LibraryService.ListVolumes", (bookID: number) => [bookID]),
+  /** MoveChapter 调整章节顺序（up / down）或跨卷移动并自动重排章序。 */
+  moveChapter: bind<[MoveChapterInput], Chapter>("LibraryService.MoveChapter", (input: MoveChapterInput) => [input]),
   /** ReplaceBeats 整体校验并替换章节节拍卡序列。 */
   replaceBeats: bind<[number, Beat[]], Beat[]>("LibraryService.ReplaceBeats", (chapterID: number, beats: Beat[]) => [chapterID, beats]),
+  /** ReplaceBookText 在全书范围查找并替换文本（每章正文修改前自动保存历史快照）。 */
+  replaceBookText: bind<[ReplaceBookTextInput], ReplaceBookTextResult>("LibraryService.ReplaceBookText", (input: ReplaceBookTextInput) => [input]),
   /** SaveChapterDraft 保存章节正文（由 Store 先归档历史快照），并在书籍配置了导出目录时触发单向 Markdown 同步。 */
   saveChapterDraft: bind<[SaveChapterDraftInput], Chapter>("LibraryService.SaveChapterDraft", (input: SaveChapterDraftInput) => [input]),
   /** UpdateBook 校验参数并更新书籍基础设定与导出目录。 */
@@ -1005,6 +1063,8 @@ export const StudioService = {
    * 并在书籍配置了导出目录时同步更新单向 Markdown 镜像。
    */
   restoreVersion: bind<[number], Chapter>("StudioService.RestoreVersion", (versionID: number) => [versionID]),
+  /** RewriteSelection 对编辑器选中的局部段落执行流式 AI 微调，返回改写预览文本（不直接改库）。 */
+  rewriteSelection: bind<[RewriteSelectionRequest, Channel<GenChunk>], RewriteSelectionResult>("StudioService.RewriteSelection", (req: RewriteSelectionRequest, ch: Channel<GenChunk>) => [req, ch]),
 } as const;
 
 /** MemoryService 提供 Phase 2 防吃书记忆账本、伏笔追踪、摘要金字塔、变更单审阅与混合检索的桌面 RPC 绑定。 */

@@ -19,8 +19,9 @@ type ChatRequest struct {
 
 // StreamEvent 表示统一流式解析器输出的单个事件分片。
 type StreamEvent struct {
-	Delta        string
-	Usage        *domain.TokenUsage
-	FinishReason string
-	Err          error
+	Delta          string
+	ReasoningDelta string
+	Usage          *domain.TokenUsage
+	FinishReason   string
+	Err            error
 }

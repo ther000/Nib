@@ -33,6 +33,10 @@ type Store interface {
 	ListBookChapters(ctx context.Context, bookID int64) ([]domain.Chapter, error)
 	GetChapter(ctx context.Context, id int64) (domain.Chapter, error)
 	CreateChapter(ctx context.Context, in domain.CreateChapterInput) (domain.Chapter, error)
+	InsertChapter(ctx context.Context, in domain.InsertChapterInput) (domain.Chapter, error)
+	MoveChapter(ctx context.Context, in domain.MoveChapterInput) (domain.Chapter, error)
+	DeleteChapter(ctx context.Context, chapterID int64) error
+	ReplaceBookText(ctx context.Context, in domain.ReplaceBookTextInput) (domain.ReplaceBookTextResult, error)
 	UpdateChapterMeta(ctx context.Context, in domain.UpdateChapterMetaInput) (domain.Chapter, error)
 	SaveChapterDraft(ctx context.Context, in domain.SaveChapterDraftInput) (domain.Chapter, error)
 	FinalizeChapter(ctx context.Context, chapterID int64) (domain.Chapter, error)
@@ -84,6 +88,11 @@ type PipelineRunner interface {
 		opts domain.GenerateChapterOptions,
 		emit func(domain.GenChunk) error,
 	) (domain.Chapter, error)
+	RewriteSelection(
+		ctx context.Context,
+		req domain.RewriteSelectionRequest,
+		emit func(domain.GenChunk) error,
+	) (domain.RewriteSelectionResult, error)
 }
 
 // MemoryStore 定义 Phase 2 记忆引擎所需的持久化与检索接口（由 internal/store 实现）。

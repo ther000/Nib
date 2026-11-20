@@ -893,3 +893,60 @@ func TestListModelsProtocolsAndSanitization(t *testing.T) {
 		}
 	})
 }
+
+func TestStreamReasoningDeltaAcrossProtocols(t *testing.T) {
+	t.Run("openai reasoning_content", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"先想情节\"}}]}\n\n"))
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"正文开始。\"},\"finish_reason\":\"stop\"}]}\n\n"))
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		}))
+		defer srv.Close()
+
+		client := NewClient(WithHTTPClient(srv.Client()), WithSleep(zeroSleep))
+		var reason, text strings.Builder
+		_, err := client.Stream(context.Background(), domain.Provider{
+			Protocol: domain.ProtocolOpenAICompat,
+			BaseURL:  srv.URL,
+			Enabled:  true,
+		}, ChatRequest{Model: "deepseek-reasoner", Messages: []ChatMessage{{Role: "user", Content: "hi"}}}, func(ev StreamEvent) error {
+			reason.WriteString(ev.ReasoningDelta)
+			text.WriteString(ev.Delta)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("Stream error: %v", err)
+		}
+		if reason.String() != "先想情节" || text.String() != "正文开始。" {
+			t.Fatalf("got reason=%q text=%q", reason.String(), text.String())
+		}
+	})
+
+	t.Run("gemini thought part separated from content", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"内部推演\",\"thought\":true}]}}]}\n\n"))
+			_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"正式正文。\"}]},\"finishReason\":\"STOP\"}]}\n\n"))
+		}))
+		defer srv.Close()
+
+		client := NewClient(WithHTTPClient(srv.Client()), WithSleep(zeroSleep))
+		var reason, text strings.Builder
+		_, err := client.Stream(context.Background(), domain.Provider{
+			Protocol: domain.ProtocolGemini,
+			BaseURL:  srv.URL,
+			Enabled:  true,
+		}, ChatRequest{Model: "gemini-2.5-pro", Messages: []ChatMessage{{Role: "user", Content: "hi"}}}, func(ev StreamEvent) error {
+			reason.WriteString(ev.ReasoningDelta)
+			text.WriteString(ev.Delta)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("Stream error: %v", err)
+		}
+		if reason.String() != "内部推演" || text.String() != "正式正文。" {
+			t.Fatalf("got reason=%q text=%q", reason.String(), text.String())
+		}
+	})
+}

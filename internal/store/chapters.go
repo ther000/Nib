@@ -349,6 +349,363 @@ func (s *Store) FinalizeChapter(ctx context.Context, chapterID int64) (domain.Ch
 	return result, nil
 }
 
+// DeleteChapter 在单个事务内删除指定章节，并顺滑重排全书 global_seq 与卷内 vol_seq。
+func (s *Store) DeleteChapter(ctx context.Context, chapterID int64) error {
+	if chapterID <= 0 {
+		return &domain.ValidationError{Field: "chapterId", Message: "章节 ID 必须大于 0"}
+	}
+	return s.withWriteTx(ctx, func(tx *sql.Tx) error {
+		existing, err := getChapterRow(ctx, tx, chapterID)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM chapters WHERE id = ?`, chapterID); err != nil {
+			return mapSQLiteError(err)
+		}
+		return resequenceBookChaptersTx(ctx, tx, existing.BookID)
+	})
+}
+
+// InsertChapter 在指定卷内某章之后（afterChapterId=0 表示卷首）插入新章，并重排全书与卷内章序。
+func (s *Store) InsertChapter(ctx context.Context, in domain.InsertChapterInput) (domain.Chapter, error) {
+	if err := in.Validate(); err != nil {
+		return domain.Chapter{}, err
+	}
+
+	emotion := in.EmotionTag
+	if emotion == "" {
+		emotion = domain.EmotionSetup
+	}
+	hookType := in.HookType
+	if hookType == "" {
+		hookType = domain.HookMystery
+	}
+
+	var result domain.Chapter
+	err := s.withWriteTx(ctx, func(tx *sql.Tx) error {
+		var volBookID int64
+		if err := tx.QueryRowContext(ctx, `SELECT book_id FROM volumes WHERE id = ?`, in.VolumeID).Scan(&volBookID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("volume %d: %w", in.VolumeID, domain.ErrNotFound)
+			}
+			return mapSQLiteError(err)
+		}
+		if volBookID != in.BookID {
+			return &domain.ValidationError{Field: "volumeId", Message: "卷不属于指定书籍"}
+		}
+
+		volIDs, err := listVolumeChapterIDsTx(ctx, tx, in.VolumeID)
+		if err != nil {
+			return err
+		}
+		insertIdx := 0
+		if in.AfterChapterID > 0 {
+			found := false
+			for i, cid := range volIDs {
+				if cid == in.AfterChapterID {
+					insertIdx = i + 1
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("after chapter %d not in volume %d: %w", in.AfterChapterID, in.VolumeID, domain.ErrNotFound)
+			}
+		}
+
+		// 先用临时不冲突的 global_seq 插入，随后统一按卷序与卷内序重排。
+		var maxGlobal int
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(global_seq), 0) FROM chapters WHERE book_id = ?`, in.BookID).Scan(&maxGlobal); err != nil {
+			return mapSQLiteError(err)
+		}
+		res, err := tx.ExecContext(ctx, `
+			INSERT INTO chapters (
+				book_id, volume_id, global_seq, vol_seq, title, status,
+				emotion_tag, hook_type, hook_note, outline_summary
+			)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, in.BookID, in.VolumeID, maxGlobal+1000, len(volIDs)+1, strings.TrimSpace(in.Title),
+			string(domain.ChapterStatusPlanned), string(emotion), string(hookType), in.HookNote, in.OutlineSummary)
+		if err != nil {
+			return mapSQLiteError(err)
+		}
+		newID, err := res.LastInsertId()
+		if err != nil {
+			return err
+		}
+
+		// 构造新卷内顺序并写回 vol_seq，再全书重排 global_seq。
+		ordered := make([]int64, 0, len(volIDs)+1)
+		ordered = append(ordered, volIDs[:insertIdx]...)
+		ordered = append(ordered, newID)
+		ordered = append(ordered, volIDs[insertIdx:]...)
+		for i, cid := range ordered {
+			if _, err := tx.ExecContext(ctx, `UPDATE chapters SET vol_seq = ? WHERE id = ?`, i+1, cid); err != nil {
+				return mapSQLiteError(err)
+			}
+		}
+
+		if err := resequenceBookChaptersTx(ctx, tx, in.BookID); err != nil {
+			return err
+		}
+		result, err = getChapterRow(ctx, tx, newID)
+		return err
+	})
+	if err != nil {
+		return domain.Chapter{}, err
+	}
+	return result, nil
+}
+
+// MoveChapter 调整章节在卷内的顺序（up / down）或跨卷移动，并保持全书 global_seq 与卷内 vol_seq 连续唯一。
+func (s *Store) MoveChapter(ctx context.Context, in domain.MoveChapterInput) (domain.Chapter, error) {
+	if err := in.Validate(); err != nil {
+		return domain.Chapter{}, err
+	}
+
+	var result domain.Chapter
+	err := s.withWriteTx(ctx, func(tx *sql.Tx) error {
+		chap, err := getChapterRow(ctx, tx, in.ChapterID)
+		if err != nil {
+			return err
+		}
+
+		dir := strings.ToLower(strings.TrimSpace(in.Direction))
+		if in.TargetVolumeID > 0 && in.TargetVolumeID != chap.VolumeID {
+			var targetBookID int64
+			if err := tx.QueryRowContext(ctx, `SELECT book_id FROM volumes WHERE id = ?`, in.TargetVolumeID).Scan(&targetBookID); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return fmt.Errorf("volume %d: %w", in.TargetVolumeID, domain.ErrNotFound)
+				}
+				return mapSQLiteError(err)
+			}
+			if targetBookID != chap.BookID {
+				return &domain.ValidationError{Field: "targetVolumeId", Message: "目标分卷不属于当前书籍"}
+			}
+			targetIDs, err := listVolumeChapterIDsTx(ctx, tx, in.TargetVolumeID)
+			if err != nil {
+				return err
+			}
+			insertIdx := len(targetIDs)
+			if in.TargetVolSeq > 0 && in.TargetVolSeq-1 < len(targetIDs) {
+				insertIdx = in.TargetVolSeq - 1
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE chapters SET volume_id = ? WHERE id = ?`, in.TargetVolumeID, chap.ID); err != nil {
+				return mapSQLiteError(err)
+			}
+			ordered := make([]int64, 0, len(targetIDs)+1)
+			ordered = append(ordered, targetIDs[:insertIdx]...)
+			ordered = append(ordered, chap.ID)
+			ordered = append(ordered, targetIDs[insertIdx:]...)
+			for i, cid := range ordered {
+				if _, err := tx.ExecContext(ctx, `UPDATE chapters SET vol_seq = ? WHERE id = ?`, i+1, cid); err != nil {
+					return mapSQLiteError(err)
+				}
+			}
+		} else if dir == "up" || dir == "down" {
+			volIDs, err := listVolumeChapterIDsTx(ctx, tx, chap.VolumeID)
+			if err != nil {
+				return err
+			}
+			idx := -1
+			for i, cid := range volIDs {
+				if cid == chap.ID {
+					idx = i
+					break
+				}
+			}
+			if idx < 0 {
+				return fmt.Errorf("chapter %d: %w", chap.ID, domain.ErrNotFound)
+			}
+			swapIdx := idx - 1
+			if dir == "down" {
+				swapIdx = idx + 1
+			}
+			if swapIdx >= 0 && swapIdx < len(volIDs) {
+				volIDs[idx], volIDs[swapIdx] = volIDs[swapIdx], volIDs[idx]
+				for i, cid := range volIDs {
+					if _, err := tx.ExecContext(ctx, `UPDATE chapters SET vol_seq = ? WHERE id = ?`, i+1, cid); err != nil {
+						return mapSQLiteError(err)
+					}
+				}
+			}
+		}
+
+		if err := resequenceBookChaptersTx(ctx, tx, chap.BookID); err != nil {
+			return err
+		}
+		result, err = getChapterRow(ctx, tx, chap.ID)
+		return err
+	})
+	if err != nil {
+		return domain.Chapter{}, err
+	}
+	return result, nil
+}
+
+// ReplaceBookText 在整本书范围内查找并替换文本（如全书改角色/招式名）。
+// 严格遵守 AGENTS.md §4.1 数据安全红线：每章正文变动前强制先归档至 chapter_versions。
+func (s *Store) ReplaceBookText(ctx context.Context, in domain.ReplaceBookTextInput) (domain.ReplaceBookTextResult, error) {
+	if err := in.Validate(); err != nil {
+		return domain.ReplaceBookTextResult{}, err
+	}
+
+	var res domain.ReplaceBookTextResult
+	err := s.withWriteTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT `+chapterColumns+` FROM chapters WHERE book_id = ? ORDER BY global_seq ASC, id ASC`, in.BookID)
+		if err != nil {
+			return mapSQLiteError(err)
+		}
+		chaps, err := scanChapterRows(rows)
+		_ = rows.Close()
+		if err != nil {
+			return err
+		}
+
+		for _, ch := range chaps {
+			contentHits := strings.Count(ch.Content, in.Find)
+			titleHits := 0
+			if in.IncludeTitles {
+				titleHits = strings.Count(ch.Title, in.Find)
+			}
+			outlineHits := 0
+			if in.IncludeOutlines {
+				outlineHits = strings.Count(ch.OutlineSummary, in.Find)
+			}
+			chapHits := contentHits + titleHits + outlineHits
+			if chapHits == 0 {
+				continue
+			}
+
+			res.AffectedChapters++
+			res.TotalMatches += chapHits
+			if in.DryRun {
+				continue
+			}
+
+			newContent := ch.Content
+			if contentHits > 0 {
+				// 红线：覆写正文前先归档旧版本快照。
+				if ch.Content != "" {
+					if _, err := tx.ExecContext(ctx, `
+						INSERT INTO chapter_versions (chapter_id, source, model_name, content, word_count)
+						VALUES (?, ?, '', ?, ?)
+					`, ch.ID, string(domain.VersionSourceManualBackup), ch.Content, domain.CountWords(ch.Content)); err != nil {
+						return mapSQLiteError(err)
+					}
+				}
+				newContent = strings.ReplaceAll(ch.Content, in.Find, in.Replace)
+			}
+
+			newTitle := ch.Title
+			if titleHits > 0 {
+				replacedTitle := strings.TrimSpace(strings.ReplaceAll(ch.Title, in.Find, in.Replace))
+				if replacedTitle != "" {
+					newTitle = replacedTitle
+				}
+			}
+			newOutline := ch.OutlineSummary
+			if outlineHits > 0 {
+				newOutline = strings.ReplaceAll(ch.OutlineSummary, in.Find, in.Replace)
+			}
+
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE chapters
+				SET title = ?,
+				    outline_summary = ?,
+				    content = ?,
+				    word_count = ?,
+				    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				WHERE id = ?
+			`, newTitle, newOutline, newContent, domain.CountWords(newContent), ch.ID); err != nil {
+				return mapSQLiteError(err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return domain.ReplaceBookTextResult{}, err
+	}
+	return res, nil
+}
+
+func listVolumeChapterIDsTx(ctx context.Context, tx *sql.Tx, volumeID int64) ([]int64, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id FROM chapters
+		WHERE volume_id = ?
+		ORDER BY vol_seq ASC, global_seq ASC, id ASC
+	`, volumeID)
+	if err != nil {
+		return nil, mapSQLiteError(err)
+	}
+	defer rows.Close()
+	ids := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, mapSQLiteError(err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// resequenceBookChaptersTx 按卷序（volumes.seq ASC）与卷内章序（chapters.vol_seq ASC）重排全书 global_seq 与各卷 vol_seq。
+// 先使用负数临时值规避 UNIQUE(book_id, global_seq) 约束碰撞，再写回连续的 1..N。
+func resequenceBookChaptersTx(ctx context.Context, tx *sql.Tx, bookID int64) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT c.id, c.volume_id
+		FROM chapters c
+		JOIN volumes v ON v.id = c.volume_id
+		WHERE c.book_id = ?
+		ORDER BY v.seq ASC, v.id ASC, c.vol_seq ASC, c.global_seq ASC, c.id ASC
+	`, bookID)
+	if err != nil {
+		return mapSQLiteError(err)
+	}
+	type item struct {
+		id    int64
+		volID int64
+	}
+	ordered := make([]item, 0)
+	for rows.Next() {
+		var it item
+		if err := rows.Scan(&it.id, &it.volID); err != nil {
+			_ = rows.Close()
+			return mapSQLiteError(err)
+		}
+		ordered = append(ordered, it)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return mapSQLiteError(err)
+	}
+	_ = rows.Close()
+
+	if len(ordered) == 0 {
+		return nil
+	}
+
+	// Phase 1: 写入负数临时 global_seq，消除交换顺序时的唯一索引冲突。
+	for i, it := range ordered {
+		if _, err := tx.ExecContext(ctx, `UPDATE chapters SET global_seq = ? WHERE id = ?`, -(i + 1), it.id); err != nil {
+			return mapSQLiteError(err)
+		}
+	}
+
+	// Phase 2: 写入连续 1..N 的 global_seq 与各卷内连续 1..M 的 vol_seq。
+	volCounters := make(map[int64]int)
+	for i, it := range ordered {
+		volCounters[it.volID]++
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE chapters SET global_seq = ?, vol_seq = ? WHERE id = ?
+		`, i+1, volCounters[it.volID], it.id); err != nil {
+			return mapSQLiteError(err)
+		}
+	}
+	return nil
+}
+
 // ListBeats 返回指定章节的全部节拍卡（按 seq 升序）。
 func (s *Store) ListBeats(ctx context.Context, chapterID int64) ([]domain.Beat, error) {
 	return listBeatsQuery(ctx, s.db, chapterID)

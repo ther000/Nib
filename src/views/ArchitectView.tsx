@@ -105,6 +105,11 @@ export function ArchitectView() {
   const [newChapterTitle, setNewChapterTitle] = useState("");
   const [creatingChapter, setCreatingChapter] = useState(false);
   const [confirmDeleteVolId, setConfirmDeleteVolId] = useState<number | null>(null);
+  const [confirmDeleteChapId, setConfirmDeleteChapId] = useState<number | null>(null);
+  const [insertingAfterChap, setInsertingAfterChap] = useState<{ volId: number; afterChapId: number } | null>(null);
+  const [insertChapterTitle, setInsertChapterTitle] = useState("");
+  const [insertingChapter, setInsertingChapter] = useState(false);
+  const [movingChapterId, setMovingChapterId] = useState<number | null>(null);
   const [volumeDialog, setVolumeDialog] = useState<VolumeDialogState | null>(null);
   const [savingVolume, setSavingVolume] = useState(false);
 
@@ -425,6 +430,65 @@ export function ArchitectView() {
     }
   };
 
+  const handleMoveChapter = async (chapId: number, direction: "up" | "down") => {
+    if (!activeBook || movingChapterId !== null) return;
+    setMovingChapterId(chapId);
+    try {
+      await LibraryService.moveChapter({ chapterId: chapId, direction });
+      await refreshBookData(activeBook.id, activeChapterId);
+      setPacingRefreshKey((k) => k + 1);
+    } catch (err) {
+      notify({ tone: "danger", message: "调整章节顺序失败", detail: formatErrorMessage(err) });
+    } finally {
+      setMovingChapterId(null);
+    }
+  };
+
+  const handleDeleteChapter = async (chapId: number) => {
+    if (!activeBook) return;
+    try {
+      await LibraryService.deleteChapter(chapId);
+      setConfirmDeleteChapId(null);
+      const nextPreferred = activeChapterId === chapId ? null : activeChapterId;
+      await refreshBookData(activeBook.id, nextPreferred);
+      setPacingRefreshKey((k) => k + 1);
+      notify({ tone: "ok", message: "已删除章节并重排章序" });
+    } catch (err) {
+      notify({ tone: "danger", message: "删除章节失败", detail: formatErrorMessage(err) });
+    }
+  };
+
+  const handleInsertChapterAfter = async (volId: number, afterChapId: number) => {
+    if (!activeBook || insertingChapter) return;
+    const trimmed = insertChapterTitle.trim();
+    if (!trimmed) {
+      notify({ tone: "warn", message: "请输入章节标题" });
+      return;
+    }
+    setInsertingChapter(true);
+    try {
+      const created = await LibraryService.insertChapter({
+        bookId: activeBook.id,
+        volumeId: volId,
+        afterChapterId: afterChapId,
+        title: trimmed,
+        emotionTag: "setup",
+        hookType: "mystery",
+        hookNote: "",
+        outlineSummary: "",
+      });
+      setInsertingAfterChap(null);
+      setInsertChapterTitle("");
+      await refreshBookData(activeBook.id, created.id);
+      setPacingRefreshKey((k) => k + 1);
+      notify({ tone: "ok", message: `已插入第 ${formatSeq(created.globalSeq)} 章` });
+    } catch (err) {
+      notify({ tone: "danger", message: "插入章节失败", detail: formatErrorMessage(err) });
+    } finally {
+      setInsertingChapter(false);
+    }
+  };
+
   const handleCreateChapter = async (volumeId: number) => {
     if (!activeBook) return;
     const trimmed = newChapterTitle.trim();
@@ -678,44 +742,158 @@ export function ArchitectView() {
                     {/* Volume chapters */}
                     {!collapsed && (
                       <div className="mt-0.5 flex flex-col gap-0.5 pl-3">
-                        {volChapters.map((chap) => {
+                        {volChapters.map((chap, chapIdx) => {
                           const selected = chap.id === activeChapterId;
                           const st = getChapterStatusMeta(chap.status);
+                          const confirmingChapDel = confirmDeleteChapId === chap.id;
+                          const isInsertingAfter =
+                            insertingAfterChap?.volId === vol.id &&
+                            insertingAfterChap.afterChapId === chap.id;
                           return (
-                            <button
-                              key={chap.id}
-                              type="button"
-                              onClick={() => void selectChapter(chap.id)}
-                              className={`group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
-                                selected
-                                  ? "bg-accent-soft text-ink-primary"
-                                  : "text-ink-secondary hover:bg-elevated/60 hover:text-ink-primary"
-                              }`}
-                            >
-                              <span
-                                className={`nib-mono shrink-0 text-[11px] ${
-                                  selected ? "text-accent" : "text-ink-muted"
+                            <div key={chap.id} className="flex flex-col">
+                              <div
+                                className={`group flex w-full items-center gap-1 rounded-md px-2 py-1.5 transition-colors ${
+                                  selected
+                                    ? "bg-accent-soft text-ink-primary"
+                                    : "text-ink-secondary hover:bg-elevated/60 hover:text-ink-primary"
                                 }`}
                               >
-                                {formatSeq(chap.globalSeq)}
-                              </span>
-                              <span className="min-w-0 flex-1 truncate text-[12.5px]">
-                                {chap.title}
-                              </span>
-                              {chap.status === "upstream_dirty" ? (
-                                <span
-                                  title="上游章节设定变更，建议复核"
-                                  className="shrink-0 rounded border border-danger/40 bg-danger-soft px-1 py-0.2 text-[9.5px] font-medium text-danger"
+                                <button
+                                  type="button"
+                                  onClick={() => void selectChapter(chap.id)}
+                                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
                                 >
-                                  变更
-                                </span>
-                              ) : (
-                                <span
-                                  title={st.label}
-                                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${st.dotClass}`}
-                                />
+                                  <span
+                                    className={`nib-mono shrink-0 text-xs ${
+                                      selected ? "text-accent" : "text-ink-muted"
+                                    }`}
+                                  >
+                                    {formatSeq(chap.globalSeq)}
+                                  </span>
+                                  <span className="min-w-0 flex-1 truncate text-[12.5px]">
+                                    {chap.title}
+                                  </span>
+                                </button>
+
+                                {confirmingChapDel ? (
+                                  <div className="flex shrink-0 items-center gap-0.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleDeleteChapter(chap.id)}
+                                      title="确认删除本章"
+                                      className="rounded bg-danger-soft px-1.5 py-0.5 text-xs font-medium text-danger"
+                                    >
+                                      删除
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmDeleteChapId(null)}
+                                      className="rounded p-0.5 text-ink-muted hover:text-ink-primary"
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+                                      <button
+                                        type="button"
+                                        disabled={chapIdx === 0 || movingChapterId !== null}
+                                        onClick={() => void handleMoveChapter(chap.id, "up")}
+                                        title="上移一章"
+                                        className="rounded p-0.5 text-ink-muted hover:bg-surface hover:text-ink-primary disabled:opacity-30"
+                                      >
+                                        <ArrowUp className="h-3 w-3" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={chapIdx === volChapters.length - 1 || movingChapterId !== null}
+                                        onClick={() => void handleMoveChapter(chap.id, "down")}
+                                        title="下移一章"
+                                        className="rounded p-0.5 text-ink-muted hover:bg-surface hover:text-ink-primary disabled:opacity-30"
+                                      >
+                                        <ArrowDown className="h-3 w-3" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setInsertingAfterChap({ volId: vol.id, afterChapId: chap.id });
+                                          setInsertChapterTitle("");
+                                        }}
+                                        title="在此章后插入新章"
+                                        className="rounded p-0.5 text-ink-muted hover:bg-surface hover:text-accent"
+                                      >
+                                        <Plus className="h-3 w-3" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setConfirmDeleteChapId(chap.id)}
+                                        title="删除本章"
+                                        className="rounded p-0.5 text-ink-muted hover:bg-surface hover:text-danger"
+                                      >
+                                        <Trash2 className="h-3 w-3" />
+                                      </button>
+                                    </div>
+                                    <div className="flex shrink-0 items-center group-hover:hidden">
+                                      {chap.status === "upstream_dirty" ? (
+                                        <span
+                                          title="上游章节设定变更，建议复核"
+                                          className="shrink-0 rounded border border-danger/40 bg-danger-soft px-1 text-xs font-medium text-danger"
+                                        >
+                                          变更
+                                        </span>
+                                      ) : (
+                                        <span
+                                          title={st.label}
+                                          className={`h-1.5 w-1.5 shrink-0 rounded-full ${st.dotClass}`}
+                                        />
+                                      )}
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+
+                              {isInsertingAfter && (
+                                <div className="my-1 flex items-center gap-1 rounded-md border border-accent/50 bg-canvas px-1.5 py-1">
+                                  <input
+                                    type="text"
+                                    autoFocus
+                                    value={insertChapterTitle}
+                                    disabled={insertingChapter}
+                                    onChange={(e) => setInsertChapterTitle(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        e.preventDefault();
+                                        void handleInsertChapterAfter(vol.id, chap.id);
+                                      } else if (e.key === "Escape") {
+                                        setInsertingAfterChap(null);
+                                        setInsertChapterTitle("");
+                                      }
+                                    }}
+                                    placeholder="插入章节标题…"
+                                    className="min-w-0 flex-1 bg-transparent text-xs text-ink-primary placeholder:text-ink-muted focus:outline-none"
+                                  />
+                                  <button
+                                    type="button"
+                                    disabled={insertingChapter}
+                                    onClick={() => void handleInsertChapterAfter(vol.id, chap.id)}
+                                    className="rounded p-0.5 text-accent hover:bg-surface"
+                                  >
+                                    <Check className="h-3.5 w-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setInsertingAfterChap(null);
+                                      setInsertChapterTitle("");
+                                    }}
+                                    className="rounded p-0.5 text-ink-muted hover:text-ink-primary"
+                                  >
+                                    <X className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
                               )}
-                            </button>
+                            </div>
                           );
                         })}
 

@@ -260,6 +260,79 @@ type ExportResult struct {
 	ChapterCount int      `json:"chapterCount"`
 }
 
+// InsertChapterInput 表示在指定卷中某章之后（或卷首）插入新章节的入参。
+type InsertChapterInput struct {
+	BookID         int64      `json:"bookId"`
+	VolumeID       int64      `json:"volumeId"`
+	AfterChapterID int64      `json:"afterChapterId,omitempty"`
+	Title          string     `json:"title"`
+	EmotionTag     EmotionTag `json:"emotionTag"`
+	HookType       HookType   `json:"hookType"`
+	HookNote       string     `json:"hookNote"`
+	OutlineSummary string     `json:"outlineSummary"`
+}
+
+func (in InsertChapterInput) Validate() error {
+	return CreateChapterInput{
+		BookID:         in.BookID,
+		VolumeID:       in.VolumeID,
+		Title:          in.Title,
+		EmotionTag:     in.EmotionTag,
+		HookType:       in.HookType,
+		HookNote:       in.HookNote,
+		OutlineSummary: in.OutlineSummary,
+	}.Validate()
+}
+
+// MoveChapterInput 表示调整章节顺序或跨卷移动的入参。
+// Direction 支持 "up" / "down"；若指定 TargetVolumeID > 0，则将章节移动到目标卷（可选 TargetVolSeq，<=0 表示卷尾）。
+type MoveChapterInput struct {
+	ChapterID      int64  `json:"chapterId"`
+	Direction      string `json:"direction,omitempty"`
+	TargetVolumeID int64  `json:"targetVolumeId,omitempty"`
+	TargetVolSeq   int    `json:"targetVolSeq,omitempty"`
+}
+
+func (in MoveChapterInput) Validate() error {
+	if in.ChapterID <= 0 {
+		return newValidationError("chapterId", "章节 ID 必须大于 0")
+	}
+	dir := strings.ToLower(strings.TrimSpace(in.Direction))
+	if dir != "" && dir != "up" && dir != "down" {
+		return newValidationError("direction", "移动方向仅支持 up 或 down")
+	}
+	if dir == "" && in.TargetVolumeID <= 0 {
+		return newValidationError("direction", "请指定移动方向或目标分卷")
+	}
+	return nil
+}
+
+// ReplaceBookTextInput 表示全书范围查找并替换文本的入参（覆写每章正文前强制归档快照）。
+type ReplaceBookTextInput struct {
+	BookID          int64  `json:"bookId"`
+	Find            string `json:"find"`
+	Replace         string `json:"replace"`
+	IncludeTitles   bool   `json:"includeTitles,omitempty"`
+	IncludeOutlines bool   `json:"includeOutlines,omitempty"`
+	DryRun          bool   `json:"dryRun,omitempty"`
+}
+
+func (in ReplaceBookTextInput) Validate() error {
+	if in.BookID <= 0 {
+		return newValidationError("bookId", "书籍 ID 必须大于 0")
+	}
+	if in.Find == "" {
+		return newValidationError("find", "查找内容不能为空")
+	}
+	return nil
+}
+
+// ReplaceBookTextResult 表示全书查找替换结果。
+type ReplaceBookTextResult struct {
+	AffectedChapters int `json:"affectedChapters"`
+	TotalMatches     int `json:"totalMatches"`
+}
+
 // CountWords 按中文网文习惯统计正文字数（剔除空白字符后的 Unicode 字符数）。
 func CountWords(text string) int {
 	n := 0

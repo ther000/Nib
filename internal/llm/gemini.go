@@ -14,7 +14,8 @@ import (
 )
 
 type geminiPart struct {
-	Text string `json:"text"`
+	Text    string `json:"text,omitempty"`
+	Thought bool   `json:"thought,omitempty"`
 }
 
 type geminiContent struct {
@@ -161,15 +162,25 @@ func parseGeminiStream(
 				seenValidEvent = true
 			}
 			for _, part := range cand.Content.Parts {
-				if part.Text != "" {
-					seenValidEvent = true
-					seenDelta = true
+				if part.Text == "" {
+					continue
+				}
+				seenValidEvent = true
+				if part.Thought {
 					if err := emit(StreamEvent{
-						Delta:        part.Text,
-						FinishReason: finishReason,
+						ReasoningDelta: part.Text,
+						FinishReason:   finishReason,
 					}); err != nil {
 						return err
 					}
+					continue
+				}
+				seenDelta = true
+				if err := emit(StreamEvent{
+					Delta:        part.Text,
+					FinishReason: finishReason,
+				}); err != nil {
+					return err
 				}
 			}
 		}

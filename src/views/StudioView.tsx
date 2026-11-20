@@ -5,11 +5,14 @@ import {
   AlertTriangle,
   Ban,
   BookOpen,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Copy,
   Download,
+  FastForward,
   FileDiff,
   FileText,
   History,
@@ -21,7 +24,9 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  Search,
   ShieldCheck,
+  Sparkles,
   Square,
   X,
 } from "lucide-react";
@@ -43,6 +48,7 @@ import {
   type TokenUsage,
 } from "../mygo";
 import { useApp } from "../stores/AppContext";
+import { useMygoChannel } from "../hooks/useMygoStream";
 import { AuditProseParagraph } from "../components/AuditProseParagraph";
 import { DeltaReviewPanel } from "../components/DeltaReviewPanel";
 import { QualityAuditPanel } from "../components/QualityAuditPanel";
@@ -97,8 +103,26 @@ export function StudioView() {
   const [dirty, setDirty] = useState(false);
   const [readingMode, setReadingMode] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [lastAutoSavedAt, setLastAutoSavedAt] = useState<string | null>(null);
+  const [copiedClean, setCopiedClean] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   const [exporting, setExporting] = useState(false);
+
+  // Find & Replace bar (Ctrl+H)
+  const [findOpen, setFindOpen] = useState(false);
+  const [findScope, setFindScope] = useState<"chapter" | "book">("chapter");
+  const [findQuery, setFindQuery] = useState("");
+  const [replaceText, setReplaceText] = useState("");
+  const [bookReplaceStats, setBookReplaceStats] = useState<{ affectedChapters: number; totalMatches: number } | null>(null);
+  const [replacingBook, setReplacingBook] = useState(false);
+
+  // Selection AI micro-edit state
+  const [selectionRange, setSelectionRange] = useState<{ start: number; end: number; text: string } | null>(null);
+  const [selectionCustomPrompt, setSelectionCustomPrompt] = useState("");
+  const [selectionRewriting, setSelectionRewriting] = useState(false);
+  const [selectionStage, setSelectionStage] = useState("");
+  const [selectionPreview, setSelectionPreview] = useState<string | null>(null);
+  const selectionChannel = useMygoChannel<GenChunk>();
 
   // Generation streaming state
   const [generating, setGenerating] = useState(false);
@@ -200,6 +224,12 @@ export function StudioView() {
     setTitle(activeChapter.title);
     setContent(activeChapter.content);
     setDirty(false);
+    setLastAutoSavedAt(null);
+    setSelectionRange(null);
+    setSelectionPreview(null);
+    setSelectionRewriting(false);
+    setSelectionStage("");
+    selectionChannel.stop();
     setReadingMode(false);
     setGenError(null);
     setPinnedEntityIds(new Set());
@@ -659,8 +689,8 @@ export function StudioView() {
     void loadVersions();
   }, [studioDrawerOpen, drawerTab, activeChapterId, loadVersions]);
 
-  // Save draft
-  const handleSave = useCallback(async (): Promise<boolean> => {
+  // Save draft (silent=true for background AutoSave)
+  const handleSave = useCallback(async (silent = false): Promise<boolean> => {
     if (!activeChapter || generating) return false;
     setSaving(true);
     try {
@@ -672,14 +702,26 @@ export function StudioView() {
       });
       updateChapterInCache(saved);
       setDirty(false);
+      if (silent) {
+        const now = new Date();
+        setLastAutoSavedAt(
+          `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`
+        );
+      } else {
+        setLastAutoSavedAt(null);
+      }
       void runLocalLint(saved.id, true);
       if (studioDrawerOpen && drawerTab === "versions") {
         void loadVersions();
       }
-      notify({ tone: "ok", message: "正文已保存" });
+      if (!silent) {
+        notify({ tone: "ok", message: "正文已保存" });
+      }
       return true;
     } catch (err) {
-      notify({ tone: "danger", message: "保存正文失败", detail: formatErrorMessage(err) });
+      if (!silent) {
+        notify({ tone: "danger", message: "保存正文失败", detail: formatErrorMessage(err) });
+      }
       return false;
     } finally {
       setSaving(false);
@@ -696,6 +738,212 @@ export function StudioView() {
     loadVersions,
     notify,
   ]);
+
+  // Debounced AutoSave: 3s after user stops typing
+  useEffect(() => {
+    if (!dirty || generating || saving || !activeChapter) return;
+    const timer = window.setTimeout(() => {
+      void handleSave(true);
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [dirty, generating, saving, activeChapter, content, title, handleSave]);
+
+  // Ctrl+H toggles inline Find & Replace bar
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "h") {
+        e.preventDefault();
+        setFindOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Copy clean prose without markdown heading symbols for direct web-novel portal paste
+  const handleCopyCleanProse = useCallback(async () => {
+    const clean = content
+      .replace(/\r\n/g, "\n")
+      .replace(/^#{1,6}\s+.*$/gm, "")
+      .split(/\n+/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .join("\n\n");
+    if (!clean) {
+      notify({ tone: "warn", message: "当前章节暂无可复制的正文" });
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(clean);
+      setCopiedClean(true);
+      window.setTimeout(() => setCopiedClean(false), 1800);
+      notify({ tone: "ok", message: "已复制纯净正文，可直接粘贴发文" });
+    } catch (err) {
+      notify({ tone: "danger", message: "复制失败", detail: formatErrorMessage(err) });
+    }
+  }, [content, notify]);
+
+  // Selection AI micro-edit handlers
+  const handleEditorSelect = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el || generating) return;
+    const start = el.selectionStart ?? 0;
+    const end = el.selectionEnd ?? 0;
+    if (end <= start) {
+      if (!selectionRewriting && selectionPreview === null) {
+        setSelectionRange(null);
+      }
+      return;
+    }
+    const text = el.value.slice(start, end);
+    if (text.trim().length < 2) {
+      if (!selectionRewriting && selectionPreview === null) {
+        setSelectionRange(null);
+      }
+      return;
+    }
+    setSelectionRange({ start, end, text });
+    setSelectionPreview(null);
+  }, [generating, selectionRewriting, selectionPreview]);
+
+  const runSelectionRewrite = useCallback(
+    async (action: "expand" | "condense" | "dialogue" | "vivid" | "deai" | "custom") => {
+      if (!activeChapter || !selectionRange || selectionRewriting) return;
+      if (action === "custom" && !selectionCustomPrompt.trim()) {
+        notify({ tone: "warn", message: "请先输入自定义改写要求" });
+        return;
+      }
+      setSelectionRewriting(true);
+      setSelectionStage("正在微调选中片段…");
+      setSelectionPreview("");
+
+      let buf = "";
+      const { channel, runId } = selectionChannel.open((chunk) => {
+        if (chunk.kind === "thinking") {
+          setSelectionStage("模型思考中…");
+        } else if (chunk.kind === "delta" && chunk.delta) {
+          buf += chunk.delta;
+          setSelectionPreview(buf);
+          setSelectionStage("正在输出改写建议…");
+        }
+      });
+
+      try {
+        const res = await StudioService.rewriteSelection(
+          {
+            chapterId: activeChapter.id,
+            selectedText: selectionRange.text,
+            beforeContext: content.slice(Math.max(0, selectionRange.start - 360), selectionRange.start),
+            afterContext: content.slice(selectionRange.end, Math.min(content.length, selectionRange.end + 360)),
+            action,
+            customInstruction: action === "custom" ? selectionCustomPrompt.trim() : "",
+          },
+          channel
+        );
+        if (selectionChannel.isCurrent(runId)) {
+          setSelectionPreview(res.rewrittenText);
+        }
+      } catch (err) {
+        if (!selectionChannel.wasStopped()) {
+          notify({ tone: "danger", message: "选区微调失败", detail: formatErrorMessage(err) });
+          setSelectionPreview(null);
+        }
+      } finally {
+        selectionChannel.release(channel);
+        if (selectionChannel.isCurrent(runId)) {
+          setSelectionRewriting(false);
+          setSelectionStage("");
+        }
+      }
+    },
+    [activeChapter, selectionRange, selectionRewriting, selectionCustomPrompt, content, selectionChannel, notify]
+  );
+
+  const applySelectionRewrite = useCallback(() => {
+    if (!selectionRange || selectionPreview === null) return;
+    const nextContent =
+      content.slice(0, selectionRange.start) +
+      selectionPreview +
+      content.slice(selectionRange.end);
+    setContent(nextContent);
+    setDirty(true);
+    setSelectionRange(null);
+    setSelectionPreview(null);
+    setSelectionCustomPrompt("");
+    notify({ tone: "ok", message: "已替换选中片段，将在 3 秒内自动保存" });
+  }, [selectionRange, selectionPreview, content, notify]);
+
+  // Chapter & whole-book find/replace helpers
+  const chapterFindMatches = useMemo(() => {
+    if (!findQuery) return 0;
+    return content.split(findQuery).length - 1;
+  }, [content, findQuery]);
+
+  const handleReplaceInChapter = useCallback(() => {
+    if (!findQuery) return;
+    const count = content.split(findQuery).length - 1;
+    if (count === 0) {
+      notify({ tone: "warn", message: "当前章节未找到匹配内容" });
+      return;
+    }
+    setContent(content.split(findQuery).join(replaceText));
+    setDirty(true);
+    notify({ tone: "ok", message: `已在本章替换 ${count} 处` });
+  }, [content, findQuery, replaceText, notify]);
+
+  const handlePreviewBookReplace = useCallback(async () => {
+    if (!activeBook || !findQuery) return;
+    setReplacingBook(true);
+    try {
+      const res = await LibraryService.replaceBookText({
+        bookId: activeBook.id,
+        find: findQuery,
+        replace: replaceText,
+        includeTitles: true,
+        includeOutlines: true,
+        dryRun: true,
+      });
+      setBookReplaceStats(res);
+    } catch (err) {
+      notify({ tone: "danger", message: "统计全书匹配失败", detail: formatErrorMessage(err) });
+    } finally {
+      setReplacingBook(false);
+    }
+  }, [activeBook, findQuery, replaceText, notify]);
+
+  const handleExecuteBookReplace = useCallback(async () => {
+    if (!activeBook || !findQuery) return;
+    setReplacingBook(true);
+    try {
+      const res = await LibraryService.replaceBookText({
+        bookId: activeBook.id,
+        find: findQuery,
+        replace: replaceText,
+        includeTitles: true,
+        includeOutlines: true,
+        dryRun: false,
+      });
+      setBookReplaceStats(null);
+      await refreshChapters(activeBook.id);
+      if (activeChapter) {
+        const fresh = await refreshActiveChapter(activeChapter.id);
+        if (fresh) {
+          setTitle(fresh.title);
+          setContent(fresh.content);
+          setDirty(false);
+        }
+      }
+      notify({
+        tone: "ok",
+        message: `全书替换完成：共修改 ${res.affectedChapters} 章、${res.totalMatches} 处`,
+        detail: "修改前已自动归档每章历史快照",
+      });
+    } catch (err) {
+      notify({ tone: "danger", message: "全书替换失败", detail: formatErrorMessage(err) });
+    } finally {
+      setReplacingBook(false);
+    }
+  }, [activeBook, activeChapter, findQuery, replaceText, refreshChapters, refreshActiveChapter, notify]);
 
   // Finalize chapter
   const handleFinalize = useCallback(async () => {
@@ -789,8 +1037,8 @@ export function StudioView() {
     }, 8000);
   }, []);
 
-  // Start generation
-  const startGeneration = useCallback(async () => {
+  // Start generation (supports full "rewrite" and seamless "continue" mode)
+  const startGeneration = useCallback(async (mode: "rewrite" | "continue" = "rewrite") => {
     if (!activeChapter || generating) return;
 
     if (!draftRouteInfo.configured) {
@@ -808,17 +1056,25 @@ export function StudioView() {
       return;
     }
 
+    // 续写模式若编辑器有未保存修改，先保存最新正文让后端读取到准确结尾。
+    const effectiveMode: "rewrite" | "continue" =
+      mode === "continue" && content.trim().length > 0 ? "continue" : "rewrite";
+    if (effectiveMode === "continue" && dirty) {
+      await handleSave(true);
+    }
+
     const genChapterId = activeChapter.id;
     const runId = ++streamRunIdRef.current;
     const ac = new AbortController();
     abortRef.current = ac;
     userStoppedRef.current = false;
-    streamTextRef.current = "";
+    const continueBase = effectiveMode === "continue" ? content.trimEnd() : "";
+    streamTextRef.current = continueBase;
     receivedDeltaRef.current = false;
 
     setGenerating(true);
     setGenError(null);
-    setGenStageText("正在整理参考资料…");
+    setGenStageText(effectiveMode === "continue" ? "正在衔接前文准备续写…" : "正在整理参考资料…");
     setGenModelName(draftRouteInfo.configured ? draftRouteInfo.label : "");
     setLastUsage(null);
 
@@ -834,14 +1090,24 @@ export function StudioView() {
         case "started": {
           const model = chunk.modelName || draftRouteInfo.label;
           setGenModelName(model);
-          setGenStageText(`正在写作（${model}）`);
+          setGenStageText(`${effectiveMode === "continue" ? "正在续写" : "正在写作"}（${model}）`);
+          break;
+        }
+        case "thinking": {
+          const model = chunk.modelName || draftRouteInfo.label;
+          setGenStageText(`模型思考中（${model}）…`);
           break;
         }
         case "delta": {
           if (chunk.delta) {
             if (!receivedDeltaRef.current) {
               receivedDeltaRef.current = true;
-              streamTextRef.current = chunk.delta;
+              if (effectiveMode === "continue" && continueBase) {
+                const sep = /[。！？”」』…!?]$/.test(continueBase) ? "\n\n" : "";
+                streamTextRef.current = continueBase + sep + chunk.delta.replace(/^[\r\n]+/, "");
+              } else {
+                streamTextRef.current = chunk.delta;
+              }
             } else {
               streamTextRef.current += chunk.delta;
             }
@@ -896,6 +1162,7 @@ export function StudioView() {
     const trimmedExtra = extraInstruction.trim();
     const keywords = parseKeywordList(searchKeywordsText);
     const opts = {
+      mode: effectiveMode,
       briefing: {
         pinnedEntityIds: Array.from(pinnedEntityIds),
         excludedEntityIds: Array.from(excludedEntityIds),
@@ -1014,6 +1281,9 @@ export function StudioView() {
   }, [
     activeChapter,
     generating,
+    content,
+    dirty,
+    handleSave,
     providers,
     draftRouteInfo,
     extraInstruction,
@@ -1284,6 +1554,38 @@ export function StudioView() {
                 )}
                 <button
                   type="button"
+                  onClick={() => setFindOpen((v) => !v)}
+                  title="查找与替换 (Ctrl+H)"
+                  className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors ${
+                    findOpen
+                      ? "bg-accent-soft text-accent"
+                      : "text-ink-muted hover:bg-surface hover:text-ink-primary"
+                  }`}
+                >
+                  <Search className="h-3 w-3" />
+                  <span>查找替换</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={generating || !content.trim()}
+                  onClick={() => void handleCopyCleanProse()}
+                  title="复制无格式纯净正文（可直接贴起点/番茄）"
+                  className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-ink-muted transition-colors hover:bg-surface hover:text-ink-primary disabled:opacity-30"
+                >
+                  {copiedClean ? (
+                    <>
+                      <Check className="h-3 w-3 text-ok" />
+                      <span className="text-ok">已复制</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3 w-3" />
+                      <span>复制纯净正文</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
                   disabled={generating}
                   onClick={() => setReadingMode((v) => !v)}
                   title={readingMode ? "切回编辑模式" : "切换校对视图"}
@@ -1339,6 +1641,221 @@ export function StudioView() {
                 )}
               </div>
             </div>
+
+            {/* Find & Replace Bar (Ctrl+H) */}
+            {findOpen && (
+              <div className="mb-5 flex flex-col gap-2.5 rounded-xl border border-border-subtle bg-surface p-3 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-1 rounded-lg border border-border-subtle bg-canvas p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFindScope("chapter");
+                        setBookReplaceStats(null);
+                      }}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+                        findScope === "chapter"
+                          ? "bg-accent-soft text-accent"
+                          : "text-ink-secondary hover:text-ink-primary"
+                      }`}
+                    >
+                      当前章节
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFindScope("book");
+                        setBookReplaceStats(null);
+                      }}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+                        findScope === "book"
+                          ? "bg-accent-soft text-accent"
+                          : "text-ink-secondary hover:text-ink-primary"
+                      }`}
+                    >
+                      全书改名/替换
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFindOpen(false);
+                      setBookReplaceStats(null);
+                    }}
+                    className="rounded p-1 text-ink-muted hover:text-ink-primary"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    value={findQuery}
+                    onChange={(e) => {
+                      setFindQuery(e.target.value);
+                      setBookReplaceStats(null);
+                    }}
+                    placeholder="查找内容（如旧人名/招式名）"
+                    className="min-w-[160px] flex-1 rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    value={replaceText}
+                    onChange={(e) => setReplaceText(e.target.value)}
+                    placeholder="替换为…"
+                    className="min-w-[160px] flex-1 rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                  />
+
+                  {findScope === "chapter" ? (
+                    <div className="flex items-center gap-2">
+                      {findQuery && (
+                        <span className="nib-mono text-ink-muted">
+                          {chapterFindMatches} 处匹配
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        disabled={!findQuery || chapterFindMatches === 0}
+                        onClick={handleReplaceInChapter}
+                        className="rounded-lg bg-accent px-3 py-1.5 font-medium text-canvas transition-opacity hover:opacity-90 disabled:opacity-40"
+                      >
+                        全部替换
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={!findQuery || replacingBook}
+                        onClick={() => void handlePreviewBookReplace()}
+                        className="rounded-lg border border-border-subtle bg-elevated px-3 py-1.5 text-ink-primary hover:border-border-strong disabled:opacity-40"
+                      >
+                        {replacingBook ? "统计中…" : "预检影响范围"}
+                      </button>
+                      {bookReplaceStats && bookReplaceStats.totalMatches > 0 && (
+                        <button
+                          type="button"
+                          disabled={replacingBook}
+                          onClick={() => void handleExecuteBookReplace()}
+                          className="rounded-lg bg-accent px-3 py-1.5 font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-40"
+                        >
+                          确认替换（{bookReplaceStats.affectedChapters} 章 {bookReplaceStats.totalMatches} 处）
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {findScope === "book" && bookReplaceStats && bookReplaceStats.totalMatches === 0 && (
+                  <div className="text-ink-muted">全书正文、标题与章纲中均未找到「{findQuery}」</div>
+                )}
+              </div>
+            )}
+
+            {/* Selection AI Micro-Edit Bar */}
+            {!generating && !readingMode && selectionRange && (
+              <div className="mb-4 flex flex-col gap-2.5 rounded-xl border border-accent/35 bg-surface p-3 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 text-accent">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    <span className="font-medium">
+                      已选中 {countWords(selectionRange.text)} 字
+                    </span>
+                    {selectionStage && (
+                      <span className="text-ink-muted">· {selectionStage}</span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {(
+                      [
+                        { key: "expand", label: "扩写细节" },
+                        { key: "condense", label: "精简紧凑" },
+                        { key: "dialogue", label: "优化对话" },
+                        { key: "vivid", label: "增强动作感" },
+                        { key: "deai", label: "去 AI 味" },
+                      ] as const
+                    ).map((item) => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        disabled={selectionRewriting}
+                        onClick={() => void runSelectionRewrite(item.key)}
+                        className="rounded-md border border-border-subtle bg-elevated px-2 py-1 text-xs text-ink-primary transition-colors hover:border-accent/50 hover:text-accent disabled:opacity-40"
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        selectionChannel.stop();
+                        setSelectionRewriting(false);
+                        setSelectionRange(null);
+                        setSelectionPreview(null);
+                      }}
+                      className="rounded p-1 text-ink-muted hover:text-ink-primary"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={selectionCustomPrompt}
+                    disabled={selectionRewriting}
+                    onChange={(e) => setSelectionCustomPrompt(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && selectionCustomPrompt.trim()) {
+                        e.preventDefault();
+                        void runSelectionRewrite("custom");
+                      }
+                    }}
+                    placeholder="或输入自定义修改要求（例如：改成冷嘲热讽语气、加入拔剑动作）"
+                    className="min-w-0 flex-1 rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    disabled={selectionRewriting || !selectionCustomPrompt.trim()}
+                    onClick={() => void runSelectionRewrite("custom")}
+                    className="rounded-lg bg-accent px-3 py-1.5 font-medium text-canvas transition-opacity hover:opacity-90 disabled:opacity-40"
+                  >
+                    {selectionRewriting ? "改写中…" : "按要求改写"}
+                  </button>
+                </div>
+
+                {selectionPreview !== null && (
+                  <div className="flex flex-col gap-2 rounded-lg border border-border-subtle bg-canvas p-3">
+                    <div className="text-xs font-medium text-ink-secondary">改写预览</div>
+                    <div className="max-h-48 overflow-y-auto whitespace-pre-wrap text-[13px] leading-relaxed text-ink-primary">
+                      {selectionPreview || "正在生成…"}
+                    </div>
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          selectionChannel.stop();
+                          setSelectionRewriting(false);
+                          setSelectionPreview(null);
+                        }}
+                        className="rounded-md border border-border-subtle px-2.5 py-1 text-xs text-ink-secondary hover:text-ink-primary"
+                      >
+                        放弃
+                      </button>
+                      <button
+                        type="button"
+                        disabled={selectionRewriting || !selectionPreview.trim()}
+                        onClick={applySelectionRewrite}
+                        className="rounded-md bg-accent px-3 py-1 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-40"
+                      >
+                        替换选区
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Chapter Title */}
             <input
@@ -1423,13 +1940,22 @@ export function StudioView() {
                     已停在 <span className="nib-mono">{formatNumber(liveWordCount)}</span> 字，可继续手改或重新生成
                   </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void startGeneration()}
-                  className="shrink-0 font-medium underline underline-offset-2 hover:opacity-80"
-                >
-                  重新生成
-                </button>
+                <div className="flex shrink-0 items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => void startGeneration("continue")}
+                    className="font-medium underline underline-offset-2 hover:opacity-80"
+                  >
+                    接着续写
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void startGeneration("rewrite")}
+                    className="font-medium text-ink-secondary underline underline-offset-2 hover:opacity-80"
+                  >
+                    重新生成
+                  </button>
+                </div>
               </div>
             )}
 
@@ -1487,6 +2013,9 @@ export function StudioView() {
               <textarea
                 ref={textareaRef}
                 value={content}
+                onSelect={handleEditorSelect}
+                onMouseUp={handleEditorSelect}
+                onKeyUp={handleEditorSelect}
                 onChange={(e) => {
                   setContent(e.target.value);
                   setDirty(true);
@@ -1527,9 +2056,11 @@ export function StudioView() {
             ) : saving ? (
               <span className="text-ink-muted">保存中…</span>
             ) : dirty ? (
-              <span className="text-warn">未保存</span>
+              <span className="text-warn">未保存（3 秒后自动保存）</span>
             ) : activeChapter.status === "partial" ? (
               <span className="text-warn">未写完</span>
+            ) : lastAutoSavedAt ? (
+              <span className="text-ink-muted">已自动保存 {lastAutoSavedAt}</span>
             ) : (
               <span className="text-ink-muted">已保存</span>
             )}
@@ -1557,10 +2088,31 @@ export function StudioView() {
                 <Square className="h-3 w-3 fill-current" />
                 <span>停止</span>
               </button>
+            ) : content.trim().length > 0 ? (
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => void startGeneration("continue")}
+                  title="紧接当前正文结尾继续往下写"
+                  className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 font-semibold text-canvas transition-opacity hover:opacity-90"
+                >
+                  <FastForward className="h-3 w-3" />
+                  <span>续写</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void startGeneration("rewrite")}
+                  title="存档当前正文后按节拍重新生成整章"
+                  className="flex items-center gap-1 rounded-md border border-border-subtle bg-elevated px-2.5 py-1 text-ink-primary transition-colors hover:border-border-strong"
+                >
+                  <RefreshCw className="h-3 w-3 text-ink-secondary" />
+                  <span>重写</span>
+                </button>
+              </div>
             ) : (
               <button
                 type="button"
-                onClick={() => void startGeneration()}
+                onClick={() => void startGeneration("rewrite")}
                 title="生成本章 (Ctrl+Enter)"
                 className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 font-semibold text-canvas transition-opacity hover:opacity-90"
               >

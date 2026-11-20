@@ -71,6 +71,35 @@ func (s *StudioService) GenerateChapter(
 	return runner.GenerateChapter(genCtx, chapterID, opts, emit)
 }
 
+// RewriteSelection 对编辑器选中的局部段落执行流式 AI 微调，返回改写预览文本（不直接改库）。
+func (s *StudioService) RewriteSelection(
+	ctx context.Context,
+	req domain.RewriteSelectionRequest,
+	ch *mygo.Channel[domain.GenChunk],
+) (domain.RewriteSelectionResult, error) {
+	if err := req.Validate(); err != nil {
+		return domain.RewriteSelectionResult{}, err
+	}
+	runner, genCtx, cancel, release, err := s.rt.trackPipeline(ctx)
+	if err != nil {
+		return domain.RewriteSelectionResult{}, err
+	}
+	defer release()
+
+	emit := func(chunk domain.GenChunk) error {
+		if ch == nil {
+			return nil
+		}
+		if sendErr := ch.Send(chunk); sendErr != nil {
+			cancel()
+			return sendErr
+		}
+		return nil
+	}
+
+	return runner.RewriteSelection(genCtx, req, emit)
+}
+
 // ListChapterVersions 按时间倒序列出章节的历史正文快照。
 func (s *StudioService) ListChapterVersions(ctx context.Context, chapterID int64) ([]domain.ChapterVersion, error) {
 	if err := validatePositiveID("chapterId", chapterID); err != nil {

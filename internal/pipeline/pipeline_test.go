@@ -535,3 +535,68 @@ func TestGenerateChapterEmptyStreamNeverOverwritesExistingDraft(t *testing.T) {
 		t.Fatalf("expected exporter not called on empty generation, got %d", exp.calls)
 	}
 }
+
+func TestGenerateChapterContinueModeAndThinkingChunks(t *testing.T) {
+	store := newBaseStore("")
+	store.chapter.Content = "林渊推开石门，冷风扑面而来。"
+	comp := compiler.New(store)
+
+	var seenPrompt string
+	streamer := &fakeLLM{
+		fn: func(_ context.Context, _ domain.Provider, req llm.ChatRequest, onEvent func(llm.StreamEvent) error) (domain.TokenUsage, error) {
+			seenPrompt = req.Messages[0].Content
+			_ = onEvent(llm.StreamEvent{ReasoningDelta: "构思后续冲突"})
+			_ = onEvent(llm.StreamEvent{Delta: "门后黑影骤然暴起。"})
+			return domain.TokenUsage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120}, nil
+		},
+	}
+
+	runner := New(store, comp, streamer, nil)
+	var sawThinking bool
+	saved, err := runner.GenerateChapter(context.Background(), 3, domain.GenerateChapterOptions{Mode: "continue"}, func(ch domain.GenChunk) error {
+		if ch.Kind == domain.GenChunkThinking && ch.ReasoningDelta == "构思后续冲突" {
+			sawThinking = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("GenerateChapter continue failed: %v", err)
+	}
+	if !sawThinking {
+		t.Fatalf("expected GenChunkThinking chunk")
+	}
+	if !strings.Contains(seenPrompt, "林渊推开石门，冷风扑面而来。") {
+		t.Fatalf("expected continuation prompt to include existing tail")
+	}
+	if !strings.HasPrefix(saved.Content, "林渊推开石门，冷风扑面而来。") || !strings.HasSuffix(saved.Content, "门后黑影骤然暴起。") {
+		t.Fatalf("unexpected continued content: %q", saved.Content)
+	}
+}
+
+func TestRewriteSelection(t *testing.T) {
+	store := newBaseStore("")
+	comp := compiler.New(store)
+	streamer := &fakeLLM{
+		fn: func(_ context.Context, _ domain.Provider, req llm.ChatRequest, onEvent func(llm.StreamEvent) error) (domain.TokenUsage, error) {
+			if !strings.Contains(req.Messages[0].Content, "他很生气。") {
+				return domain.TokenUsage{}, errors.New("missing selected text")
+			}
+			_ = onEvent(llm.StreamEvent{Delta: "他指节攥得发白，喉间滚出一声低哑冷笑。"})
+			return domain.TokenUsage{PromptTokens: 60, CompletionTokens: 30, TotalTokens: 90}, nil
+		},
+	}
+
+	runner := New(store, comp, streamer, nil)
+	res, err := runner.RewriteSelection(context.Background(), domain.RewriteSelectionRequest{
+		ChapterID:     3,
+		SelectedText:  "他很生气。",
+		BeforeContext: "长老当众撕毁契约。",
+		Action:        "vivid",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RewriteSelection failed: %v", err)
+	}
+	if res.RewrittenText != "他指节攥得发白，喉间滚出一声低哑冷笑。" {
+		t.Fatalf("unexpected rewritten text: %q", res.RewrittenText)
+	}
+}

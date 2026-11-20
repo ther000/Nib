@@ -39,6 +39,7 @@ type anthropicSSEPayload struct {
 	Delta *struct {
 		Type       string `json:"type"`
 		Text       string `json:"text"`
+		Thinking   string `json:"thinking"`
 		StopReason string `json:"stop_reason"`
 	} `json:"delta"`
 	Usage *struct {
@@ -158,7 +159,12 @@ func parseAnthropicStream(
 				usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 			}
 		case "content_block_delta":
-			if payload.Delta != nil && payload.Delta.Type == "text_delta" && payload.Delta.Text != "" {
+			if payload.Delta != nil && payload.Delta.Type == "thinking_delta" && payload.Delta.Thinking != "" {
+				seenValidEvent = true
+				if err := emit(StreamEvent{ReasoningDelta: payload.Delta.Thinking}); err != nil {
+					return err
+				}
+			} else if payload.Delta != nil && payload.Delta.Type == "text_delta" && payload.Delta.Text != "" {
 				seenValidEvent = true
 				seenDelta = true
 				if err := emit(StreamEvent{Delta: payload.Delta.Text}); err != nil {

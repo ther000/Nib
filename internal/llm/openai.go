@@ -26,7 +26,9 @@ type openAIChatRequest struct {
 type openAIStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
+			Reasoning        string `json:"reasoning"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -121,6 +123,19 @@ func parseOpenAIStream(
 			if ch.FinishReason != nil && *ch.FinishReason != "" {
 				finishReason = *ch.FinishReason
 				seenValidEvent = true
+			}
+			reasoning := ch.Delta.ReasoningContent
+			if reasoning == "" {
+				reasoning = ch.Delta.Reasoning
+			}
+			if reasoning != "" {
+				seenValidEvent = true
+				if err := emit(StreamEvent{
+					ReasoningDelta: reasoning,
+					FinishReason:   finishReason,
+				}); err != nil {
+					return err
+				}
 			}
 			if ch.Delta.Content != "" {
 				seenValidEvent = true

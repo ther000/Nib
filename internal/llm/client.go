@@ -170,7 +170,7 @@ func (c *Client) TestConnection(ctx context.Context, provider domain.Provider) (
 		Model:       model,
 		Messages:    []ChatMessage{{Role: "user", Content: "请只回复 OK"}},
 		Temperature: 0,
-		MaxTokens:   16,
+		MaxTokens:   128,
 	}
 
 	_, _, _, err := c.streamOnce(probeCtx, provider, req, nil)

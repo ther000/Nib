@@ -766,3 +766,101 @@ func TestWALConcurrentReadsAndWrites(t *testing.T) {
 		t.Fatalf("expected 10 concurrently inserted entities, got %d", len(all))
 	}
 }
+
+func TestChapterLifecycleInsertMoveDeleteAndBookReplace(t *testing.T) {
+	ctx := context.Background()
+	st := openMemoryStore(t)
+
+	book, err := st.CreateBook(ctx, domain.CreateBookInput{Title: "长篇测试", Genre: domain.GenreXuanhuan})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	v1, err := st.UpsertVolume(ctx, domain.UpsertVolumeInput{BookID: book.ID, Seq: 1, Title: "第一卷"})
+	if err != nil {
+		t.Fatalf("UpsertVolume v1: %v", err)
+	}
+	v2, err := st.UpsertVolume(ctx, domain.UpsertVolumeInput{BookID: book.ID, Seq: 2, Title: "第二卷"})
+	if err != nil {
+		t.Fatalf("UpsertVolume v2: %v", err)
+	}
+
+	c1, _ := st.CreateChapter(ctx, domain.CreateChapterInput{BookID: book.ID, VolumeID: v1.ID, Title: "第一章"})
+	c2, _ := st.CreateChapter(ctx, domain.CreateChapterInput{BookID: book.ID, VolumeID: v1.ID, Title: "第二章"})
+	c3, _ := st.CreateChapter(ctx, domain.CreateChapterInput{BookID: book.ID, VolumeID: v2.ID, Title: "第三章"})
+
+	// 在第一章后插入新章 c15，验证全书与卷内序重排。
+	c15, err := st.InsertChapter(ctx, domain.InsertChapterInput{
+		BookID:         book.ID,
+		VolumeID:       v1.ID,
+		AfterChapterID: c1.ID,
+		Title:          "插章一点五",
+	})
+	if err != nil {
+		t.Fatalf("InsertChapter: %v", err)
+	}
+	if c15.GlobalSeq != 2 || c15.VolSeq != 2 {
+		t.Fatalf("inserted seq = (%d,%d), want (2,2)", c15.GlobalSeq, c15.VolSeq)
+	}
+
+	// 将插章上移到卷首。
+	moved, err := st.MoveChapter(ctx, domain.MoveChapterInput{ChapterID: c15.ID, Direction: "up"})
+	if err != nil {
+		t.Fatalf("MoveChapter up: %v", err)
+	}
+	if moved.GlobalSeq != 1 || moved.VolSeq != 1 {
+		t.Fatalf("moved up seq = (%d,%d), want (1,1)", moved.GlobalSeq, moved.VolSeq)
+	}
+
+	// 将 c2 跨卷移动到 v2 卷首。
+	movedCross, err := st.MoveChapter(ctx, domain.MoveChapterInput{ChapterID: c2.ID, TargetVolumeID: v2.ID, TargetVolSeq: 1})
+	if err != nil {
+		t.Fatalf("MoveChapter cross volume: %v", err)
+	}
+	if movedCross.VolumeID != v2.ID || movedCross.VolSeq != 1 || movedCross.GlobalSeq != 3 {
+		t.Fatalf("cross move got vol=%d volSeq=%d globalSeq=%d", movedCross.VolumeID, movedCross.VolSeq, movedCross.GlobalSeq)
+	}
+
+	// 删除 c15，验证剩余三章 global_seq 连续为 1,2,3。
+	if err := st.DeleteChapter(ctx, c15.ID); err != nil {
+		t.Fatalf("DeleteChapter: %v", err)
+	}
+	rem, err := st.ListBookChapters(ctx, book.ID)
+	if err != nil {
+		t.Fatalf("ListBookChapters: %v", err)
+	}
+	if len(rem) != 3 || rem[0].GlobalSeq != 1 || rem[1].GlobalSeq != 2 || rem[2].GlobalSeq != 3 || rem[2].ID != c3.ID {
+		t.Fatalf("remaining chapters after delete unexpected: %+v", rem)
+	}
+
+	// 全书批量替换：必须先干跑统计，再实际替换，且每章正文改写前必须保留 chapter_versions 快照。
+	_, _ = st.SaveChapterDraft(ctx, domain.SaveChapterDraftInput{ChapterID: c1.ID, Content: "林凡拔剑，林凡大喝。"})
+	_, _ = st.SaveChapterDraft(ctx, domain.SaveChapterDraftInput{ChapterID: c3.ID, Content: "林凡转身离去。"})
+
+	dryRes, err := st.ReplaceBookText(ctx, domain.ReplaceBookTextInput{
+		BookID:  book.ID,
+		Find:    "林凡",
+		Replace: "林渊",
+		DryRun:  true,
+	})
+	if err != nil || dryRes.AffectedChapters != 2 || dryRes.TotalMatches != 3 {
+		t.Fatalf("DryRun ReplaceBookText = %+v, err=%v", dryRes, err)
+	}
+
+	realRes, err := st.ReplaceBookText(ctx, domain.ReplaceBookTextInput{
+		BookID:  book.ID,
+		Find:    "林凡",
+		Replace: "林渊",
+	})
+	if err != nil || realRes.AffectedChapters != 2 || realRes.TotalMatches != 3 {
+		t.Fatalf("ReplaceBookText = %+v, err=%v", realRes, err)
+	}
+
+	afterC1, _ := st.GetChapter(ctx, c1.ID)
+	if afterC1.Content != "林渊拔剑，林渊大喝。" {
+		t.Fatalf("c1 content after replace = %q", afterC1.Content)
+	}
+	vers, _ := st.ListChapterVersions(ctx, c1.ID)
+	if len(vers) == 0 || vers[0].Content != "林凡拔剑，林凡大喝。" {
+		t.Fatalf("expected snapshot before ReplaceBookText overwrite, got %+v", vers)
+	}
+}

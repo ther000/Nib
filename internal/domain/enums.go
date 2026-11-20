@@ -310,6 +310,7 @@ type GenChunkKind string
 
 const (
 	GenChunkStarted   GenChunkKind = "started"
+	GenChunkThinking  GenChunkKind = "thinking"
 	GenChunkDelta     GenChunkKind = "delta"
 	GenChunkUsage     GenChunkKind = "usage"
 	GenChunkCompleted GenChunkKind = "completed"
@@ -320,6 +321,7 @@ const (
 func (k GenChunkKind) Valid() bool {
 	switch k {
 	case GenChunkStarted,
+		GenChunkThinking,
 		GenChunkDelta,
 		GenChunkUsage,
 		GenChunkCompleted,

@@ -412,6 +412,14 @@ func (p *observingPipeline) GenerateChapter(
 	})
 }
 
+func (p *observingPipeline) RewriteSelection(
+	ctx context.Context,
+	req domain.RewriteSelectionRequest,
+	emit func(domain.GenChunk) error,
+) (domain.RewriteSelectionResult, error) {
+	return p.inner.RewriteSelection(ctx, req, emit)
+}
+
 func TestRuntimeCloseCancelsInFlightPipelineBeforeClosingDB(t *testing.T) {
 	ctx := context.Background()
 	tmpDir := t.TempDir()

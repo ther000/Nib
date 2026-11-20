@@ -171,6 +171,54 @@ func (f *fakeStore) CreateChapter(_ context.Context, in domain.CreateChapterInpu
 	return c, nil
 }
 
+func (f *fakeStore) InsertChapter(ctx context.Context, in domain.InsertChapterInput) (domain.Chapter, error) {
+	return f.CreateChapter(ctx, domain.CreateChapterInput{
+		BookID:         in.BookID,
+		VolumeID:       in.VolumeID,
+		Title:          in.Title,
+		EmotionTag:     in.EmotionTag,
+		HookType:       in.HookType,
+		HookNote:       in.HookNote,
+		OutlineSummary: in.OutlineSummary,
+	})
+}
+
+func (f *fakeStore) MoveChapter(_ context.Context, in domain.MoveChapterInput) (domain.Chapter, error) {
+	c, ok := f.chapters[in.ChapterID]
+	if !ok {
+		return domain.Chapter{}, domain.ErrNotFound
+	}
+	if in.TargetVolumeID > 0 {
+		c.VolumeID = in.TargetVolumeID
+	}
+	f.chapters[c.ID] = c
+	return c, nil
+}
+
+func (f *fakeStore) DeleteChapter(_ context.Context, chapterID int64) error {
+	delete(f.chapters, chapterID)
+	return nil
+}
+
+func (f *fakeStore) ReplaceBookText(_ context.Context, in domain.ReplaceBookTextInput) (domain.ReplaceBookTextResult, error) {
+	var res domain.ReplaceBookTextResult
+	for id, c := range f.chapters {
+		if c.BookID != in.BookID {
+			continue
+		}
+		hits := strings.Count(c.Content, in.Find)
+		if hits > 0 {
+			res.AffectedChapters++
+			res.TotalMatches += hits
+			if !in.DryRun {
+				c.Content = strings.ReplaceAll(c.Content, in.Find, in.Replace)
+				f.chapters[id] = c
+			}
+		}
+	}
+	return res, nil
+}
+
 func (f *fakeStore) UpdateChapterMeta(_ context.Context, in domain.UpdateChapterMetaInput) (domain.Chapter, error) {
 	c, ok := f.chapters[in.ID]
 	if !ok {
@@ -417,6 +465,13 @@ func (p *fakePipeline) GenerateChapter(_ context.Context, chapterID int64, _ dom
 		}
 	}
 	return domain.Chapter{ID: chapterID, Content: "生成正文", WordCount: 4, Status: domain.ChapterStatusReviewing}, nil
+}
+
+func (p *fakePipeline) RewriteSelection(_ context.Context, req domain.RewriteSelectionRequest, emit func(domain.GenChunk) error) (domain.RewriteSelectionResult, error) {
+	if emit != nil {
+		_ = emit(domain.GenChunk{Kind: domain.GenChunkDelta, ChapterID: req.ChapterID, Delta: "改写结果"})
+	}
+	return domain.RewriteSelectionResult{RewrittenText: "改写结果", ModelName: "mock", ProviderName: "mock"}, nil
 }
 
 func TestNilRuntimeGuard(t *testing.T) {

@@ -1,5 +1,7 @@
 package domain
 
+import "strings"
+
 const DefaultBriefingTokenBudget = 12000
 
 // BriefingOptions 控制上下文编译器的槽位配额与人工微调选项。
@@ -41,8 +43,10 @@ type Briefing struct {
 }
 
 // GenerateChapterOptions 控制单章流式出稿的临时覆盖参数。
+// Mode 支持 "" / "rewrite"（整章生成）或 "continue"（紧接已有正文末尾续写）。
 type GenerateChapterOptions struct {
 	Briefing         BriefingOptions `json:"briefing"`
+	Mode             string          `json:"mode,omitempty"`
 	ExtraInstruction string          `json:"extraInstruction,omitempty"`
 	Temperature      *float64        `json:"temperature,omitempty"`
 	MaxTokens        *int            `json:"maxTokens,omitempty"`
@@ -51,6 +55,10 @@ type GenerateChapterOptions struct {
 func (o GenerateChapterOptions) Validate() error {
 	if o.Briefing.TokenBudget < 0 {
 		return newValidationError("briefing.tokenBudget", "上下文配额不能为负数")
+	}
+	mode := strings.ToLower(strings.TrimSpace(o.Mode))
+	if mode != "" && mode != "rewrite" && mode != "continue" {
+		return newValidationError("mode", "生成模式仅支持 rewrite 或 continue")
 	}
 	if o.Temperature != nil && (*o.Temperature < 0 || *o.Temperature > 2.0) {
 		return newValidationError("temperature", "温度参数必须在 0.0 到 2.0 之间")
@@ -70,16 +78,55 @@ type TokenUsage struct {
 
 // GenChunk 是通过 *mygo.Channel[GenChunk] 推送给前端审改台的流式分片事件。
 type GenChunk struct {
-	Kind         GenChunkKind  `json:"kind"`
-	ChapterID    int64         `json:"chapterId"`
-	Delta        string        `json:"delta,omitempty"`
-	WordCount    int           `json:"wordCount,omitempty"`
-	Status       ChapterStatus `json:"status,omitempty"`
-	ModelName    string        `json:"modelName,omitempty"`
-	ProviderName string        `json:"providerName,omitempty"`
-	Usage        *TokenUsage   `json:"usage,omitempty"`
-	FinishReason string        `json:"finishReason,omitempty"`
-	Error        string        `json:"error,omitempty"`
-	Retryable    bool          `json:"retryable,omitempty"`
-	RetryAttempt int           `json:"retryAttempt,omitempty"`
+	Kind           GenChunkKind  `json:"kind"`
+	ChapterID      int64         `json:"chapterId"`
+	Delta          string        `json:"delta,omitempty"`
+	ReasoningDelta string        `json:"reasoningDelta,omitempty"`
+	WordCount      int           `json:"wordCount,omitempty"`
+	Status         ChapterStatus `json:"status,omitempty"`
+	ModelName      string        `json:"modelName,omitempty"`
+	ProviderName   string        `json:"providerName,omitempty"`
+	Usage          *TokenUsage   `json:"usage,omitempty"`
+	FinishReason   string        `json:"finishReason,omitempty"`
+	Error          string        `json:"error,omitempty"`
+	Retryable      bool          `json:"retryable,omitempty"`
+	RetryAttempt   int           `json:"retryAttempt,omitempty"`
+}
+
+// RewriteSelectionRequest 定义编辑器选区级 AI 微调入参。
+// Action 支持 expand / condense / dialogue / vivid / deai / custom。
+type RewriteSelectionRequest struct {
+	ChapterID         int64  `json:"chapterId"`
+	SelectedText      string `json:"selectedText"`
+	BeforeContext     string `json:"beforeContext,omitempty"`
+	AfterContext      string `json:"afterContext,omitempty"`
+	Action            string `json:"action"`
+	CustomInstruction string `json:"customInstruction,omitempty"`
+}
+
+func (r RewriteSelectionRequest) Validate() error {
+	if r.ChapterID <= 0 {
+		return newValidationError("chapterId", "章节 ID 必须大于 0")
+	}
+	if strings.TrimSpace(r.SelectedText) == "" {
+		return newValidationError("selectedText", "请先选中需要修改的文本")
+	}
+	action := strings.ToLower(strings.TrimSpace(r.Action))
+	switch action {
+	case "", "expand", "condense", "dialogue", "vivid", "deai", "custom":
+	default:
+		return newValidationError("action", "不支持的选区改写指令")
+	}
+	if action == "custom" && strings.TrimSpace(r.CustomInstruction) == "" {
+		return newValidationError("customInstruction", "自定义改写指令不能为空")
+	}
+	return nil
+}
+
+// RewriteSelectionResult 返回选区改写后的纯文本预览结果。
+type RewriteSelectionResult struct {
+	RewrittenText string      `json:"rewrittenText"`
+	ModelName     string      `json:"modelName"`
+	ProviderName  string      `json:"providerName"`
+	Usage         *TokenUsage `json:"usage,omitempty"`
 }

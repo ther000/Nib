@@ -194,6 +194,60 @@ func (s *LibraryService) CreateChapter(ctx context.Context, input domain.CreateC
 	return st.CreateChapter(ctx, input)
 }
 
+// InsertChapter 在指定卷的某章之后（afterChapterId=0 表示卷首）插入新章节并自动重排章序。
+func (s *LibraryService) InsertChapter(ctx context.Context, input domain.InsertChapterInput) (domain.Chapter, error) {
+	if err := input.Validate(); err != nil {
+		return domain.Chapter{}, err
+	}
+	if input.EmotionTag == "" {
+		input.EmotionTag = domain.EmotionSetup
+	}
+	if input.HookType == "" {
+		input.HookType = domain.HookMystery
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return domain.Chapter{}, err
+	}
+	return st.InsertChapter(ctx, input)
+}
+
+// MoveChapter 调整章节顺序（up / down）或跨卷移动并自动重排章序。
+func (s *LibraryService) MoveChapter(ctx context.Context, input domain.MoveChapterInput) (domain.Chapter, error) {
+	if err := input.Validate(); err != nil {
+		return domain.Chapter{}, err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return domain.Chapter{}, err
+	}
+	return st.MoveChapter(ctx, input)
+}
+
+// DeleteChapter 删除指定章节并自动重排剩余章节顺序。
+func (s *LibraryService) DeleteChapter(ctx context.Context, chapterID int64) error {
+	if err := validatePositiveID("chapterId", chapterID); err != nil {
+		return err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return err
+	}
+	return st.DeleteChapter(ctx, chapterID)
+}
+
+// ReplaceBookText 在全书范围查找并替换文本（每章正文修改前自动保存历史快照）。
+func (s *LibraryService) ReplaceBookText(ctx context.Context, input domain.ReplaceBookTextInput) (domain.ReplaceBookTextResult, error) {
+	if err := input.Validate(); err != nil {
+		return domain.ReplaceBookTextResult{}, err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return domain.ReplaceBookTextResult{}, err
+	}
+	return st.ReplaceBookText(ctx, input)
+}
+
 // UpdateChapterMeta 更新章节标题、状态、情绪标签、钩子与章纲摘要。
 func (s *LibraryService) UpdateChapterMeta(ctx context.Context, input domain.UpdateChapterMetaInput) (domain.Chapter, error) {
 	if err := input.Validate(); err != nil {
