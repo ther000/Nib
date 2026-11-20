@@ -39,6 +39,7 @@ func main() {
 		app.NewStudioService(rt),
 		app.NewMemoryService(rt),
 		app.NewStyleService(rt),
+		app.NewBatchService(rt),
 	)
 
 	var shutdownOnce sync.Once

@@ -126,6 +126,25 @@ type StyleEngine interface {
 	ApplySurgicalDiff(ctx context.Context, in domain.ApplySurgicalDiffInput) (domain.ApplySurgicalDiffResult, error)
 }
 
+// BatchStore 定义 Phase 4 微批运行记录与 Token 统计的只读查询接口（由 internal/store 实现）。
+type BatchStore interface {
+	GetBatchRun(ctx context.Context, batchID int64) (domain.BatchRun, error)
+	GetLatestBatchRun(ctx context.Context, bookID int64) (*domain.BatchRun, error)
+	GetUsageSummary(ctx context.Context, bookID int64) (domain.UsageSummary, error)
+}
+
+// BatchEngine 定义 Phase 4 批量章纲流式生成与 1~5 章串行微批队列调度接口（由 internal/pipeline 实现，零 MyGo 依赖）。
+type BatchEngine interface {
+	BatchGenerateOutlines(
+		ctx context.Context,
+		req domain.BatchOutlineRequest,
+		emit func(domain.OutlineChunk) error,
+	) ([]domain.Chapter, error)
+	StartBatchRun(ctx context.Context, bookID int64, chapterIDs []int64, mode domain.BatchMode) (domain.BatchRun, error)
+	CancelBatchRun(ctx context.Context, batchID int64) (domain.BatchRun, error)
+	RetryBatchItem(ctx context.Context, itemID int64) (domain.BatchRun, error)
+}
+
 // DirPickerFunc 封装原生目录选择弹窗，默认使用 mygo.Dialog.Open，可在单测中替换。
 type DirPickerFunc func(ctx context.Context) (string, error)
 
@@ -140,6 +159,8 @@ type RuntimeDeps struct {
 	DeltaExtractor DeltaExtractor
 	StyleStore     StyleStore
 	StyleEngine    StyleEngine
+	BatchStore     BatchStore
+	BatchEngine    BatchEngine
 	DirPicker      DirPickerFunc
 }
 
@@ -390,6 +411,59 @@ func (r *Runtime) trackStyleEngine(callCtx context.Context) (StyleEngine, contex
 		r.activeWG.Done()
 	}
 	return eng, engCtx, release, nil
+}
+
+func (r *Runtime) batchStore() (BatchStore, error) {
+	if r == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.ready || r.closed || r.deps.BatchStore == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	return r.deps.BatchStore, nil
+}
+
+func (r *Runtime) batchEngine() (BatchEngine, error) {
+	if r == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.ready || r.closed || r.deps.BatchEngine == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	return r.deps.BatchEngine, nil
+}
+
+func (r *Runtime) trackBatchEngine(callCtx context.Context) (BatchEngine, context.Context, context.CancelFunc, func(), error) {
+	if r == nil {
+		return nil, nil, nil, nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	if !r.ready || r.closed || r.deps.BatchEngine == nil {
+		r.mu.RUnlock()
+		return nil, nil, nil, nil, ErrRuntimeNotReady
+	}
+	eng := r.deps.BatchEngine
+	baseCtx := r.baseCtx
+	r.activeWG.Add(1)
+	r.mu.RUnlock()
+
+	engCtx, cancel := context.WithCancel(callCtx)
+	var stopWatch func() bool
+	if baseCtx != nil {
+		stopWatch = context.AfterFunc(baseCtx, cancel)
+	}
+	release := func() {
+		if stopWatch != nil {
+			stopWatch()
+		}
+		cancel()
+		r.activeWG.Done()
+	}
+	return eng, engCtx, cancel, release, nil
 }
 
 func (r *Runtime) dirPicker() DirPickerFunc {

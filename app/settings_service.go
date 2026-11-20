@@ -127,3 +127,28 @@ func (s *SettingsService) PickExportDir(ctx context.Context) (string, error) {
 	picker := s.rt.dirPicker()
 	return picker(ctx)
 }
+
+// GetUsageSummary 聚合指定书籍（或 bookID=0 时全局）的各环节、各模型 Token 消耗与调用统计。
+func (s *SettingsService) GetUsageSummary(ctx context.Context, bookID int64) (domain.UsageSummary, error) {
+	if bookID < 0 {
+		return domain.UsageSummary{}, &domain.ValidationError{
+			Field:   "bookId",
+			Message: "书籍 ID 不能为负数",
+		}
+	}
+	bs, err := s.rt.batchStore()
+	if err != nil {
+		return domain.UsageSummary{}, err
+	}
+	summary, err := bs.GetUsageSummary(ctx, bookID)
+	if err != nil {
+		return domain.UsageSummary{}, err
+	}
+	if summary.ByStage == nil {
+		summary.ByStage = []domain.StageUsageStat{}
+	}
+	if summary.ByModel == nil {
+		summary.ByModel = []domain.ModelUsageStat{}
+	}
+	return summary, nil
+}

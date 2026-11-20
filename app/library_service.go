@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 
+	"github.com/egoist/mygo"
+
 	"nib/internal/domain"
 	"nib/internal/genres"
 )
@@ -316,6 +318,69 @@ func (s *LibraryService) ExportBookMarkdown(ctx context.Context, bookID int64) (
 		return domain.ExportResult{}, domain.ErrExportDirNotSet
 	}
 	return exp.ExportBook(ctx, bookID)
+}
+
+// GetVolumePacing 计算指定卷的情绪极性折线数据，并自动诊断连续蓄压过载、缺高潮爆发与超期未收伏笔。
+func (s *LibraryService) GetVolumePacing(ctx context.Context, volumeID int64) (domain.VolumePacingReport, error) {
+	if err := validatePositiveID("volumeId", volumeID); err != nil {
+		return domain.VolumePacingReport{}, err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return domain.VolumePacingReport{}, err
+	}
+	chapters, err := st.ListChapters(ctx, volumeID)
+	if err != nil {
+		return domain.VolumePacingReport{}, err
+	}
+	var openFS []domain.Foreshadowing
+	if len(chapters) > 0 {
+		if ms, msErr := s.rt.memoryStore(); msErr == nil {
+			if fsList, fsErr := ms.ListForeshadowings(ctx, chapters[0].BookID, ""); fsErr == nil {
+				openFS = fsList
+			}
+		}
+	}
+	return domain.DiagnoseVolumePacing(volumeID, chapters, openFS), nil
+}
+
+// BatchGenerateOutlines 调用 outline 模型路由流式批量生成 1~10 章结构化章纲与节拍卡并落库为 outlined 状态。
+func (s *LibraryService) BatchGenerateOutlines(
+	ctx context.Context,
+	req domain.BatchOutlineRequest,
+	ch *mygo.Channel[domain.OutlineChunk],
+) ([]domain.Chapter, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+	if req.Count == 0 {
+		req.Count = domain.DefaultBatchOutlineCount
+	}
+	eng, genCtx, cancel, release, err := s.rt.trackBatchEngine(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	emit := func(chunk domain.OutlineChunk) error {
+		if ch == nil {
+			return nil
+		}
+		if sendErr := ch.Send(chunk); sendErr != nil {
+			cancel()
+			return sendErr
+		}
+		return nil
+	}
+
+	chapters, err := eng.BatchGenerateOutlines(genCtx, req, emit)
+	if err != nil {
+		return nil, err
+	}
+	if chapters == nil {
+		return []domain.Chapter{}, nil
+	}
+	return chapters, nil
 }
 
 func (s *LibraryService) syncChapterMarkdownIfConfigured(ctx context.Context, st Store, chap domain.Chapter) error {
