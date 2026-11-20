@@ -1,0 +1,444 @@
+package pipeline
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"nib/internal/domain"
+	"nib/internal/llm"
+)
+
+const (
+	defaultSaveTimeout    = 5 * time.Second
+	defaultDraftMaxTokens = 4096
+)
+
+// Store 定义单章生成流水线所需的最小持久化接口（与 internal/store.Store 方法签名直接对齐）。
+type Store interface {
+	GetBook(ctx context.Context, id int64) (domain.Book, error)
+	GetVolume(ctx context.Context, id int64) (domain.Volume, error)
+	GetChapter(ctx context.Context, id int64) (domain.Chapter, error)
+	GetModelRoute(ctx context.Context, stage domain.PipelineStage) (domain.ModelRoute, error)
+	GetProvider(ctx context.Context, id int64) (domain.Provider, error)
+	SaveChapterContent(
+		ctx context.Context,
+		chapterID int64,
+		content string,
+		status domain.ChapterStatus,
+		source domain.VersionSource,
+		modelName string,
+		briefingJSON string,
+	) (domain.Chapter, error)
+}
+
+// Compiler 定义上下文编译接口（与 internal/compiler.Compiler 对齐）。
+type Compiler interface {
+	Compile(ctx context.Context, chapterID int64, opts domain.BriefingOptions) (domain.Briefing, error)
+}
+
+// LLMStreamer 定义流式模型调用接口（与 internal/llm.Client 对齐）。
+type LLMStreamer interface {
+	Stream(
+		ctx context.Context,
+		provider domain.Provider,
+		req llm.ChatRequest,
+		onEvent func(llm.StreamEvent) error,
+	) (domain.TokenUsage, error)
+}
+
+// Exporter 定义单向 Markdown 章节导出接口（与 internal/exporter 对齐）。
+type Exporter interface {
+	ExportChapter(book domain.Book, vol domain.Volume, chap domain.Chapter) (string, error)
+}
+
+// ExporterFunc 允许将包级函数（如 exporter.ExportChapter）直接适配为 Exporter 接口。
+type ExporterFunc func(book domain.Book, vol domain.Volume, chap domain.Chapter) (string, error)
+
+func (f ExporterFunc) ExportChapter(book domain.Book, vol domain.Volume, chap domain.Chapter) (string, error) {
+	return f(book, vol, chap)
+}
+
+// Option 用于定制 Runner 行为（如缩短中断落库超时）。
+type Option func(*Runner)
+
+// WithSaveTimeout 配置中断保底保存时 detached context 的超时时间。
+func WithSaveTimeout(d time.Duration) Option {
+	return func(r *Runner) {
+		if d > 0 {
+			r.saveTimeout = d
+		}
+	}
+}
+
+// Runner 编排单章流式出稿、异常/中止保底落库与单向 Markdown 导出。
+type Runner struct {
+	store       Store
+	compiler    Compiler
+	llm         LLMStreamer
+	exporter    Exporter
+	saveTimeout time.Duration
+}
+
+// New 创建单章生成流水线执行器。exporter 允许为 nil（未配置导出器时跳过导出）。
+func New(store Store, comp Compiler, streamer LLMStreamer, exp Exporter, opts ...Option) *Runner {
+	r := &Runner{
+		store:       store,
+		compiler:    comp,
+		llm:         streamer,
+		exporter:    exp,
+		saveTimeout: defaultSaveTimeout,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(r)
+		}
+	}
+	return r
+}
+
+// GenerateChapter 执行 Phase 1 单章流式出稿主链路：
+// 1. 解析 draft 模型路由与启用供应商；
+// 2. 编译作战简报并推送 started 分片；
+// 3. 调用统一 LLM 客户端逐 token 推流；
+// 4. 正常完成时先快照再写库（status=reviewing）并按需触发单向 Markdown 导出；
+// 5. 若中途收到 context.Canceled 或 onChunk 要求停止，使用 detached 短超时上下文保底保存已产出正文（status=partial），避免丢稿。
+func (r *Runner) GenerateChapter(
+	ctx context.Context,
+	chapterID int64,
+	opts domain.GenerateChapterOptions,
+	onChunk func(domain.GenChunk) error,
+) (domain.Chapter, error) {
+	if r == nil || r.store == nil || r.compiler == nil || r.llm == nil {
+		return domain.Chapter{}, errors.New("pipeline runner dependencies not initialized")
+	}
+	if chapterID <= 0 {
+		return domain.Chapter{}, fmt.Errorf("%w: chapterId must be > 0", domain.ErrValidation)
+	}
+	if err := opts.Validate(); err != nil {
+		return domain.Chapter{}, err
+	}
+
+	emit := func(chunk domain.GenChunk) error {
+		if onChunk == nil {
+			return nil
+		}
+		return onChunk(chunk)
+	}
+
+	// 1. 加载章节、书卷，并解析 draft 路由与供应商。
+	chap, err := r.store.GetChapter(ctx, chapterID)
+	if err != nil {
+		return domain.Chapter{}, fmt.Errorf("load chapter %d: %w", chapterID, err)
+	}
+	book, err := r.store.GetBook(ctx, chap.BookID)
+	if err != nil {
+		return domain.Chapter{}, fmt.Errorf("load book %d: %w", chap.BookID, err)
+	}
+	vol, err := r.store.GetVolume(ctx, chap.VolumeID)
+	if err != nil {
+		return domain.Chapter{}, fmt.Errorf("load volume %d: %w", chap.VolumeID, err)
+	}
+
+	route, provider, err := r.resolveDraftRouteAndProvider(ctx)
+	if err != nil {
+		return domain.Chapter{}, err
+	}
+
+	// 2. 编译上下文作战简报并序列化快照。
+	briefingOpts := mergeBriefingOptions(opts)
+	briefing, err := r.compiler.Compile(ctx, chapterID, briefingOpts)
+	if err != nil {
+		return domain.Chapter{}, fmt.Errorf("compile briefing: %w", err)
+	}
+	briefingBytes, err := json.Marshal(briefing)
+	if err != nil {
+		return domain.Chapter{}, fmt.Errorf("marshal briefing json: %w", err)
+	}
+	briefingJSON := string(briefingBytes)
+
+	if err := emit(domain.GenChunk{
+		Kind:         domain.GenChunkStarted,
+		ChapterID:    chapterID,
+		Status:       domain.ChapterStatusDrafting,
+		ModelName:    route.ModelName,
+		ProviderName: provider.Name,
+	}); err != nil {
+		return domain.Chapter{}, domain.ErrGenerationCanceled
+	}
+
+	// 3. 构造模型请求并流式推块。
+	temperature := route.Temperature
+	if opts.Temperature != nil {
+		temperature = *opts.Temperature
+	}
+	maxTokens := route.MaxTokens
+	if opts.MaxTokens != nil {
+		maxTokens = *opts.MaxTokens
+	}
+	if maxTokens <= 0 {
+		maxTokens = defaultDraftMaxTokens
+	}
+
+	chatReq := llm.ChatRequest{
+		Model:       route.ModelName,
+		System:      briefing.SystemPrompt,
+		Messages:    []llm.ChatMessage{{Role: "user", Content: briefing.UserPrompt}},
+		Temperature: temperature,
+		MaxTokens:   maxTokens,
+	}
+
+	var contentBuf strings.Builder
+	var finalUsage domain.TokenUsage
+	var finishReason string
+	var stoppedByCallback bool
+
+	streamUsage, streamErr := r.llm.Stream(ctx, provider, chatReq, func(ev llm.StreamEvent) error {
+		if ev.FinishReason != "" {
+			finishReason = ev.FinishReason
+		}
+		if ev.Delta != "" {
+			contentBuf.WriteString(ev.Delta)
+			if err := emit(domain.GenChunk{
+				Kind:         domain.GenChunkDelta,
+				ChapterID:    chapterID,
+				Delta:        ev.Delta,
+				WordCount:    domain.CountWords(contentBuf.String()),
+				Status:       domain.ChapterStatusDrafting,
+				ModelName:    route.ModelName,
+				ProviderName: provider.Name,
+			}); err != nil {
+				stoppedByCallback = true
+				return err
+			}
+		}
+		if ev.Usage != nil {
+			finalUsage = *ev.Usage
+			uCopy := *ev.Usage
+			if err := emit(domain.GenChunk{
+				Kind:         domain.GenChunkUsage,
+				ChapterID:    chapterID,
+				Usage:        &uCopy,
+				FinishReason: finishReason,
+				ModelName:    route.ModelName,
+				ProviderName: provider.Name,
+			}); err != nil {
+				stoppedByCallback = true
+				return err
+			}
+		}
+		return nil
+	})
+
+	if hasUsage(streamUsage) {
+		finalUsage = streamUsage
+	}
+
+	generated := contentBuf.String()
+
+	// 4. 处理中止或流式错误：只要已流出正文，必须用 detached 上下文保底落库为 partial。
+	if streamErr != nil {
+		isCanceled := stoppedByCallback ||
+			errors.Is(streamErr, domain.ErrGenerationCanceled) ||
+			errors.Is(streamErr, context.Canceled) ||
+			errors.Is(ctx.Err(), context.Canceled)
+
+		if isCanceled {
+			if strings.TrimSpace(generated) != "" {
+				savedChap, saveErr := r.savePartialDetached(ctx, book, vol, chapterID, generated, route.ModelName, briefingJSON)
+				if saveErr != nil {
+					return domain.Chapter{}, fmt.Errorf("%w: failed to preserve partial draft: %v", domain.ErrGenerationCanceled, saveErr)
+				}
+				_ = emit(domain.GenChunk{
+					Kind:         domain.GenChunkPartial,
+					ChapterID:    chapterID,
+					WordCount:    savedChap.WordCount,
+					Status:       domain.ChapterStatusPartial,
+					ModelName:    route.ModelName,
+					ProviderName: provider.Name,
+					Usage:        usagePtrOrNil(finalUsage),
+					FinishReason: finishReason,
+				})
+				return savedChap, domain.ErrGenerationCanceled
+			}
+			_ = emit(domain.GenChunk{
+				Kind:         domain.GenChunkPartial,
+				ChapterID:    chapterID,
+				Status:       chap.Status,
+				ModelName:    route.ModelName,
+				ProviderName: provider.Name,
+				Usage:        usagePtrOrNil(finalUsage),
+			})
+			return domain.Chapter{}, domain.ErrGenerationCanceled
+		}
+
+		// 非取消类错误：若已有部分文本产出，同样保底保存为 partial 防止丢稿。
+		var savedChap domain.Chapter
+		errStatus := chap.Status
+		errWordCount := chap.WordCount
+		if strings.TrimSpace(generated) != "" {
+			if saved, saveErr := r.savePartialDetached(ctx, book, vol, chapterID, generated, route.ModelName, briefingJSON); saveErr == nil {
+				savedChap = saved
+				errStatus = saved.Status
+				errWordCount = saved.WordCount
+			}
+		}
+		_ = emit(domain.GenChunk{
+			Kind:         domain.GenChunkError,
+			ChapterID:    chapterID,
+			WordCount:    errWordCount,
+			Status:       errStatus,
+			ModelName:    route.ModelName,
+			ProviderName: provider.Name,
+			Usage:        usagePtrOrNil(finalUsage),
+			Error:        streamErr.Error(),
+			Retryable:    llm.IsRetryable(streamErr),
+		})
+		return savedChap, streamErr
+	}
+
+	// 5. 空响应保护：严禁将空正文覆盖已有草稿或将章节标为 reviewing。
+	if strings.TrimSpace(generated) == "" {
+		emptyErr := fmt.Errorf("%w: 模型未生成任何正文内容", domain.ErrUpstreamUnavailable)
+		_ = emit(domain.GenChunk{
+			Kind:         domain.GenChunkError,
+			ChapterID:    chapterID,
+			WordCount:    chap.WordCount,
+			Status:       chap.Status,
+			ModelName:    route.ModelName,
+			ProviderName: provider.Name,
+			Usage:        usagePtrOrNil(finalUsage),
+			FinishReason: finishReason,
+			Error:        emptyErr.Error(),
+			Retryable:    true,
+		})
+		return domain.Chapter{}, emptyErr
+	}
+
+	// 6. 正常完成：落库（由 Store 事务保证先归档旧正文至 chapter_versions）、同步单向导出、发 completed 事件。
+	savedChap, err := r.store.SaveChapterContent(
+		ctx,
+		chapterID,
+		generated,
+		domain.ChapterStatusReviewing,
+		domain.VersionSourceAIDraft,
+		route.ModelName,
+		briefingJSON,
+	)
+	if err != nil {
+		return domain.Chapter{}, fmt.Errorf("save generated chapter: %w", err)
+	}
+
+	var exportWarning string
+	if err := r.tryExportChapter(book, vol, savedChap); err != nil {
+		exportWarning = fmt.Sprintf("正文已保存，但单向导出失败: %v", err)
+	}
+
+	_ = emit(domain.GenChunk{
+		Kind:         domain.GenChunkCompleted,
+		ChapterID:    chapterID,
+		WordCount:    savedChap.WordCount,
+		Status:       savedChap.Status,
+		ModelName:    route.ModelName,
+		ProviderName: provider.Name,
+		Usage:        usagePtrOrNil(finalUsage),
+		FinishReason: finishReason,
+		Error:        exportWarning,
+	})
+	return savedChap, nil
+}
+
+func (r *Runner) resolveDraftRouteAndProvider(ctx context.Context) (domain.ModelRoute, domain.Provider, error) {
+	route, err := r.store.GetModelRoute(ctx, domain.StageDraft)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return domain.ModelRoute{}, domain.Provider{}, domain.ErrRouteNotConfigured
+		}
+		return domain.ModelRoute{}, domain.Provider{}, fmt.Errorf("load draft model route: %w", err)
+	}
+	if route.ProviderID == nil || *route.ProviderID <= 0 || strings.TrimSpace(route.ModelName) == "" {
+		return domain.ModelRoute{}, domain.Provider{}, domain.ErrRouteNotConfigured
+	}
+
+	provider, err := r.store.GetProvider(ctx, *route.ProviderID)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return domain.ModelRoute{}, domain.Provider{}, domain.ErrProviderNotConfigured
+		}
+		return domain.ModelRoute{}, domain.Provider{}, fmt.Errorf("load provider %d: %w", *route.ProviderID, err)
+	}
+	if !provider.Enabled || strings.TrimSpace(provider.BaseURL) == "" {
+		return domain.ModelRoute{}, domain.Provider{}, domain.ErrProviderNotConfigured
+	}
+	return route, provider, nil
+}
+
+func (r *Runner) savePartialDetached(
+	ctx context.Context,
+	book domain.Book,
+	vol domain.Volume,
+	chapterID int64,
+	content string,
+	modelName string,
+	briefingJSON string,
+) (domain.Chapter, error) {
+	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.saveTimeout)
+	defer cancel()
+
+	savedChap, err := r.store.SaveChapterContent(
+		saveCtx,
+		chapterID,
+		content,
+		domain.ChapterStatusPartial,
+		domain.VersionSourceAIDraft,
+		modelName,
+		briefingJSON,
+	)
+	if err != nil {
+		return domain.Chapter{}, err
+	}
+	// 中断场景下尽力同步单向导出，不影响数据库已安全落库的结果。
+	_ = r.tryExportChapter(book, vol, savedChap)
+	return savedChap, nil
+}
+
+func (r *Runner) tryExportChapter(book domain.Book, vol domain.Volume, chap domain.Chapter) error {
+	if r.exporter == nil || strings.TrimSpace(book.ExportDir) == "" {
+		return nil
+	}
+	_, err := r.exporter.ExportChapter(book, vol, chap)
+	if errors.Is(err, domain.ErrExportDirNotSet) {
+		return nil
+	}
+	return err
+}
+
+func mergeBriefingOptions(opts domain.GenerateChapterOptions) domain.BriefingOptions {
+	bo := opts.Briefing
+	extraTop := strings.TrimSpace(opts.ExtraInstruction)
+	extraInner := strings.TrimSpace(bo.ExtraInstruction)
+	switch {
+	case extraTop == "":
+		bo.ExtraInstruction = extraInner
+	case extraInner == "" || extraInner == extraTop:
+		bo.ExtraInstruction = extraTop
+	default:
+		bo.ExtraInstruction = extraInner + "\n" + extraTop
+	}
+	return bo
+}
+
+func hasUsage(u domain.TokenUsage) bool {
+	return u.PromptTokens > 0 || u.CompletionTokens > 0 || u.TotalTokens > 0
+}
+
+func usagePtrOrNil(u domain.TokenUsage) *domain.TokenUsage {
+	if !hasUsage(u) {
+		return nil
+	}
+	cp := u
+	return &cp
+}

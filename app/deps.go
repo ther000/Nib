@@ -102,10 +102,13 @@ type RuntimeDeps struct {
 // main() 顶层仅创建空 Runtime 并绑定 Service，确保 `mygo generate` 绝不触碰 SQLite；
 // 真正打开数据库与注入依赖全部发生在 mygo.App.WhenReady 回调中。
 type Runtime struct {
-	mu     sync.RWMutex
-	deps   RuntimeDeps
-	ready  bool
-	closed bool
+	mu         sync.RWMutex
+	deps       RuntimeDeps
+	baseCtx    context.Context
+	baseCancel context.CancelFunc
+	activeWG   sync.WaitGroup
+	ready      bool
+	closed     bool
 }
 
 // NewRuntime 创建一个尚未注入依赖的空 Runtime 容器。
@@ -117,7 +120,11 @@ func NewRuntime() *Runtime {
 func (r *Runtime) Init(deps RuntimeDeps) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.baseCancel != nil {
+		r.baseCancel()
+	}
 	r.deps = deps
+	r.baseCtx, r.baseCancel = context.WithCancel(context.Background())
 	r.ready = true
 	r.closed = false
 }
@@ -132,7 +139,7 @@ func (r *Runtime) Ready() bool {
 	return r.ready && !r.closed
 }
 
-// Close 同步关闭底层数据库连接并标记容器不可用（幂等）。
+// Close 同步取消运行中的流式任务、等待正在落库的事务结束，再关闭 SQLite 连接（幂等）。
 func (r *Runtime) Close() error {
 	if r == nil {
 		return nil
@@ -144,8 +151,15 @@ func (r *Runtime) Close() error {
 	}
 	r.closed = true
 	r.ready = false
+	cancel := r.baseCancel
 	st := r.deps.Store
 	r.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	// 等待所有在途的流水线（含中断保底落库事务）安全退出后再关库。
+	r.activeWG.Wait()
 
 	if st != nil {
 		return st.Close()
@@ -209,16 +223,34 @@ func (r *Runtime) compiler() (BriefingCompiler, error) {
 	return r.deps.Compiler, nil
 }
 
-func (r *Runtime) pipeline() (PipelineRunner, error) {
+func (r *Runtime) trackPipeline(callCtx context.Context) (PipelineRunner, context.Context, context.CancelFunc, func(), error) {
 	if r == nil {
-		return nil, ErrRuntimeNotReady
+		return nil, nil, nil, nil, ErrRuntimeNotReady
 	}
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	if !r.ready || r.closed || r.deps.Pipeline == nil {
-		return nil, ErrRuntimeNotReady
+		r.mu.RUnlock()
+		return nil, nil, nil, nil, ErrRuntimeNotReady
 	}
-	return r.deps.Pipeline, nil
+	runner := r.deps.Pipeline
+	baseCtx := r.baseCtx
+	// 必须在持有 RLock 期间递增计数，防止与 Close() 中的 activeWG.Wait() 产生竞态。
+	r.activeWG.Add(1)
+	r.mu.RUnlock()
+
+	genCtx, cancel := context.WithCancel(callCtx)
+	var stopWatch func() bool
+	if baseCtx != nil {
+		stopWatch = context.AfterFunc(baseCtx, cancel)
+	}
+	release := func() {
+		if stopWatch != nil {
+			stopWatch()
+		}
+		cancel()
+		r.activeWG.Done()
+	}
+	return runner, genCtx, cancel, release, nil
 }
 
 func (r *Runtime) dirPicker() DirPickerFunc {

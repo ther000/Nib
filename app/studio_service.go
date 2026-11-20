@@ -51,13 +51,11 @@ func (s *StudioService) GenerateChapter(
 	if err := opts.Validate(); err != nil {
 		return domain.Chapter{}, err
 	}
-	runner, err := s.rt.pipeline()
+	runner, genCtx, cancel, release, err := s.rt.trackPipeline(ctx)
 	if err != nil {
 		return domain.Chapter{}, err
 	}
-
-	genCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	defer release()
 
 	emit := func(chunk domain.GenChunk) error {
 		if ch == nil {

@@ -1,0 +1,270 @@
+import type {
+  BeatStage,
+  ChapterStatus,
+  EmotionTag,
+  EntityKind,
+  HookType,
+  PipelineStage,
+  ProviderProtocol,
+  VersionSource,
+} from "../mygo";
+
+export type WorkspaceTab = "architect" | "studio" | "atlas";
+
+export interface OptionMeta<T extends string = string> {
+  value: T;
+  label: string;
+  shortLabel?: string;
+  hint?: string;
+}
+
+export const EMOTION_TAGS: OptionMeta<EmotionTag>[] = [
+  { value: "setup", label: "铺垫建场", shortLabel: "铺垫", hint: "引入新地图、人物或规则" },
+  { value: "suppress", label: "蓄压受阻", shortLabel: "蓄压", hint: "遇强敌、受限或信息劣势" },
+  { value: "turn", label: "反转破局", shortLabel: "反转", hint: "信息差或底牌逆转局势" },
+  { value: "burst", label: "高潮爆发", shortLabel: "爆发", hint: "正面交锋与情绪爽感峰值" },
+  { value: "harvest", label: "落袋留悬", shortLabel: "收割", hint: "清点收获并抛出新隐患" },
+];
+
+export const HOOK_TYPES: OptionMeta<HookType>[] = [
+  { value: "mystery", label: "悬念揭露", hint: "末段抛出反常识线索或异象" },
+  { value: "crisis", label: "突发危机", hint: "强敌降临、期限逼近或后院起火" },
+  { value: "counterattack_eve", label: "反击前夜", hint: "刚布好局或拿到关键道具待清算" },
+  { value: "reward_pending", label: "利益待拆", hint: "刚获秘宝权限，收获留待下章拆解" },
+  { value: "new_arc", label: "转场开篇", hint: "旧矛盾收束，切入新地图或邀约" },
+];
+
+export const BEAT_STAGES: OptionMeta<BeatStage>[] = [
+  { value: "setup", label: "起手建场", shortLabel: "起手" },
+  { value: "target", label: "立靶冲突", shortLabel: "立靶" },
+  { value: "suppress", label: "压制试探", shortLabel: "压制" },
+  { value: "turn", label: "转折破局", shortLabel: "转折" },
+  { value: "burst", label: "动作爆发", shortLabel: "爆发" },
+  { value: "harvest", label: "收割结算", shortLabel: "收割" },
+  { value: "hook", label: "章末留钩", shortLabel: "留钩" },
+];
+
+export const ENTITY_KINDS: OptionMeta<EntityKind>[] = [
+  { value: "character", label: "角色" },
+  { value: "faction", label: "势力" },
+  { value: "location", label: "地点" },
+  { value: "item", label: "道具" },
+  { value: "system", label: "体系" },
+  { value: "rule", label: "规则" },
+];
+
+export const CHAPTER_STATUS_META: Record<
+  string,
+  { label: string; dotClass: string; badgeClass: string }
+> = {
+  planned: {
+    label: "规划中",
+    dotClass: "bg-ink-muted",
+    badgeClass: "bg-elevated text-ink-secondary border-border-subtle",
+  },
+  outlined: {
+    label: "已编排",
+    dotClass: "bg-ink-secondary",
+    badgeClass: "bg-elevated text-ink-primary border-border-subtle",
+  },
+  drafting: {
+    label: "出稿中",
+    dotClass: "bg-accent animate-pulse",
+    badgeClass: "bg-accent-soft text-accent border-accent/30",
+  },
+  partial: {
+    label: "部分生成",
+    dotClass: "bg-warn",
+    badgeClass: "bg-warn-soft text-warn border-warn/30",
+  },
+  reviewing: {
+    label: "待审改",
+    dotClass: "bg-accent",
+    badgeClass: "bg-accent-soft text-accent border-accent/30",
+  },
+  finalized: {
+    label: "已定稿",
+    dotClass: "bg-ok",
+    badgeClass: "bg-ok-soft text-ok border-ok/30",
+  },
+  upstream_dirty: {
+    label: "上游变更",
+    dotClass: "bg-danger",
+    badgeClass: "bg-danger-soft text-danger border-danger/30",
+  },
+};
+
+export const PIPELINE_STAGES: Array<{
+  stage: PipelineStage;
+  label: string;
+  desc: string;
+  defaultTemp: number;
+  defaultMaxTokens: number;
+}> = [
+  { stage: "outline", label: "大纲节拍", desc: "章纲与节拍编排", defaultTemp: 0.65, defaultMaxTokens: 4096 },
+  { stage: "draft", label: "正文撰写", desc: "审改台流式出稿主模型", defaultTemp: 0.8, defaultMaxTokens: 4096 },
+  { stage: "critic", label: "审校质检", desc: "吃书冲突与钩子审查", defaultTemp: 0.2, defaultMaxTokens: 2048 },
+  { stage: "polish", label: "局部润色", desc: "病灶段落手术润色", defaultTemp: 0.55, defaultMaxTokens: 2048 },
+  { stage: "extract", label: "记忆抽取", desc: "完章状态变更与伏笔抽取", defaultTemp: 0.1, defaultMaxTokens: 2048 },
+];
+
+export const PROVIDER_PROTOCOLS: Array<{
+  value: ProviderProtocol;
+  label: string;
+  defaultBaseUrl: string;
+  sampleModels: string;
+}> = [
+  {
+    value: "openai_compat",
+    label: "OpenAI 兼容",
+    defaultBaseUrl: "https://api.deepseek.com/v1",
+    sampleModels: "deepseek-chat\ndeepseek-reasoner",
+  },
+  {
+    value: "anthropic",
+    label: "Anthropic",
+    defaultBaseUrl: "https://api.anthropic.com",
+    sampleModels: "claude-sonnet-4-20250514\nclaude-3-7-sonnet-latest",
+  },
+  {
+    value: "gemini",
+    label: "Gemini",
+    defaultBaseUrl: "https://generativelanguage.googleapis.com",
+    sampleModels: "gemini-2.5-pro\ngemini-2.5-flash",
+  },
+];
+
+export const VERSION_SOURCE_LABELS: Record<VersionSource, string> = {
+  ai_draft: "AI 出稿",
+  manual_backup: "手动保存",
+  surgical_polish: "局部润色",
+  restore_backup: "回滚前备份",
+};
+
+export function getEmotionMeta(tag: EmotionTag): OptionMeta<EmotionTag> {
+  return EMOTION_TAGS.find((item) => item.value === tag) ?? { value: tag, label: tag || "铺垫建场", shortLabel: tag || "铺垫" };
+}
+
+export function getHookMeta(hook: HookType): OptionMeta<HookType> {
+  return HOOK_TYPES.find((item) => item.value === hook) ?? { value: hook, label: hook || "悬念揭露" };
+}
+
+export function getBeatStageMeta(stage: BeatStage): OptionMeta<BeatStage> {
+  return BEAT_STAGES.find((item) => item.value === stage) ?? { value: stage, label: stage || "节拍", shortLabel: stage || "节拍" };
+}
+
+export function getEntityKindLabel(kind: EntityKind): string {
+  return ENTITY_KINDS.find((item) => item.value === kind)?.label ?? kind;
+}
+
+export function getChapterStatusMeta(status: ChapterStatus) {
+  return (
+    CHAPTER_STATUS_META[status] ?? {
+      label: status || "规划中",
+      dotClass: "bg-ink-muted",
+      badgeClass: "bg-elevated text-ink-secondary border-border-subtle",
+    }
+  );
+}
+
+export function getVersionSourceLabel(source: VersionSource): string {
+  return VERSION_SOURCE_LABELS[source] ?? source;
+}
+
+export function getEmotionColorClass(tag: EmotionTag): string {
+  switch (tag) {
+    case "burst":
+      return "text-accent bg-accent-soft border-accent/30";
+    case "turn":
+      return "text-ok bg-ok-soft border-ok/30";
+    case "suppress":
+      return "text-warn bg-warn-soft border-warn/30";
+    case "harvest":
+      return "text-ink-primary bg-elevated border-border-strong";
+    default:
+      return "text-ink-secondary bg-elevated border-border-subtle";
+  }
+}
+
+export function getBeatAccentClass(stage: BeatStage): string {
+  switch (stage) {
+    case "burst":
+      return "border-l-accent";
+    case "turn":
+      return "border-l-ok";
+    case "suppress":
+      return "border-l-warn";
+    case "hook":
+      return "border-l-danger";
+    default:
+      return "border-l-border-strong";
+  }
+}
+
+export function countWords(text: string): number {
+  if (!text) return 0;
+  const compact = text.replace(/\s+/g, "");
+  return Array.from(compact).length;
+}
+
+export function formatNumber(n: number): string {
+  return n.toLocaleString("zh-CN");
+}
+
+export function formatSeq(seq: number): string {
+  return String(seq).padStart(3, "0");
+}
+
+export function formatTimestamp(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${mm}-${dd} ${hh}:${mi}`;
+}
+
+export function parseModelList(raw: string): string[] {
+  const seen = new Set<string>();
+  const list: string[] = [];
+  for (const part of raw.split(/[\n,，]+/)) {
+    const trimmed = part.trim();
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      list.push(trimmed);
+    }
+  }
+  return list;
+}
+
+export function formatErrorMessage(err: unknown): string {
+  if (!err) return "操作失败";
+  const raw = err instanceof Error ? err.message : String(err);
+  const lower = raw.toLowerCase();
+
+  if (lower.includes("401") || lower.includes("invalid api key") || lower.includes("unauthorized")) {
+    return "API 密钥认证失败（401），请检查供应商设置中的密钥";
+  }
+  if (lower.includes("429") || lower.includes("rate limit")) {
+    return "上游模型触发限流（429），请稍后重试或切换模型路由";
+  }
+  if (lower.includes("model route not configured") || lower.includes("provider not configured")) {
+    return "尚未绑定可用的正文模型路由，请先在设置中配置供应商与模型路由";
+  }
+  if (lower.includes("export directory not configured")) {
+    return "当前书籍尚未设置本地 Markdown 导出目录，请先在设置中选择导出目录";
+  }
+  if (lower.includes("context window exceeded")) {
+    return "上下文超出模型窗口上限，请在作战简报中排除部分实体后重试";
+  }
+  if (lower.includes("runtime not found")) {
+    return "当前未运行在 Nib 桌面容器内（缺少 MyGo 运行时）";
+  }
+  const validationPrefix = /^validation failed(?: on [^:]+)?:\s*/i;
+  if (validationPrefix.test(raw)) {
+    return raw.replace(validationPrefix, "");
+  }
+  return raw;
+}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log"
 	"path/filepath"
 	"sync"
@@ -9,6 +8,11 @@ import (
 	"github.com/egoist/mygo"
 
 	"nib/app"
+	"nib/internal/compiler"
+	"nib/internal/exporter"
+	"nib/internal/llm"
+	"nib/internal/pipeline"
+	"nib/internal/store"
 )
 
 func main() {
@@ -34,17 +38,9 @@ func main() {
 		app.NewStudioService(rt),
 	)
 
-	appCtx, cancelApp := context.WithCancel(context.Background())
-	var (
-		shutdownOnce sync.Once
-		onShutdown   func()
-	)
+	var shutdownOnce sync.Once
 	runShutdown := func() {
 		shutdownOnce.Do(func() {
-			cancelApp()
-			if onShutdown != nil {
-				onShutdown()
-			}
 			if err := rt.Close(); err != nil {
 				log.Printf("nib: close runtime failed: %v", err)
 			}
@@ -57,7 +53,9 @@ func main() {
 			log.Printf("nib: resolve user data dir failed: %v", err)
 		} else {
 			dbPath := filepath.Join(dataDir, "nib.db")
-			onShutdown = initRuntime(appCtx, rt, dbPath)
+			if err := initRuntime(rt, dbPath); err != nil {
+				log.Printf("nib: init runtime (%s) failed: %v", dbPath, err)
+			}
 		}
 
 		mainWin = mygo.NewWindow(mygo.WindowOptions{
@@ -75,7 +73,7 @@ func main() {
 	})
 
 	mygo.App.OnBeforeQuit(func(_ *mygo.QuitEvent) {
-		// 同步取消运行中任务并安全关闭数据库连接（兼容正常退出与 Windows SessionEnding）。
+		// 同步取消运行中流式任务、等待保底落库事务完成并关闭 SQLite 连接（兼容正常退出与 Windows SessionEnding）。
 		runShutdown()
 	})
 
@@ -85,9 +83,25 @@ func main() {
 	runShutdown()
 }
 
-// initRuntime 是 WhenReady 内的运行时装配钩子。
-// 后续接入 internal/store、internal/exporter、internal/llm、internal/compiler 与 internal/pipeline 时，
-// 在此打开 SQLite（filepath.Join(dataDir, "nib.db")）、执行编号迁移并调用 rt.Init(deps)。
-func initRuntime(_ context.Context, _ *app.Runtime, _ string) func() {
-	return func() {}
+// initRuntime 在 WhenReady 回调内打开并迁移本地 SQLite，装配全部 Phase 1 纯 Go 核心引擎。
+func initRuntime(rt *app.Runtime, dbPath string) error {
+	st, err := store.Open(dbPath)
+	if err != nil {
+		return err
+	}
+
+	storeExp := exporter.NewStoreExporter(st)
+	pipeExp := exporter.New()
+	llmClient := llm.NewClient()
+	comp := compiler.New(st)
+	runner := pipeline.New(st, comp, llmClient, pipeExp)
+
+	rt.Init(app.RuntimeDeps{
+		Store:    st,
+		Exporter: storeExp,
+		LLM:      llmClient,
+		Compiler: comp,
+		Pipeline: runner,
+	})
+	return nil
 }
