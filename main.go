@@ -7,6 +7,8 @@ import (
 	"sync"
 
 	"github.com/egoist/mygo"
+
+	"nib/app"
 )
 
 func main() {
@@ -24,8 +26,13 @@ func main() {
 
 	// 仅在顶层注册 Service 绑定与生命周期回调；严禁在 main() 顶层打开 SQLite，
 	// 避免 `mygo generate` 执行 main() 至 App.Run() 时触碰本地数据库。
-	// Phase 1 各 Service（LibraryService / AtlasService / SettingsService / StudioService）
-	// 落地后统一在此通过 mygo.Bind(...) 注册。
+	rt := app.NewRuntime()
+	mygo.Bind(
+		app.NewLibraryService(rt),
+		app.NewAtlasService(rt),
+		app.NewSettingsService(rt),
+		app.NewStudioService(rt),
+	)
 
 	appCtx, cancelApp := context.WithCancel(context.Background())
 	var (
@@ -38,6 +45,9 @@ func main() {
 			if onShutdown != nil {
 				onShutdown()
 			}
+			if err := rt.Close(); err != nil {
+				log.Printf("nib: close runtime failed: %v", err)
+			}
 		})
 	}
 
@@ -47,7 +57,7 @@ func main() {
 			log.Printf("nib: resolve user data dir failed: %v", err)
 		} else {
 			dbPath := filepath.Join(dataDir, "nib.db")
-			onShutdown = initRuntime(appCtx, dbPath)
+			onShutdown = initRuntime(appCtx, rt, dbPath)
 		}
 
 		mainWin = mygo.NewWindow(mygo.WindowOptions{
@@ -76,8 +86,8 @@ func main() {
 }
 
 // initRuntime 是 WhenReady 内的运行时装配钩子。
-// 后续接入 internal/store 与 app/ 服务时在此打开 SQLite（filepath.Join(dataDir, "nib.db")）、
-// 执行编号迁移并返回同步关闭函数。
-func initRuntime(_ context.Context, _ string) func() {
+// 后续接入 internal/store、internal/exporter、internal/llm、internal/compiler 与 internal/pipeline 时，
+// 在此打开 SQLite（filepath.Join(dataDir, "nib.db")）、执行编号迁移并调用 rt.Init(deps)。
+func initRuntime(_ context.Context, _ *app.Runtime, _ string) func() {
 	return func() {}
 }

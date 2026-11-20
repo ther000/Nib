@@ -1,0 +1,260 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+
+	"github.com/egoist/mygo"
+
+	"nib/internal/domain"
+)
+
+// ErrRuntimeNotReady 表示桌面运行时依赖（SQLite / 引擎组件）尚未在 WhenReady 中完成初始化。
+var ErrRuntimeNotReady = errors.New("app runtime not initialized")
+
+// Store 定义 app 层依赖的 Phase 1 纯 Go 持久化接口（由 internal/store 实现）。
+type Store interface {
+	// Books
+	ListBooks(ctx context.Context) ([]domain.Book, error)
+	GetBook(ctx context.Context, id int64) (domain.Book, error)
+	CreateBook(ctx context.Context, in domain.CreateBookInput) (domain.Book, error)
+	UpdateBook(ctx context.Context, in domain.UpdateBookInput) (domain.Book, error)
+	DeleteBook(ctx context.Context, id int64) error
+
+	// Volumes
+	ListVolumes(ctx context.Context, bookID int64) ([]domain.Volume, error)
+	UpsertVolume(ctx context.Context, in domain.UpsertVolumeInput) (domain.Volume, error)
+	DeleteVolume(ctx context.Context, id int64) error
+
+	// Chapters & Beats
+	ListChapters(ctx context.Context, volumeID int64) ([]domain.Chapter, error)
+	ListBookChapters(ctx context.Context, bookID int64) ([]domain.Chapter, error)
+	GetChapter(ctx context.Context, id int64) (domain.Chapter, error)
+	CreateChapter(ctx context.Context, in domain.CreateChapterInput) (domain.Chapter, error)
+	UpdateChapterMeta(ctx context.Context, in domain.UpdateChapterMetaInput) (domain.Chapter, error)
+	SaveChapterDraft(ctx context.Context, in domain.SaveChapterDraftInput) (domain.Chapter, error)
+	FinalizeChapter(ctx context.Context, chapterID int64) (domain.Chapter, error)
+	ListBeats(ctx context.Context, chapterID int64) ([]domain.Beat, error)
+	ReplaceBeats(ctx context.Context, chapterID int64, beats []domain.Beat) ([]domain.Beat, error)
+
+	// Chapter Versions
+	ListChapterVersions(ctx context.Context, chapterID int64) ([]domain.ChapterVersion, error)
+	RestoreVersion(ctx context.Context, versionID int64) (domain.Chapter, error)
+
+	// Entities
+	ListEntities(ctx context.Context, bookID int64, filter domain.EntityFilter) ([]domain.Entity, error)
+	UpsertEntity(ctx context.Context, in domain.UpsertEntityInput) (domain.Entity, error)
+	DeleteEntity(ctx context.Context, id int64) error
+
+	// Providers & Model Routes
+	ListProviders(ctx context.Context) ([]domain.Provider, error)
+	GetProvider(ctx context.Context, id int64) (domain.Provider, error)
+	UpsertProvider(ctx context.Context, in domain.UpsertProviderInput) (domain.Provider, error)
+	DeleteProvider(ctx context.Context, id int64) error
+	ListModelRoutes(ctx context.Context) ([]domain.ModelRoute, error)
+	SaveModelRoute(ctx context.Context, route domain.ModelRoute) (domain.ModelRoute, error)
+
+	Close() error
+}
+
+// Exporter 定义单向 Markdown 镜像导出接口（由 internal/exporter 实现）。
+type Exporter interface {
+	ExportBook(ctx context.Context, bookID int64) (domain.ExportResult, error)
+	ExportChapter(ctx context.Context, chapterID int64) (string, error)
+}
+
+// LLMClient 定义多协议供应商连通性探测接口（由 internal/llm 实现）。
+type LLMClient interface {
+	TestConnection(ctx context.Context, provider domain.Provider) (domain.ProviderTestResult, error)
+}
+
+// BriefingCompiler 定义上下文作战简报编译接口（由 internal/compiler 实现）。
+type BriefingCompiler interface {
+	Compile(ctx context.Context, chapterID int64, opts domain.BriefingOptions) (domain.Briefing, error)
+}
+
+// PipelineRunner 定义章节流式出稿管线接口（由 internal/pipeline 实现，零 MyGo 依赖）。
+type PipelineRunner interface {
+	GenerateChapter(
+		ctx context.Context,
+		chapterID int64,
+		opts domain.GenerateChapterOptions,
+		emit func(domain.GenChunk) error,
+	) (domain.Chapter, error)
+}
+
+// DirPickerFunc 封装原生目录选择弹窗，默认使用 mygo.Dialog.Open，可在单测中替换。
+type DirPickerFunc func(ctx context.Context) (string, error)
+
+// RuntimeDeps 汇总 WhenReady 阶段注入到 Runtime 的全部核心依赖。
+type RuntimeDeps struct {
+	Store     Store
+	Exporter  Exporter
+	LLM       LLMClient
+	Compiler  BriefingCompiler
+	Pipeline  PipelineRunner
+	DirPicker DirPickerFunc
+}
+
+// Runtime 是线程安全的延迟初始化容器。
+// main() 顶层仅创建空 Runtime 并绑定 Service，确保 `mygo generate` 绝不触碰 SQLite；
+// 真正打开数据库与注入依赖全部发生在 mygo.App.WhenReady 回调中。
+type Runtime struct {
+	mu     sync.RWMutex
+	deps   RuntimeDeps
+	ready  bool
+	closed bool
+}
+
+// NewRuntime 创建一个尚未注入依赖的空 Runtime 容器。
+func NewRuntime() *Runtime {
+	return &Runtime{}
+}
+
+// Init 在 WhenReady 中注入已就绪的底层引擎与仓储实现。
+func (r *Runtime) Init(deps RuntimeDeps) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deps = deps
+	r.ready = true
+	r.closed = false
+}
+
+// Ready 返回 Runtime 是否已初始化且尚未关闭。
+func (r *Runtime) Ready() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.ready && !r.closed
+}
+
+// Close 同步关闭底层数据库连接并标记容器不可用（幂等）。
+func (r *Runtime) Close() error {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return nil
+	}
+	r.closed = true
+	r.ready = false
+	st := r.deps.Store
+	r.mu.Unlock()
+
+	if st != nil {
+		return st.Close()
+	}
+	return nil
+}
+
+func (r *Runtime) store() (Store, error) {
+	if r == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.ready || r.closed || r.deps.Store == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	return r.deps.Store, nil
+}
+
+func (r *Runtime) exporter() Exporter {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.ready || r.closed {
+		return nil
+	}
+	return r.deps.Exporter
+}
+
+func (r *Runtime) requireExporter() (Exporter, error) {
+	exp := r.exporter()
+	if exp == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	return exp, nil
+}
+
+func (r *Runtime) llm() (LLMClient, error) {
+	if r == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.ready || r.closed || r.deps.LLM == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	return r.deps.LLM, nil
+}
+
+func (r *Runtime) compiler() (BriefingCompiler, error) {
+	if r == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.ready || r.closed || r.deps.Compiler == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	return r.deps.Compiler, nil
+}
+
+func (r *Runtime) pipeline() (PipelineRunner, error) {
+	if r == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.ready || r.closed || r.deps.Pipeline == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	return r.deps.Pipeline, nil
+}
+
+func (r *Runtime) dirPicker() DirPickerFunc {
+	if r != nil {
+		r.mu.RLock()
+		fn := r.deps.DirPicker
+		r.mu.RUnlock()
+		if fn != nil {
+			return fn
+		}
+	}
+	return defaultPickExportDir
+}
+
+func defaultPickExportDir(ctx context.Context) (string, error) {
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+		Parent:            mygo.CallerWindow(ctx),
+		Title:             "选择本地 Markdown 导出目录",
+		Directory:         true,
+		CreateDirectories: true,
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(paths) == 0 {
+		return "", nil
+	}
+	return paths[0], nil
+}
+
+func validatePositiveID(field string, id int64) error {
+	if id <= 0 {
+		return &domain.ValidationError{
+			Field:   field,
+			Message: fmt.Sprintf("%s 必须大于 0", field),
+		}
+	}
+	return nil
+}
