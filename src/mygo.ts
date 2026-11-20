@@ -18,6 +18,18 @@ export interface ApplyDeltaResult {
   markedDirtyChapterIds: number[];
 }
 
+export interface ApplySurgicalDiffInput {
+  chapterId: number;
+  diffId: string;
+  accept: boolean;
+  customReplacement?: string;
+}
+
+export interface ApplySurgicalDiffResult {
+  chapter: Chapter;
+  audit: ChapterAudit;
+}
+
 export interface ArcSummary {
   id: number;
   bookId: number;
@@ -121,6 +133,18 @@ export interface Chapter {
   updatedAt: string;
 }
 
+export interface ChapterAudit {
+  id: number;
+  chapterId: number;
+  lintIssues: LintIssue[];
+  criticFindings: CriticFinding[];
+  diffs: SurgicalDiff[];
+  hookPassed: boolean;
+  hookVerdict: string;
+  deaiScore: number;
+  updatedAt: string;
+}
+
 export interface ChapterDelta {
   id: number;
   chapterId: number;
@@ -165,6 +189,32 @@ export interface CreateChapterInput {
   outlineSummary: string;
 }
 
+export type CriticDimension = string;
+
+export interface CriticFinding {
+  id: string;
+  dimension: CriticDimension;
+  severity: LintSeverity;
+  paragraphIndex: number;
+  title: string;
+  detail: string;
+  suggestion: string;
+}
+
+export type DeaiCategory = string;
+
+export interface DeaiRule {
+  id: number;
+  bookId: number;
+  category: DeaiCategory;
+  pattern: string;
+  isRegex: boolean;
+  severity: LintSeverity;
+  maxPerChapter: number;
+  hint: string;
+  enabled: boolean;
+}
+
 export interface DeltaDecision {
   kind: string;
   itemId: string;
@@ -207,6 +257,8 @@ export interface DeltaStatePatch {
   severity: ChangeSeverity;
   reason: string;
 }
+
+export type DiffStatus = string;
 
 export type EmotionTag = string;
 
@@ -327,6 +379,19 @@ export interface GenrePreset {
 
 export type HookType = string;
 
+export interface LintIssue {
+  ruleId: string;
+  category: DeaiCategory;
+  severity: LintSeverity;
+  paragraphIndex: number;
+  startRune: number;
+  endRune: number;
+  matchedText: string;
+  hint: string;
+}
+
+export type LintSeverity = string;
+
 export interface MemorySearchHit {
   source: string;
   chapterId: number;
@@ -347,6 +412,8 @@ export interface ModelRoute {
 }
 
 export type PipelineStage = string;
+
+export type PovRule = string;
 
 export type ProviderProtocol = string;
 
@@ -379,7 +446,41 @@ export interface SaveChapterDraftInput {
   modelName?: string;
 }
 
+export type SceneType = string;
+
 export type StateEventStatus = string;
+
+export interface StyleProfile {
+  id: number;
+  bookId: number;
+  avgSentenceChars: number;
+  maxParagraphChars: number;
+  dialogueRatioMin: number;
+  dialogueRatioMax: number;
+  povRule: PovRule;
+  toneDirectives: string;
+  forbiddenTropesNote: string;
+  updatedAt: string;
+}
+
+export interface StyleSample {
+  id: number;
+  bookId: number;
+  sceneType: SceneType;
+  title: string;
+  excerpt: string;
+  charCount: number;
+  createdAt: string;
+}
+
+export interface SurgicalDiff {
+  id: string;
+  paragraphIndex: number;
+  reason: string;
+  original: string;
+  replacement: string;
+  status: DiffStatus;
+}
 
 export interface TokenUsage {
   promptTokens: number;
@@ -418,6 +519,18 @@ export interface UpsertArcSummaryInput {
   summary: string;
 }
 
+export interface UpsertDeaiRuleInput {
+  id: number;
+  bookId: number;
+  category: DeaiCategory;
+  pattern: string;
+  isRegex: boolean;
+  severity: LintSeverity;
+  maxPerChapter: number;
+  hint: string;
+  enabled: boolean;
+}
+
 export interface UpsertEntityInput {
   id: number;
   bookId: number;
@@ -450,6 +563,25 @@ export interface UpsertProviderInput {
   apiKey: string;
   models: string[];
   enabled: boolean;
+}
+
+export interface UpsertStyleProfileInput {
+  bookId: number;
+  avgSentenceChars: number;
+  maxParagraphChars: number;
+  dialogueRatioMin: number;
+  dialogueRatioMax: number;
+  povRule: PovRule;
+  toneDirectives: string;
+  forbiddenTropesNote: string;
+}
+
+export interface UpsertStyleSampleInput {
+  id: number;
+  bookId: number;
+  sceneType: SceneType;
+  title: string;
+  excerpt: string;
 }
 
 export interface UpsertVolumeInput {
@@ -585,4 +717,36 @@ export const MemoryService = {
   upsertArcSummary: bind<[UpsertArcSummaryInput], ArcSummary>("MemoryService.UpsertArcSummary", (in_: UpsertArcSummaryInput) => [in_]),
   /** UpsertForeshadowing 创建或更新单条伏笔记录。 */
   upsertForeshadowing: bind<[UpsertForeshadowingInput], Foreshadowing>("MemoryService.UpsertForeshadowing", (in_: UpsertForeshadowingInput) => [in_]),
+} as const;
+
+/** StyleService 提供 Phase 3 文风指纹（Style DNA）、分场景样章、0 成本本地 AI 味检测、Critic 盲审与手术式局部润色的桌面 RPC 绑定。 */
+export const StyleService = {
+  /** ApplySurgicalDiff 采纳或忽略单条手术式局部润色建议（采纳时先落 surgical_polish 版本快照再原位替换段落，并同步单向 Markdown 导出）。 */
+  applySurgicalDiff: bind<[ApplySurgicalDiffInput], ApplySurgicalDiffResult>("StyleService.ApplySurgicalDiff", (in_: ApplySurgicalDiffInput) => [in_]),
+  /** DeleteDeaiRule 删除指定的去 AI 味规则。 */
+  deleteDeaiRule: bind<[number], void>("StyleService.DeleteDeaiRule", (id: number) => [id]),
+  /** DeleteStyleSample 删除指定的分场景样章锚点。 */
+  deleteStyleSample: bind<[number], void>("StyleService.DeleteStyleSample", (id: number) => [id]),
+  /** ExtractStyleProfile 从导入的 1~N 段样章文本中提取量化文风指纹并持久化。 */
+  extractStyleProfile: bind<[number, string[]], StyleProfile>("StyleService.ExtractStyleProfile", (bookID: number, sampleTexts: string[]) => [bookID, sampleTexts]),
+  /** GenerateSurgicalDiffs 仅针对指定的病灶段落（或为空时自动选取本地 Lint + Critic 点名段落）连同上下文 [prev, target, next] 生成手术式局部替换建议。 */
+  generateSurgicalDiffs: bind<[number, number[]], ChapterAudit>("StyleService.GenerateSurgicalDiffs", (chapterID: number, targetParagraphs: number[]) => [chapterID, targetParagraphs]),
+  /** GetChapterAudit 读取指定章节最近一次持久化的质检与手术润色报告。 */
+  getChapterAudit: bind<[number], ChapterAudit>("StyleService.GetChapterAudit", (chapterID: number) => [chapterID]),
+  /** GetStyleProfile 获取指定书籍的量化文风指纹档案。 */
+  getStyleProfile: bind<[number], StyleProfile>("StyleService.GetStyleProfile", (bookID: number) => [bookID]),
+  /** LintChapterLocal 对指定章节执行 0 成本本地确定性 AI 味扫描（<20ms 返回定位告警与去 AI 味得分）。 */
+  lintChapterLocal: bind<[number], ChapterAudit>("StyleService.LintChapterLocal", (chapterID: number) => [chapterID]),
+  /** ListDeaiRules 查询去 AI 味黑名单与结构规则（bookID=0 返回全局内置规则，bookID>0 返回合并后的有效规则列表）。 */
+  listDeaiRules: bind<[number], DeaiRule[]>("StyleService.ListDeaiRules", (bookID: number) => [bookID]),
+  /** ListStyleSamples 按书籍与可选场景类型（"" / "combat" / "dialogue" / "daily" / "suspense"）查询分场景样章库。 */
+  listStyleSamples: bind<[number, string], StyleSample[]>("StyleService.ListStyleSamples", (bookID: number, sceneType: string) => [bookID, sceneType]),
+  /** RunCriticAudit 调用 critic 模型路由对照作战简报与章节正文执行 4 维独立盲审（一致性、男频毒点、节拍落点、章末钩子）。 */
+  runCriticAudit: bind<[number], ChapterAudit>("StyleService.RunCriticAudit", (chapterID: number) => [chapterID]),
+  /** SaveStyleProfile 校验并保存指定书籍的量化文风指纹档案。 */
+  saveStyleProfile: bind<[UpsertStyleProfileInput], StyleProfile>("StyleService.SaveStyleProfile", (in_: UpsertStyleProfileInput) => [in_]),
+  /** UpsertDeaiRule 新增或更新去 AI 味规则（支持开关内置规则或添加自定义词条/正则）。 */
+  upsertDeaiRule: bind<[UpsertDeaiRuleInput], DeaiRule>("StyleService.UpsertDeaiRule", (in_: UpsertDeaiRuleInput) => [in_]),
+  /** UpsertStyleSample 新增或编辑单条分场景样章锚点。 */
+  upsertStyleSample: bind<[UpsertStyleSampleInput], StyleSample>("StyleService.UpsertStyleSample", (in_: UpsertStyleSampleInput) => [in_]),
 } as const;

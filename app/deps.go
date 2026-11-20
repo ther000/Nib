@@ -104,6 +104,28 @@ type DeltaExtractor interface {
 	ExtractChapterDelta(ctx context.Context, chapterID int64) (domain.ChapterDelta, error)
 }
 
+// StyleStore 定义 Phase 3 文风指纹、样章锚点、去 AI 味规则与质检报告的持久化接口（由 internal/store 实现）。
+type StyleStore interface {
+	GetStyleProfile(ctx context.Context, bookID int64) (domain.StyleProfile, error)
+	SaveStyleProfile(ctx context.Context, in domain.UpsertStyleProfileInput) (domain.StyleProfile, error)
+	ListStyleSamples(ctx context.Context, bookID int64, sceneType domain.SceneType) ([]domain.StyleSample, error)
+	UpsertStyleSample(ctx context.Context, in domain.UpsertStyleSampleInput) (domain.StyleSample, error)
+	DeleteStyleSample(ctx context.Context, id int64) error
+	ListDeaiRules(ctx context.Context, bookID int64) ([]domain.DeaiRule, error)
+	UpsertDeaiRule(ctx context.Context, in domain.UpsertDeaiRuleInput) (domain.DeaiRule, error)
+	DeleteDeaiRule(ctx context.Context, id int64) error
+	GetChapterAudit(ctx context.Context, chapterID int64) (domain.ChapterAudit, error)
+}
+
+// StyleEngine 定义 Phase 3 样章文风抽取、0 成本本地 AI 味检测、Critic 盲审与手术式局部润色接口（零 MyGo 依赖）。
+type StyleEngine interface {
+	ExtractStyleProfile(ctx context.Context, bookID int64, sampleTexts []string) (domain.StyleProfile, error)
+	LintChapterLocal(ctx context.Context, chapterID int64) (domain.ChapterAudit, error)
+	RunCriticAudit(ctx context.Context, chapterID int64) (domain.ChapterAudit, error)
+	GenerateSurgicalDiffs(ctx context.Context, chapterID int64, targetParagraphs []int) (domain.ChapterAudit, error)
+	ApplySurgicalDiff(ctx context.Context, in domain.ApplySurgicalDiffInput) (domain.ApplySurgicalDiffResult, error)
+}
+
 // DirPickerFunc 封装原生目录选择弹窗，默认使用 mygo.Dialog.Open，可在单测中替换。
 type DirPickerFunc func(ctx context.Context) (string, error)
 
@@ -116,6 +138,8 @@ type RuntimeDeps struct {
 	Pipeline       PipelineRunner
 	MemoryStore    MemoryStore
 	DeltaExtractor DeltaExtractor
+	StyleStore     StyleStore
+	StyleEngine    StyleEngine
 	DirPicker      DirPickerFunc
 }
 
@@ -313,6 +337,59 @@ func (r *Runtime) trackExtractor(callCtx context.Context) (DeltaExtractor, conte
 		r.activeWG.Done()
 	}
 	return ext, extCtx, release, nil
+}
+
+func (r *Runtime) styleStore() (StyleStore, error) {
+	if r == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.ready || r.closed || r.deps.StyleStore == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	return r.deps.StyleStore, nil
+}
+
+func (r *Runtime) styleEngine() (StyleEngine, error) {
+	if r == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.ready || r.closed || r.deps.StyleEngine == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	return r.deps.StyleEngine, nil
+}
+
+func (r *Runtime) trackStyleEngine(callCtx context.Context) (StyleEngine, context.Context, func(), error) {
+	if r == nil {
+		return nil, nil, nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	if !r.ready || r.closed || r.deps.StyleEngine == nil {
+		r.mu.RUnlock()
+		return nil, nil, nil, ErrRuntimeNotReady
+	}
+	eng := r.deps.StyleEngine
+	baseCtx := r.baseCtx
+	r.activeWG.Add(1)
+	r.mu.RUnlock()
+
+	engCtx, cancel := context.WithCancel(callCtx)
+	var stopWatch func() bool
+	if baseCtx != nil {
+		stopWatch = context.AfterFunc(baseCtx, cancel)
+	}
+	release := func() {
+		if stopWatch != nil {
+			stopWatch()
+		}
+		cancel()
+		r.activeWG.Done()
+	}
+	return eng, engCtx, release, nil
 }
 
 func (r *Runtime) dirPicker() DirPickerFunc {
