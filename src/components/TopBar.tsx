@@ -10,6 +10,7 @@ import {
   Plus,
   Search,
   Settings,
+  Sparkles,
   Sun,
 } from "lucide-react";
 import { useApp } from "../stores/AppContext";
@@ -38,6 +39,8 @@ export function TopBar() {
     openMemorySearch,
     openAutopilot,
     autopilotState,
+    directorOpen,
+    toggleDirector,
   } = useApp();
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -210,39 +213,54 @@ export function TopBar() {
         <div className="flex-1" />
       )}
 
-      {/* Right: Autopilot + Memory Search + Theme + Settings (native window buttons sit to the right via --mygo-titlebar-right) */}
+      {/* Right: AI Director + Autopilot + Memory Search + Theme + Settings */}
       <div className="flex items-center gap-1">
         {inWorkspace && activeBook && (
-          <button
-            type="button"
-            onClick={openAutopilot}
-            title="AI 自动托管写作"
-            className={`mr-0.5 flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors ${
-              autopilotState?.bookId === activeBook.id &&
-              autopilotState.status === "waiting_decision"
-                ? "border-warn/50 bg-warn-soft text-warn"
-                : autopilotState?.bookId === activeBook.id &&
-                    autopilotState.status === "running"
+          <>
+            <button
+              type="button"
+              onClick={toggleDirector}
+              title="AI 导演总控 (Ctrl+K)"
+              className={`flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors ${
+                directorOpen
                   ? "border-accent/40 bg-accent-soft text-accent"
                   : "border-border-subtle bg-canvas text-ink-secondary hover:border-border-strong hover:text-ink-primary"
-            }`}
-          >
-            {autopilotState?.bookId === activeBook.id &&
-            autopilotState.status === "running" ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Bot className="h-3.5 w-3.5" />
-            )}
-            <span>
+              }`}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              <span>AI 导演</span>
+            </button>
+            <button
+              type="button"
+              onClick={openAutopilot}
+              title="AI 自动托管写作"
+              className={`mr-0.5 flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors ${
+                autopilotState?.bookId === activeBook.id &&
+                autopilotState.status === "waiting_decision"
+                  ? "border-warn/50 bg-warn-soft text-warn"
+                  : autopilotState?.bookId === activeBook.id &&
+                      autopilotState.status === "running"
+                    ? "border-accent/40 bg-accent-soft text-accent"
+                    : "border-border-subtle bg-canvas text-ink-secondary hover:border-border-strong hover:text-ink-primary"
+              }`}
+            >
               {autopilotState?.bookId === activeBook.id &&
-              autopilotState.status === "waiting_decision"
-                ? "托管待确认"
-                : autopilotState?.bookId === activeBook.id &&
-                    autopilotState.status === "running"
-                  ? `托管 ${autopilotState.completedChapters}/${autopilotState.targetChapters}`
-                  : "AI 托管"}
-            </span>
-          </button>
+              autopilotState.status === "running" ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Bot className="h-3.5 w-3.5" />
+              )}
+              <span>
+                {autopilotState?.bookId === activeBook.id &&
+                autopilotState.status === "waiting_decision"
+                  ? "托管待确认"
+                  : autopilotState?.bookId === activeBook.id &&
+                      autopilotState.status === "running"
+                    ? `托管 ${autopilotState.completedChapters}/${autopilotState.targetChapters}`
+                    : "AI 托管"}
+              </span>
+            </button>
+          </>
         )}
         {inWorkspace && (
           <button

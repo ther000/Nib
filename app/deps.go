@@ -164,6 +164,15 @@ type AutopilotEngine interface {
 	ResolveAutopilotGate(bookID int64, action domain.AutopilotDecisionAction) (domain.AutopilotState, error)
 }
 
+// DirectorEngine 定义「全局 AI 导演」多步工具操控全书接口（由 internal/pipeline 实现，零 MyGo 依赖）。
+type DirectorEngine interface {
+	RunDirectorChat(
+		ctx context.Context,
+		req domain.DirectorChatRequest,
+		emit func(domain.DirectorEvent) error,
+	) (domain.DirectorReply, error)
+}
+
 // DirPickerFunc 封装原生目录选择弹窗，默认使用 mygo.Dialog.Open，可在单测中替换。
 type DirPickerFunc func(ctx context.Context) (string, error)
 
@@ -182,6 +191,7 @@ type RuntimeDeps struct {
 	BatchEngine     BatchEngine
 	GenesisEngine   GenesisEngine
 	AutopilotEngine AutopilotEngine
+	DirectorEngine  DirectorEngine
 	DirPicker       DirPickerFunc
 }
 
@@ -546,6 +556,46 @@ func (r *Runtime) autopilotEngine() (AutopilotEngine, error) {
 		return ae, nil
 	}
 	return nil, ErrRuntimeNotReady
+}
+
+func (r *Runtime) trackDirectorEngine(callCtx context.Context) (DirectorEngine, context.Context, context.CancelFunc, func(), error) {
+	if r == nil {
+		return nil, nil, nil, nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	if !r.ready || r.closed {
+		r.mu.RUnlock()
+		return nil, nil, nil, nil, ErrRuntimeNotReady
+	}
+	eng := r.deps.DirectorEngine
+	if eng == nil {
+		if de, ok := r.deps.BatchEngine.(DirectorEngine); ok {
+			eng = de
+		} else if de, ok := r.deps.Pipeline.(DirectorEngine); ok {
+			eng = de
+		}
+	}
+	if eng == nil {
+		r.mu.RUnlock()
+		return nil, nil, nil, nil, ErrRuntimeNotReady
+	}
+	baseCtx := r.baseCtx
+	r.activeWG.Add(1)
+	r.mu.RUnlock()
+
+	engCtx, cancel := context.WithCancel(callCtx)
+	var stopWatch func() bool
+	if baseCtx != nil {
+		stopWatch = context.AfterFunc(baseCtx, cancel)
+	}
+	release := func() {
+		if stopWatch != nil {
+			stopWatch()
+		}
+		cancel()
+		r.activeWG.Done()
+	}
+	return eng, engCtx, cancel, release, nil
 }
 
 func (r *Runtime) dirPicker() DirPickerFunc {

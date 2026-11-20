@@ -97,6 +97,10 @@ interface AppContextValue {
   closeAutopilot: () => void;
   autopilotState: AutopilotState | null;
   setAutopilotState: (state: AutopilotState | null) => void;
+  directorOpen: boolean;
+  openDirector: () => void;
+  closeDirector: () => void;
+  toggleDirector: () => void;
 
   // Toasts
   toasts: ToastItem[];
@@ -171,6 +175,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [memorySearchOpen, setMemorySearchOpen] = useState(false);
   const [autopilotOpen, setAutopilotOpen] = useState(false);
   const [autopilotState, setAutopilotState] = useState<AutopilotState | null>(null);
+  const [directorOpen, setDirectorOpen] = useState(false);
 
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const toastSeqRef = useRef(1);
@@ -647,6 +652,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const openAutopilot = useCallback(() => setAutopilotOpen(true), []);
   const closeAutopilot = useCallback(() => setAutopilotOpen(false), []);
+  const openDirector = useCallback(() => setDirectorOpen(true), []);
+  const closeDirector = useCallback(() => setDirectorOpen(false), []);
+  const toggleDirector = useCallback(() => setDirectorOpen((v) => !v), []);
 
   // 订阅后端全自动托管实时进度事件，章节推进或结束时自动刷新书籍数据
   useEffect(() => {
@@ -738,6 +746,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       closeAutopilot,
       autopilotState,
       setAutopilotState,
+      directorOpen,
+      openDirector,
+      closeDirector,
+      toggleDirector,
       toasts,
       notify,
       dismissToast,
@@ -814,6 +826,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       closeAutopilot,
       autopilotState,
       setAutopilotState,
+      directorOpen,
+      openDirector,
+      closeDirector,
+      toggleDirector,
       toasts,
       notify,
       dismissToast,

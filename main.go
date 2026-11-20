@@ -42,6 +42,7 @@ func main() {
 		app.NewStyleService(rt),
 		app.NewBatchService(rt),
 		app.NewAutopilotService(rt),
+		app.NewDirectorService(rt),
 	)
 
 	var shutdownOnce sync.Once
@@ -140,6 +141,7 @@ func initRuntime(rt *app.Runtime, dbPath string) (func(), error) {
 		BatchEngine:     runner,
 		GenesisEngine:   runner,
 		AutopilotEngine: runner,
+		DirectorEngine:  runner,
 	})
 	return runner.Close, nil
 }

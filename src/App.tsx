@@ -3,6 +3,7 @@ import { AlertCircle, Loader2 } from "lucide-react";
 import { AppProvider, useApp } from "./stores/AppContext";
 import { TopBar } from "./components/TopBar";
 import { AutopilotModal, AutopilotStatusBar } from "./components/AutopilotConsole";
+import { DirectorDrawer } from "./components/DirectorDrawer";
 import { CreateBookModal } from "./components/CreateBookModal";
 import { MemorySearchModal } from "./components/MemorySearchModal";
 import { ToastHost } from "./components/ToastHost";
@@ -27,6 +28,7 @@ function NibShell() {
     createBookOpen,
     memorySearchOpen,
     toggleMemorySearch,
+    toggleDirector,
   } = useApp();
 
   const inWorkspace = viewMode === "workspace" && Boolean(activeBook);
@@ -52,6 +54,17 @@ function NibShell() {
       ) {
         e.preventDefault();
         toggleMemorySearch();
+        return;
+      }
+
+      if (
+        (e.key.toLowerCase() === "k" || e.code === "KeyK") &&
+        !e.shiftKey &&
+        !blockingModalOpen &&
+        inWorkspace
+      ) {
+        e.preventDefault();
+        toggleDirector();
         return;
       }
 
@@ -104,6 +117,7 @@ function NibShell() {
     setActiveTab,
     toggleStudioDrawer,
     toggleMemorySearch,
+    toggleDirector,
     triggerSave,
     triggerGenerate,
   ]);
@@ -136,12 +150,19 @@ function NibShell() {
         </main>
       ) : !inWorkspace ? (
         <HomeView />
-      ) : activeTab === "architect" ? (
-        <ArchitectView />
-      ) : activeTab === "studio" ? (
-        <StudioView />
       ) : (
-        <AtlasView />
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            {activeTab === "architect" ? (
+              <ArchitectView />
+            ) : activeTab === "studio" ? (
+              <StudioView />
+            ) : (
+              <AtlasView />
+            )}
+          </div>
+          <DirectorDrawer />
+        </div>
       )}
 
       <CreateBookModal />

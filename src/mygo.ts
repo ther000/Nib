@@ -404,6 +404,49 @@ export interface DeltaStatePatch {
 
 export type DiffStatus = string;
 
+export interface DirectorChatRequest {
+  bookId: number;
+  activeChapterId: number;
+  instruction: string;
+  history: DirectorMessage[];
+}
+
+export interface DirectorEvent {
+  kind: DirectorEventKind;
+  step?: number;
+  message?: string;
+  toolCall?: DirectorToolCall;
+  delta?: string;
+  reply?: string;
+  toolCalls?: DirectorToolCall[];
+  mutated?: boolean;
+  error?: string;
+}
+
+export type DirectorEventKind = string;
+
+export interface DirectorMessage {
+  role: string;
+  content: string;
+  toolCalls?: DirectorToolCall[];
+  createdAt?: string;
+}
+
+export interface DirectorReply {
+  reply: string;
+  toolCalls: DirectorToolCall[];
+  mutated: boolean;
+}
+
+export interface DirectorToolCall {
+  id: string;
+  name: string;
+  label: string;
+  argsJson?: string;
+  status: string;
+  resultSummary?: string;
+}
+
 export type EmotionTag = string;
 
 export interface Entity {
@@ -1046,6 +1089,12 @@ export const AutopilotService = {
   startAutopilot: bind<[AutopilotRequest], AutopilotState>("AutopilotService.StartAutopilot", (req: AutopilotRequest) => [req]),
   /** StopAutopilot 请求平滑中止指定书籍的托管任务。 */
   stopAutopilot: bind<[number], AutopilotState>("AutopilotService.StopAutopilot", (bookID: number) => [bookID]),
+} as const;
+
+/** DirectorService 提供「全局 AI 导演」自然语言多步操控全书的桌面 RPC 绑定。 */
+export const DirectorService = {
+  /** SendInstruction 向 AI 导演下达自然语言指令，通过 *mygo.Channel[domain.DirectorEvent] 实时推送规划与工具执行过程。 */
+  sendInstruction: bind<[DirectorChatRequest, Channel<DirectorEvent>], DirectorReply>("DirectorService.SendInstruction", (req: DirectorChatRequest, ch: Channel<DirectorEvent>) => [req, ch]),
 } as const;
 
 // ---- Events ----
