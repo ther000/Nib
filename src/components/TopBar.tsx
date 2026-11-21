@@ -3,6 +3,7 @@ import {
   Bot,
   Check,
   ChevronDown,
+  Command,
   Feather,
   Home,
   Loader2,
@@ -41,6 +42,7 @@ export function TopBar() {
     autopilotState,
     directorOpen,
     toggleDirector,
+    openCommandPalette,
   } = useApp();
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -273,6 +275,15 @@ export function TopBar() {
             <Search className="h-3.5 w-3.5" />
           </button>
         )}
+        <button
+          type="button"
+          onClick={openCommandPalette}
+          title="命令面板与快捷键速查 (Ctrl+Shift+P)"
+          aria-label="命令面板与快捷键"
+          className="flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+        >
+          <Command className="h-3.5 w-3.5" />
+        </button>
         <button
           type="button"
           onClick={toggleTheme}

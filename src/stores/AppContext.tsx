@@ -33,6 +33,7 @@ import {
 } from "../lib/constants";
 import {
   applyDocumentPreferences,
+  DEFAULT_TYPOGRAPHY,
   loadPreferences,
   savePreferences,
   type NibPreferences,
@@ -59,13 +60,27 @@ interface AppContextValue {
   theme: ThemeMode;
   proseFont: ProseFontMode;
   proseIndent: boolean;
+  proseFontSize: number;
+  proseLineHeight: number;
+  proseMaxWidth: number;
   studioDrawerOpen: boolean;
+  focusMode: boolean;
   setTheme: (theme: ThemeMode) => void;
   toggleTheme: () => void;
   setProseFont: (font: ProseFontMode) => void;
   setProseIndent: (indent: boolean) => void;
+  setProseFontSize: (size: number) => void;
+  setProseLineHeight: (lh: number) => void;
+  setProseMaxWidth: (w: number) => void;
+  resetTypography: () => void;
   setStudioDrawerOpen: (open: boolean) => void;
   toggleStudioDrawer: () => void;
+  setFocusMode: (focus: boolean) => void;
+  toggleFocusMode: () => void;
+  commandPaletteOpen: boolean;
+  openCommandPalette: () => void;
+  closeCommandPalette: () => void;
+  toggleCommandPalette: () => void;
 
   // Navigation & Modals
   viewMode: AppViewMode;
@@ -176,6 +191,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [autopilotOpen, setAutopilotOpen] = useState(false);
   const [autopilotState, setAutopilotState] = useState<AutopilotState | null>(null);
   const [directorOpen, setDirectorOpen] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const toastSeqRef = useRef(1);
@@ -586,6 +603,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
     (proseIndent: boolean) => updatePrefs((p) => ({ ...p, proseIndent })),
     [updatePrefs]
   );
+  const setProseFontSize = useCallback(
+    (proseFontSize: number) =>
+      updatePrefs((p) => ({
+        ...p,
+        proseFontSize: Math.min(24, Math.max(14, Math.round(proseFontSize))),
+      })),
+    [updatePrefs]
+  );
+  const setProseLineHeight = useCallback(
+    (proseLineHeight: number) =>
+      updatePrefs((p) => ({
+        ...p,
+        proseLineHeight: Math.min(2.3, Math.max(1.5, Math.round(proseLineHeight * 100) / 100)),
+      })),
+    [updatePrefs]
+  );
+  const setProseMaxWidth = useCallback(
+    (proseMaxWidth: number) =>
+      updatePrefs((p) => ({
+        ...p,
+        proseMaxWidth: Math.min(960, Math.max(580, Math.round(proseMaxWidth))),
+      })),
+    [updatePrefs]
+  );
+  const resetTypography = useCallback(
+    () =>
+      updatePrefs((p) => ({
+        ...p,
+        proseFontSize: DEFAULT_TYPOGRAPHY.proseFontSize,
+        proseLineHeight: DEFAULT_TYPOGRAPHY.proseLineHeight,
+        proseMaxWidth: DEFAULT_TYPOGRAPHY.proseMaxWidth,
+      })),
+    [updatePrefs]
+  );
+  const toggleFocusMode = useCallback(() => setFocusMode((v) => !v), []);
+  const openCommandPalette = useCallback(() => setCommandPaletteOpen(true), []);
+  const closeCommandPalette = useCallback(() => setCommandPaletteOpen(false), []);
+  const toggleCommandPalette = useCallback(() => setCommandPaletteOpen((v) => !v), []);
   const setStudioDrawerOpen = useCallback(
     (studioDrawerOpen: boolean) => updatePrefs((p) => ({ ...p, studioDrawerOpen })),
     [updatePrefs]
@@ -710,13 +765,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
       theme: prefs.theme,
       proseFont: prefs.proseFont,
       proseIndent: prefs.proseIndent,
+      proseFontSize: prefs.proseFontSize,
+      proseLineHeight: prefs.proseLineHeight,
+      proseMaxWidth: prefs.proseMaxWidth,
       studioDrawerOpen: prefs.studioDrawerOpen,
+      focusMode,
       setTheme,
       toggleTheme,
       setProseFont,
       setProseIndent,
+      setProseFontSize,
+      setProseLineHeight,
+      setProseMaxWidth,
+      resetTypography,
       setStudioDrawerOpen,
       toggleStudioDrawer,
+      setFocusMode,
+      toggleFocusMode,
+      commandPaletteOpen,
+      openCommandPalette,
+      closeCommandPalette,
+      toggleCommandPalette,
       viewMode,
       openHome,
       openBook,
@@ -792,13 +861,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
       prefs.theme,
       prefs.proseFont,
       prefs.proseIndent,
+      prefs.proseFontSize,
+      prefs.proseLineHeight,
+      prefs.proseMaxWidth,
       prefs.studioDrawerOpen,
+      focusMode,
       setTheme,
       toggleTheme,
       setProseFont,
       setProseIndent,
+      setProseFontSize,
+      setProseLineHeight,
+      setProseMaxWidth,
+      resetTypography,
       setStudioDrawerOpen,
       toggleStudioDrawer,
+      toggleFocusMode,
+      commandPaletteOpen,
+      openCommandPalette,
+      closeCommandPalette,
+      toggleCommandPalette,
       viewMode,
       openHome,
       openBook,

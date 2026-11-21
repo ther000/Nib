@@ -83,12 +83,15 @@ export function StyleRulesBoard() {
   const [savingSample, setSavingSample] = useState(false);
   const [confirmDeleteSampleId, setConfirmDeleteSampleId] = useState<number | null>(null);
 
-  // Section 3: De-AI Rules
+  // Section 3: De-AI Rules & Sensitive Word Bulk Import
   const [catFilter, setCatFilter] = useState<string>("all");
   const [rules, setRules] = useState<DeaiRule[]>([]);
   const [ruleEditor, setRuleEditor] = useState<RuleEditorState | null>(null);
   const [savingRule, setSavingRule] = useState(false);
   const [confirmDeleteRuleId, setConfirmDeleteRuleId] = useState<number | null>(null);
+  const [sensitiveModalOpen, setSensitiveModalOpen] = useState(false);
+  const [sensitiveText, setSensitiveText] = useState("");
+  const [importingSensitive, setImportingSensitive] = useState(false);
 
   const syncProfileForm = useCallback((p: StyleProfile) => {
     setProfile(p);
@@ -336,13 +339,60 @@ export function StyleRulesBoard() {
     }
   };
 
-  const filteredRules = useMemo(
-    () =>
-      catFilter === "all"
-        ? rules
-        : rules.filter((r) => r.category === catFilter),
-    [rules, catFilter]
-  );
+  const handleImportSensitiveWords = async () => {
+    if (!activeBook || importingSensitive) return;
+    const rawWords = sensitiveText
+      .split(/[\r\n,，、;；]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const existing = new Set(rules.map((r) => r.pattern.trim()));
+    const toAdd = Array.from(new Set(rawWords)).filter((w) => !existing.has(w));
+    if (toAdd.length === 0) {
+      notify({ tone: "warn", message: "没有需要新增的敏感词或禁词（可能均已存在）" });
+      return;
+    }
+    setImportingSensitive(true);
+    try {
+      let added = 0;
+      for (const word of toAdd) {
+        await StyleService.upsertDeaiRule({
+          id: 0,
+          bookId: activeBook.id,
+          category: "cliche",
+          pattern: word,
+          isRegex: false,
+          severity: "error",
+          maxPerChapter: 0,
+          hint: "发文敏感/违禁词：请替换或删改后再发布",
+          enabled: true,
+        });
+        added++;
+      }
+      await loadRules();
+      setSensitiveModalOpen(false);
+      setSensitiveText("");
+      setCatFilter("sensitive");
+      notify({
+        tone: "ok",
+        message: `已批量导入 ${added} 条敏感/违禁词规则`,
+        detail: "写作台本地扫描将 0 成本实时标红告警",
+      });
+    } catch (err) {
+      notify({ tone: "danger", message: "批量导入敏感词失败", detail: formatErrorMessage(err) });
+    } finally {
+      setImportingSensitive(false);
+    }
+  };
+
+  const filteredRules = useMemo(() => {
+    if (catFilter === "all") return rules;
+    if (catFilter === "sensitive") {
+      return rules.filter(
+        (r) => r.hint.includes("敏感") || r.hint.includes("违禁") || r.hint.includes("禁词")
+      );
+    }
+    return rules.filter((r) => r.category === catFilter);
+  }, [rules, catFilter]);
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5">
@@ -689,7 +739,27 @@ export function StyleRulesBoard() {
                     {cat.label}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  onClick={() => setCatFilter("sensitive")}
+                  className={`rounded px-2 py-1 text-xs transition-colors ${
+                    catFilter === "sensitive"
+                      ? "bg-danger-soft font-medium text-danger"
+                      : "text-ink-secondary hover:text-ink-primary"
+                  }`}
+                >
+                  敏感/禁词
+                </button>
               </div>
+
+              <button
+                type="button"
+                onClick={() => setSensitiveModalOpen(true)}
+                className="flex items-center gap-1 rounded-md border border-danger/35 bg-danger-soft/60 px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger-soft"
+              >
+                <ShieldBan className="h-3.5 w-3.5" />
+                <span>批量导敏感词</span>
+              </button>
 
               <button
                 type="button"
@@ -697,12 +767,13 @@ export function StyleRulesBoard() {
                   setRuleEditor({
                     id: 0,
                     bookId: activeBook?.id ?? 0,
-                    category: catFilter === "all" ? "cliche" : catFilter,
+                    category:
+                      catFilter === "all" || catFilter === "sensitive" ? "cliche" : catFilter,
                     pattern: "",
                     isRegex: false,
                     severity: "error",
                     maxPerChapter: "0",
-                    hint: "",
+                    hint: catFilter === "sensitive" ? "发文敏感/违禁词：请替换或删改后再发布" : "",
                     enabled: true,
                   })
                 }
@@ -1030,6 +1101,68 @@ export function StyleRulesBoard() {
                 className="rounded-md bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
               >
                 {savingSample ? "保存中…" : "保存样章"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Sensitive / Forbidden Words Modal */}
+      {sensitiveModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && !importingSensitive) {
+              setSensitiveModalOpen(false);
+            }
+          }}
+        >
+          <div className="w-full max-w-[480px] overflow-hidden rounded-xl border border-border-strong bg-elevated shadow-[var(--shadow-elevated)]">
+            <div className="flex items-center justify-between border-b border-border-subtle px-5 py-3.5">
+              <div className="flex items-center gap-2">
+                <ShieldBan className="h-4 w-4 text-danger" />
+                <h3 className="text-sm font-medium text-ink-primary">
+                  批量导入敏感词 / 平台违禁词
+                </h3>
+              </div>
+              <button
+                type="button"
+                disabled={importingSensitive}
+                onClick={() => setSensitiveModalOpen(false)}
+                className="rounded p-1 text-ink-muted hover:bg-surface hover:text-ink-primary"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="flex flex-col gap-3 p-5">
+              <div className="text-xs leading-relaxed text-ink-secondary">
+                每行一个词（或使用逗号、顿号分隔）。导入后将自动作为本书的 0 成本本地扫描规则，发文前一键标红提示。
+              </div>
+              <textarea
+                rows={7}
+                autoFocus
+                value={sensitiveText}
+                onChange={(e) => setSensitiveText(e.target.value)}
+                placeholder={"例如：\n违禁词A\n违禁词B\n角色旧名C"}
+                className="w-full resize-y rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+              />
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-border-subtle bg-surface/50 px-5 py-3">
+              <button
+                type="button"
+                disabled={importingSensitive}
+                onClick={() => setSensitiveModalOpen(false)}
+                className="rounded-md px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface hover:text-ink-primary"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={importingSensitive || !sensitiveText.trim()}
+                onClick={() => void handleImportSensitiveWords()}
+                className="rounded-md bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-40"
+              >
+                {importingSensitive ? "导入中…" : "确认批量导入"}
               </button>
             </div>
           </div>

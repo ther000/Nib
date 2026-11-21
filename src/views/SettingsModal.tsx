@@ -102,6 +102,13 @@ export function SettingsModal() {
     setProseFont,
     proseIndent,
     setProseIndent,
+    proseFontSize,
+    setProseFontSize,
+    proseLineHeight,
+    setProseLineHeight,
+    proseMaxWidth,
+    setProseMaxWidth,
+    resetTypography,
     providers,
     modelRoutes,
     activeBook,
@@ -1843,8 +1850,69 @@ export function SettingsModal() {
                       />
                     </label>
 
+                    {/* 字号 / 行距 / 栏宽自由调节 */}
+                    <div className="grid grid-cols-1 gap-3 border-t border-border-subtle pt-3 sm:grid-cols-3">
+                      <div>
+                        <div className="mb-1 flex items-center justify-between text-xs">
+                          <span className="text-ink-secondary">正文字号</span>
+                          <span className="nib-mono text-ink-primary">{proseFontSize}px</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={14}
+                          max={24}
+                          step={1}
+                          value={proseFontSize}
+                          onChange={(e) => setProseFontSize(Number(e.target.value))}
+                          className="w-full accent-[var(--accent)]"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="mb-1 flex items-center justify-between text-xs">
+                          <span className="text-ink-secondary">行距倍数</span>
+                          <span className="nib-mono text-ink-primary">{proseLineHeight.toFixed(2)}</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={1.5}
+                          max={2.3}
+                          step={0.04}
+                          value={proseLineHeight}
+                          onChange={(e) => setProseLineHeight(Number(e.target.value))}
+                          className="w-full accent-[var(--accent)]"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="mb-1 flex items-center justify-between text-xs">
+                          <span className="text-ink-secondary">正文栏宽</span>
+                          <span className="nib-mono text-ink-primary">{proseMaxWidth}px</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={580}
+                          max={960}
+                          step={20}
+                          value={proseMaxWidth}
+                          onChange={(e) => setProseMaxWidth(Number(e.target.value))}
+                          className="w-full accent-[var(--accent)]"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end">
+                      <button
+                        type="button"
+                        onClick={resetTypography}
+                        className="text-[11px] text-ink-muted transition-colors hover:text-accent"
+                      >
+                        恢复默认排版参数
+                      </button>
+                    </div>
+
                     <div className="mt-1 rounded-md border border-border-subtle bg-canvas px-4 py-3">
-                      <div className="nib-prose-column text-[15px]">
+                      <div className="nib-prose-column">
                         <p>
                           残阵灵光骤灭，焦糊味混着血腥气在石室散开。他俯身扣紧那枚微温玉瓶，转身朝暗门掠去。
                         </p>

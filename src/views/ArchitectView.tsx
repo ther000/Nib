@@ -25,7 +25,6 @@ import {
 import { useApp } from "../stores/AppContext";
 import { useContextMenu } from "../components/ContextMenu";
 import { VolumePacingChart } from "../components/architect/VolumePacingChart";
-import { BatchSchedulerPanel } from "../components/architect/BatchSchedulerPanel";
 import { BatchOutlineModal } from "../components/architect/BatchOutlineModal";
 import {
   BEAT_STAGES,
@@ -89,8 +88,6 @@ export function ArchitectView() {
     selectChapter,
     jumpToChapter,
     refreshBookData,
-    refreshChapters,
-    refreshForeshadowings,
     updateChapterInCache,
     setActiveTab,
     openAtlasSubTab,
@@ -160,11 +157,6 @@ export function ArchitectView() {
     if (!activeChapter) return volumes[0] ?? null;
     return volumes.find((v) => v.id === activeChapter.volumeId) ?? null;
   }, [volumes, activeChapter]);
-
-  const activeVolumeChapters = useMemo(() => {
-    if (!activeVolume) return [];
-    return chaptersByVolume.get(activeVolume.id) ?? [];
-  }, [activeVolume, chaptersByVolume]);
 
   const nextGlobalSeq = useMemo(
     () => chapters.reduce((m, c) => (c.globalSeq > m ? c.globalSeq : m), 0) + 1,
@@ -638,15 +630,28 @@ export function ArchitectView() {
               {chapters.length}
             </span>
           </div>
-          <button
-            type="button"
-            onClick={openCreateVolume}
-            title="新建卷"
-            className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
-          >
-            <Plus className="h-3.5 w-3.5 text-accent" />
-            <span>新建卷</span>
-          </button>
+          <div className="flex items-center gap-1">
+            {activeVolume && (
+              <button
+                type="button"
+                onClick={() => setOutlineModalOpen(true)}
+                title="AI 批量生成章纲与节拍卡"
+                className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-accent transition-colors hover:bg-accent-soft"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                <span>AI 章纲</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={openCreateVolume}
+              title="新建卷"
+              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+            >
+              <Plus className="h-3.5 w-3.5 text-accent" />
+              <span>新建卷</span>
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-2 py-2">
@@ -1557,25 +1562,6 @@ export function ArchitectView() {
           </div>
         )}
       </main>
-
-      {/* Right Panel: Serial Micro-Batch Scheduler (280px) */}
-      {activeBook && (
-        <BatchSchedulerPanel
-          bookId={activeBook.id}
-          volumeChapters={activeVolumeChapters}
-          hasVolume={activeVolume !== null}
-          onOpenOutlineModal={() => setOutlineModalOpen(true)}
-          onJumpToChapterStudio={jumpToChapter}
-          onBatchUpdated={async () => {
-            await Promise.all([
-              refreshChapters(activeBook.id),
-              refreshForeshadowings(activeBook.id),
-            ]);
-            setPacingRefreshKey((k) => k + 1);
-          }}
-          onNotify={notify}
-        />
-      )}
 
       {/* Batch Outline Generation Modal */}
       {activeBook && (

@@ -6,6 +6,7 @@ import { TopBar } from "./components/TopBar";
 import { AutopilotModal, AutopilotStatusBar } from "./components/AutopilotConsole";
 import { DirectorDrawer } from "./components/DirectorDrawer";
 import { CreateBookModal } from "./components/CreateBookModal";
+import { CommandPalette } from "./components/CommandPalette";
 import { MemorySearchModal } from "./components/MemorySearchModal";
 import { ToastHost } from "./components/ToastHost";
 import { HomeView } from "./views/HomeView";
@@ -30,11 +31,26 @@ function NibShell() {
     memorySearchOpen,
     toggleMemorySearch,
     toggleDirector,
+    focusMode,
+    setFocusMode,
+    toggleFocusMode,
+    commandPaletteOpen,
+    toggleCommandPalette,
   } = useApp();
 
   const inWorkspace = viewMode === "workspace" && Boolean(activeBook);
+  const effectiveFocusMode = focusMode && inWorkspace && activeTab === "studio";
+
+  // 离开写作台时自动退出专注模式
+  useEffect(() => {
+    if (focusMode && (!inWorkspace || activeTab !== "studio")) {
+      setFocusMode(false);
+    }
+  }, [focusMode, inWorkspace, activeTab, setFocusMode]);
 
   // Global keyboard shortcuts:
+  // Ctrl+Shift+P   -> toggle Command Palette & Shortcuts
+  // F11 / Ctrl+Shift+Z -> toggle Focus Mode in Studio
   // Ctrl+1/2/3     -> switch 编排 / 审改 / 账本
   // Ctrl+\         -> toggle Studio right drawer
   // Ctrl+S         -> save active chapter draft (or beats/meta in Architect)
@@ -42,10 +58,45 @@ function NibShell() {
   // Ctrl+Shift+F   -> toggle Global Memory Search modal
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const blockingModalOpen = settingsOpen || createBookOpen;
+
+      if (e.key === "F11" && !blockingModalOpen && inWorkspace && activeTab === "studio") {
+        e.preventDefault();
+        toggleFocusMode();
+        return;
+      }
+
+      if (
+        e.key === "Escape" &&
+        effectiveFocusMode &&
+        !blockingModalOpen &&
+        !memorySearchOpen &&
+        !commandPaletteOpen
+      ) {
+        setFocusMode(false);
+        return;
+      }
+
       const mod = e.ctrlKey || e.metaKey;
       if (!mod) return;
 
-      const blockingModalOpen = settingsOpen || createBookOpen;
+      if ((e.key.toLowerCase() === "p" || e.code === "KeyP") && e.shiftKey && !blockingModalOpen) {
+        e.preventDefault();
+        toggleCommandPalette();
+        return;
+      }
+
+      if (
+        (e.key.toLowerCase() === "z" || e.code === "KeyZ") &&
+        e.shiftKey &&
+        !blockingModalOpen &&
+        inWorkspace &&
+        activeTab === "studio"
+      ) {
+        e.preventDefault();
+        toggleFocusMode();
+        return;
+      }
 
       if (
         (e.key.toLowerCase() === "f" || e.code === "KeyF") &&
@@ -119,14 +170,19 @@ function NibShell() {
     toggleStudioDrawer,
     toggleMemorySearch,
     toggleDirector,
+    effectiveFocusMode,
+    commandPaletteOpen,
+    setFocusMode,
+    toggleFocusMode,
+    toggleCommandPalette,
     triggerSave,
     triggerGenerate,
   ]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-canvas text-ink-primary">
-      <TopBar />
-      {inWorkspace && <AutopilotStatusBar />}
+      {!effectiveFocusMode && <TopBar />}
+      {!effectiveFocusMode && inWorkspace && <AutopilotStatusBar />}
 
       {bootstrapping ? (
         <main className="flex flex-1 items-center justify-center">
@@ -162,13 +218,14 @@ function NibShell() {
               <AtlasView />
             )}
           </div>
-          <DirectorDrawer />
+          {!effectiveFocusMode && <DirectorDrawer />}
         </div>
       )}
 
       <CreateBookModal />
       <AutopilotModal />
       <MemorySearchModal />
+      <CommandPalette />
       <SettingsModal />
       <ToastHost />
     </div>
