@@ -341,6 +341,24 @@ func (s *SettingsService) ListAutoBackups(ctx context.Context) ([]domain.AutoBac
 	return out, nil
 }
 
+// ChooseBackupFile 弹出系统文件选择框，返回用户选中的 SQLite 备份路径；取消时返回空字符串。
+func (s *SettingsService) ChooseBackupFile(ctx context.Context) (string, error) {
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+		Parent: mygo.CallerWindow(ctx),
+		Title:  "选择要恢复的 Nib 备份文件",
+		Filters: []mygo.FileFilter{
+			{Name: "SQLite 数据库备份 (*.db)", Extensions: []string{"db"}},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(paths) == 0 {
+		return "", nil
+	}
+	return paths[0], nil
+}
+
 // RestoreDatabaseFromFile 校验并恢复指定备份文件，返回恢复前自动生成的当前库热备路径。
 func (s *SettingsService) RestoreDatabaseFromFile(ctx context.Context, backupPath string) (string, error) {
 	if strings.TrimSpace(backupPath) == "" {

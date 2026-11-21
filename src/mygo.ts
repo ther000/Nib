@@ -1253,6 +1253,8 @@ export const AtlasService = {
 export const SettingsService = {
   /** BackupDatabase 弹出原生保存对话框，将本地 SQLite 书库安全刷盘并完整备份至指定文件；用户取消时返回空字符串。 */
   backupDatabase: bind<[], string>("SettingsService.BackupDatabase", () => []),
+  /** ChooseBackupFile 弹出系统文件选择框，返回用户选中的 SQLite 备份路径；取消时返回空字符串。 */
+  chooseBackupFile: bind<[], string>("SettingsService.ChooseBackupFile", () => []),
   /** ClearTrash 清空回收站。 */
   clearTrash: bind<[], number>("SettingsService.ClearTrash", () => []),
   /** DeleteModelPricing 删除指定模型的自定义单价配置。 */

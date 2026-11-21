@@ -212,6 +212,46 @@ func TestBatchChapterOperationsAndSameVolumeReorder(t *testing.T) {
 	}
 }
 
+func TestPhase7ToLatestUpgradeAddsNotesAndBookProfile(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "upgrade-v7.db")
+	allMigs, err := loadEmbeddedMigrations()
+	if err != nil {
+		t.Fatalf("loadEmbeddedMigrations: %v", err)
+	}
+	if len(allMigs) < 9 {
+		t.Fatalf("expected at least 9 migrations, got %d", len(allMigs))
+	}
+	old, err := openWithMigrations(dbPath, allMigs[:7])
+	if err != nil {
+		t.Fatalf("open v7: %v", err)
+	}
+	book := createLegacyBook(t, old, "旧库升级测试", domain.GenreUrban)
+	if err := old.Close(); err != nil {
+		t.Fatalf("close v7: %v", err)
+	}
+
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("upgrade to latest: %v", err)
+	}
+	defer st.Close()
+	loaded, err := st.GetBook(ctx, book.ID)
+	if err != nil {
+		t.Fatalf("GetBook after upgrade: %v", err)
+	}
+	if loaded.POVMode != "third_limited" || loaded.DailyWordGoal != domain.DefaultDailyWordGoal {
+		t.Fatalf("unexpected upgraded book profile: %+v", loaded)
+	}
+	note, err := st.UpsertScratchNote(ctx, domain.UpsertScratchNoteInput{BookID: book.ID, Title: "升级后便签", Content: "可用"})
+	if err != nil || note.ID == 0 {
+		t.Fatalf("scratch note after upgrade: %+v err=%v", note, err)
+	}
+	if _, err := st.ListTrashItems(ctx); err != nil {
+		t.Fatalf("trash table after upgrade: %v", err)
+	}
+}
+
 func TestAutoBackupAndRestoreDataFromFile(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

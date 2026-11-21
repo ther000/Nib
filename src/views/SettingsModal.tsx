@@ -255,6 +255,23 @@ export function SettingsModal() {
     }
   };
 
+  const handleRestoreFromFile = async () => {
+    try {
+      const path = await SettingsService.chooseBackupFile();
+      if (!path) return;
+      const confirmed = window.confirm("恢复后会覆盖当前书库的全部数据，系统会先自动备份当前数据库。确认继续吗？");
+      if (!confirmed) return;
+      setRestoringBackupPath(path);
+      const preRestore = await SettingsService.restoreDatabaseFromFile(path);
+      notify({ tone: "ok", message: "书库已恢复，正在重新载入…", detail: preRestore });
+      setTimeout(() => window.location.reload(), 500);
+    } catch (err) {
+      notify({ tone: "danger", message: "恢复书库失败", detail: formatErrorMessage(err) });
+    } finally {
+      setRestoringBackupPath(null);
+    }
+  };
+
   const handleRestoreTrash = async (item: TrashItem) => {
     setRestoringTrashId(item.id);
     try {
@@ -2224,15 +2241,25 @@ export function SettingsModal() {
                     <span className="text-xs font-medium text-ink-secondary">
                       自动备份（最近 7 份）
                     </span>
-                    <button
-                      type="button"
-                      disabled={backupsLoading}
-                      onClick={() => void loadAutoBackups()}
-                      className="flex items-center gap-1 text-xs text-ink-muted transition-colors hover:text-accent disabled:opacity-50"
-                    >
-                      <RefreshCw className={`h-3 w-3 ${backupsLoading ? "animate-spin" : ""}`} />
-                      刷新
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        disabled={restoringBackupPath !== null}
+                        onClick={() => void handleRestoreFromFile()}
+                        className="text-xs text-ink-muted transition-colors hover:text-accent disabled:opacity-50"
+                      >
+                        从文件恢复
+                      </button>
+                      <button
+                        type="button"
+                        disabled={backupsLoading}
+                        onClick={() => void loadAutoBackups()}
+                        className="flex items-center gap-1 text-xs text-ink-muted transition-colors hover:text-accent disabled:opacity-50"
+                      >
+                        <RefreshCw className={`h-3 w-3 ${backupsLoading ? "animate-spin" : ""}`} />
+                        刷新
+                      </button>
+                    </div>
                   </div>
                   <div className="overflow-hidden rounded-lg border border-border-subtle bg-surface/50">
                     {autoBackups.length === 0 ? (
