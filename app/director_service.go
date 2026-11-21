@@ -53,3 +53,34 @@ func (s *DirectorService) SendInstruction(
 	}
 	return reply, nil
 }
+
+// ListMessages 返回指定书籍的 AI 导演持久化对话记录。
+func (s *DirectorService) ListMessages(ctx context.Context, bookID int64) ([]domain.DirectorMessage, error) {
+	if err := validatePositiveID("bookId", bookID); err != nil {
+		return nil, err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return nil, err
+	}
+	msgs, err := st.ListDirectorMessages(ctx, bookID)
+	if err != nil {
+		return nil, err
+	}
+	if msgs == nil {
+		return []domain.DirectorMessage{}, nil
+	}
+	return msgs, nil
+}
+
+// ClearMessages 清空指定书籍的 AI 导演历史对话。
+func (s *DirectorService) ClearMessages(ctx context.Context, bookID int64) error {
+	if err := validatePositiveID("bookId", bookID); err != nil {
+		return err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return err
+	}
+	return st.ClearDirectorMessages(ctx, bookID)
+}

@@ -13,14 +13,30 @@ import (
 	"nib/internal/domain"
 )
 
+type geminiFunctionCall struct {
+	Name string         `json:"name"`
+	Args map[string]any `json:"args,omitempty"`
+}
+
+type geminiFunctionResponse struct {
+	Name     string         `json:"name"`
+	Response map[string]any `json:"response"`
+}
+
 type geminiPart struct {
-	Text    string `json:"text,omitempty"`
-	Thought bool   `json:"thought,omitempty"`
+	Text             string                  `json:"text,omitempty"`
+	Thought          bool                    `json:"thought,omitempty"`
+	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
+	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
 }
 
 type geminiContent struct {
 	Role  string       `json:"role,omitempty"`
 	Parts []geminiPart `json:"parts"`
+}
+
+type geminiTool struct {
+	FunctionDeclarations []ToolDefinition `json:"functionDeclarations"`
 }
 
 type geminiGenerationConfig struct {
@@ -31,6 +47,7 @@ type geminiGenerationConfig struct {
 type geminiRequest struct {
 	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
 	Contents          []geminiContent         `json:"contents"`
+	Tools             []geminiTool            `json:"tools,omitempty"`
 	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
 }
 
@@ -77,11 +94,35 @@ func buildGeminiRequest(ctx context.Context, provider domain.Provider, req ChatR
 			if strings.TrimSpace(m.Content) != "" {
 				sysParts = append(sysParts, m.Content)
 			}
-		case "assistant", "model":
+		case "tool":
+			fnName := strings.TrimSpace(m.ToolName)
+			if fnName == "" {
+				fnName = "tool"
+			}
 			contents = append(contents, geminiContent{
-				Role:  "model",
-				Parts: []geminiPart{{Text: m.Content}},
+				Role: "user",
+				Parts: []geminiPart{{
+					FunctionResponse: &geminiFunctionResponse{
+						Name:     fnName,
+						Response: map[string]any{"result": m.Content},
+					},
+				}},
 			})
+		case "assistant", "model":
+			parts := make([]geminiPart, 0, len(m.ToolCalls)+1)
+			if strings.TrimSpace(m.Content) != "" {
+				parts = append(parts, geminiPart{Text: m.Content})
+			}
+			for _, tc := range m.ToolCalls {
+				var argsMap map[string]any
+				_ = json.Unmarshal([]byte(tc.Arguments), &argsMap)
+				parts = append(parts, geminiPart{
+					FunctionCall: &geminiFunctionCall{Name: tc.Name, Args: argsMap},
+				})
+			}
+			if len(parts) > 0 {
+				contents = append(contents, geminiContent{Role: "model", Parts: parts})
+			}
 		default:
 			contents = append(contents, geminiContent{
 				Role:  "user",
@@ -96,6 +137,9 @@ func buildGeminiRequest(ctx context.Context, provider domain.Provider, req ChatR
 			Temperature:     req.Temperature,
 			MaxOutputTokens: req.MaxTokens,
 		},
+	}
+	if len(req.Tools) > 0 {
+		payload.Tools = []geminiTool{{FunctionDeclarations: req.Tools}}
 	}
 	if len(sysParts) > 0 {
 		payload.SystemInstruction = &geminiContent{
@@ -161,7 +205,21 @@ func parseGeminiStream(
 				finishReason = cand.FinishReason
 				seenValidEvent = true
 			}
-			for _, part := range cand.Content.Parts {
+			var fnCalls []ToolCall
+			for idx, part := range cand.Content.Parts {
+				if part.FunctionCall != nil && strings.TrimSpace(part.FunctionCall.Name) != "" {
+					seenValidEvent = true
+					argsBytes, _ := json.Marshal(part.FunctionCall.Args)
+					if len(argsBytes) == 0 || string(argsBytes) == "null" {
+						argsBytes = []byte("{}")
+					}
+					fnCalls = append(fnCalls, ToolCall{
+						ID:        fmt.Sprintf("gemini_call_%d", idx+1),
+						Name:      strings.TrimSpace(part.FunctionCall.Name),
+						Arguments: string(argsBytes),
+					})
+					continue
+				}
 				if part.Text == "" {
 					continue
 				}
@@ -178,6 +236,14 @@ func parseGeminiStream(
 				seenDelta = true
 				if err := emit(StreamEvent{
 					Delta:        part.Text,
+					FinishReason: finishReason,
+				}); err != nil {
+					return err
+				}
+			}
+			if len(fnCalls) > 0 {
+				if err := emit(StreamEvent{
+					ToolCalls:    fnCalls,
 					FinishReason: finishReason,
 				}); err != nil {
 					return err

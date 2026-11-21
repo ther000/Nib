@@ -9,8 +9,9 @@ import {
   RefreshCw,
   SlidersHorizontal,
   Trash2,
+  Upload,
 } from "lucide-react";
-import { SettingsService, type UsageSummary } from "../mygo";
+import { LibraryService, SettingsService, type UsageSummary } from "../mygo";
 import { useApp } from "../stores/AppContext";
 import {
   PIPELINE_STAGES,
@@ -30,6 +31,7 @@ export function HomeView() {
     genrePresets,
     openBook,
     deleteBook,
+    refreshBooks,
     openSettings,
     openCreateBook,
     notify,
@@ -37,6 +39,26 @@ export function HomeView() {
 
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [importingBook, setImportingBook] = useState(false);
+
+  const handleImportBook = async () => {
+    if (importingBook) return;
+    setImportingBook(true);
+    try {
+      const res = await LibraryService.importBookFromFile("general");
+      if (!res) return;
+      await refreshBooks(res.book.id);
+      await openBook(res.book.id);
+      notify({
+        tone: "ok",
+        message: `已导入《${res.book.title}》（${res.chapterCount} 章，${formatNumber(res.totalWords)} 字）`,
+      });
+    } catch (err) {
+      notify({ tone: "danger", message: "导入旧稿失败", detail: formatErrorMessage(err) });
+    } finally {
+      setImportingBook(false);
+    }
+  };
 
   // Usage analytics state
   const [usageBookId, setUsageBookId] = useState<number>(0);
@@ -139,6 +161,16 @@ export function HomeView() {
                 }`}
               />
               <span>{modelReady ? "模型设置" : "连接模型"}</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={importingBook}
+              onClick={() => void handleImportBook()}
+              className="flex items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 py-1.5 text-[13px] font-medium text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary disabled:opacity-40"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              <span>{importingBook ? "导入中…" : "导入旧稿"}</span>
             </button>
 
             <button

@@ -5,6 +5,7 @@ import {
   BookMarked,
   Clock,
   Flag,
+  GitFork,
   History,
   Plus,
   Search,
@@ -36,6 +37,7 @@ import {
 import { ForeshadowingBoard } from "../components/atlas/ForeshadowingBoard";
 import { ArcSummaryBoard } from "../components/atlas/ArcSummaryBoard";
 import { StyleRulesBoard } from "../components/atlas/StyleRulesBoard";
+import { RelationsBoard } from "../components/atlas/RelationsBoard";
 
 interface CustomAttrRow {
   localKey: string;
@@ -467,6 +469,11 @@ export function AtlasView() {
   }> = [
     { id: "entities", label: "实体档案", Icon: Users, badge: allEntities.length, badgeTone: "muted" },
     {
+      id: "relations",
+      label: "关系网",
+      Icon: GitFork,
+    },
+    {
       id: "foreshadowings",
       label: "伏笔看板",
       Icon: Flag,
@@ -823,6 +830,9 @@ export function AtlasView() {
           </div>
         </>
       )}
+
+      {/* Sub-tab 1.5: 角色/势力关系网 */}
+      {atlasSubTab === "relations" && <RelationsBoard />}
 
       {/* Sub-tab 2: 伏笔看板 */}
       {atlasSubTab === "foreshadowings" && (

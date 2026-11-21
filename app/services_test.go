@@ -330,6 +330,33 @@ func (f *fakeStore) DeleteEntity(_ context.Context, id int64) error {
 	return nil
 }
 
+func (f *fakeStore) ListEntityRelations(_ context.Context, _ int64) ([]domain.EntityRelation, error) {
+	return []domain.EntityRelation{}, nil
+}
+
+func (f *fakeStore) UpsertEntityRelation(_ context.Context, in domain.UpsertEntityRelationInput) (domain.EntityRelation, error) {
+	return domain.EntityRelation{
+		ID: f.allocID(), BookID: in.BookID, SourceEntityID: in.SourceEntityID,
+		TargetEntityID: in.TargetEntityID, RelationType: in.RelationType, Description: in.Description,
+	}, nil
+}
+
+func (f *fakeStore) DeleteEntityRelation(_ context.Context, _ int64) error {
+	return nil
+}
+
+func (f *fakeStore) ListDirectorMessages(_ context.Context, _ int64) ([]domain.DirectorMessage, error) {
+	return []domain.DirectorMessage{}, nil
+}
+
+func (f *fakeStore) ClearDirectorMessages(_ context.Context, _ int64) error {
+	return nil
+}
+
+func (f *fakeStore) BackupToFile(_ context.Context, _ string) error {
+	return nil
+}
+
 func (f *fakeStore) ListProviders(_ context.Context) ([]domain.Provider, error) {
 	out := make([]domain.Provider, 0, len(f.providers))
 	for _, p := range f.providers {
@@ -426,6 +453,14 @@ func (e *fakeExporter) ExportBook(_ context.Context, bookID int64) (domain.Expor
 func (e *fakeExporter) ExportChapter(_ context.Context, chapterID int64) (string, error) {
 	e.exportedChapters = append(e.exportedChapters, chapterID)
 	return "D:/Export/Test/ch1.md", nil
+}
+
+func (e *fakeExporter) ExportBookTXT(_ context.Context, _ int64, targetPath string) (string, error) {
+	return targetPath, nil
+}
+
+func (e *fakeExporter) ExportBookEPUB(_ context.Context, _ int64, targetPath string) (string, error) {
+	return targetPath, nil
 }
 
 type fakeLLM struct {

@@ -7,7 +7,9 @@ import (
 	"github.com/egoist/mygo"
 
 	"nib/internal/domain"
+	"nib/internal/exporter"
 	"nib/internal/genres"
+	"nib/internal/importer"
 )
 
 // LibraryService 提供书、卷、章、节拍卡及单向 Markdown 导出的桌面 RPC 绑定。
@@ -372,6 +374,100 @@ func (s *LibraryService) ExportBookMarkdown(ctx context.Context, bookID int64) (
 		return domain.ExportResult{}, domain.ErrExportDirNotSet
 	}
 	return exp.ExportBook(ctx, bookID)
+}
+
+// ExportBookTXT 弹出原生保存对话框，将整本书合并导出为纯净中文 TXT 文件（用户取消时返回空字符串）。
+func (s *LibraryService) ExportBookTXT(ctx context.Context, bookID int64) (string, error) {
+	if err := validatePositiveID("bookId", bookID); err != nil {
+		return "", err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return "", err
+	}
+	exp, err := s.rt.requireExporter()
+	if err != nil {
+		return "", err
+	}
+	book, err := st.GetBook(ctx, bookID)
+	if err != nil {
+		return "", err
+	}
+	targetPath, err := mygo.Dialog.Save(mygo.SaveDialogOptions{
+		Parent:      mygo.CallerWindow(ctx),
+		Title:       "导出整本 TXT",
+		DefaultPath: exporter.SanitizeFilename(book.Title) + ".txt",
+		Filters: []mygo.FileFilter{
+			{Name: "纯文本小说 (*.txt)", Extensions: []string{"txt"}},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(targetPath) == "" {
+		return "", nil
+	}
+	return exp.ExportBookTXT(ctx, bookID, targetPath)
+}
+
+// ExportBookEPUB 弹出原生保存对话框，将整本书导出为标准 EPUB 3 电子书（用户取消时返回空字符串）。
+func (s *LibraryService) ExportBookEPUB(ctx context.Context, bookID int64) (string, error) {
+	if err := validatePositiveID("bookId", bookID); err != nil {
+		return "", err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return "", err
+	}
+	exp, err := s.rt.requireExporter()
+	if err != nil {
+		return "", err
+	}
+	book, err := st.GetBook(ctx, bookID)
+	if err != nil {
+		return "", err
+	}
+	targetPath, err := mygo.Dialog.Save(mygo.SaveDialogOptions{
+		Parent:      mygo.CallerWindow(ctx),
+		Title:       "导出 EPUB 电子书",
+		DefaultPath: exporter.SanitizeFilename(book.Title) + ".epub",
+		Filters: []mygo.FileFilter{
+			{Name: "EPUB 电子书 (*.epub)", Extensions: []string{"epub"}},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(targetPath) == "" {
+		return "", nil
+	}
+	return exp.ExportBookEPUB(ctx, bookID, targetPath)
+}
+
+// ImportBookFromFile 弹出原生文件选择对话框，读取本地 .txt / .md 旧稿并智能拆章建书；用户取消时返回 nil。
+func (s *LibraryService) ImportBookFromFile(ctx context.Context, genre string) (*domain.ImportBookResult, error) {
+	st, err := s.rt.store()
+	if err != nil {
+		return nil, err
+	}
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+		Parent: mygo.CallerWindow(ctx),
+		Title:  "选择要导入的小说旧稿（TXT / Markdown）",
+		Filters: []mygo.FileFilter{
+			{Name: "小说文稿 (*.txt, *.md)", Extensions: []string{"txt", "md", "markdown"}},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(paths) == 0 || strings.TrimSpace(paths[0]) == "" {
+		return nil, nil
+	}
+	res, err := importer.ImportBookFromFile(ctx, st, paths[0], domain.GenreID(strings.TrimSpace(genre)))
+	if err != nil {
+		return nil, err
+	}
+	return &res, nil
 }
 
 // GetVolumePacing 计算指定卷的情绪极性折线数据，并自动诊断连续蓄压过载、缺高潮爆发与超期未收伏笔。

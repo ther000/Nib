@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Channel } from "mygo-runtime";
 import {
   CheckCircle2,
   Loader2,
+  RotateCcw,
   Send,
   Sparkles,
   Square,
@@ -12,11 +12,13 @@ import {
 } from "lucide-react";
 import {
   DirectorService,
+  StudioService,
   type DirectorEvent,
   type DirectorMessage,
   type DirectorToolCall,
 } from "../mygo";
 import { useApp } from "../stores/AppContext";
+import { useMygoChannel } from "../hooks/useMygoStream";
 import { formatErrorMessage } from "../lib/constants";
 
 const QUICK_PROMPTS = [
@@ -46,9 +48,9 @@ export function DirectorDrawer() {
   const [running, setRunning] = useState(false);
   const [liveStatus, setLiveStatus] = useState("");
   const [liveToolCalls, setLiveToolCalls] = useState<DirectorToolCall[]>([]);
+  const [undoingVersionId, setUndoingVersionId] = useState<number | null>(null);
 
-  const userStoppedRef = useRef(false);
-  const channelRef = useRef<Channel<DirectorEvent> | null>(null);
+  const stream = useMygoChannel<DirectorEvent>();
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevBookIdRef = useRef<number | null>(null);
 
@@ -65,22 +67,30 @@ export function DirectorDrawer() {
     );
   }, [providers, modelRoutes]);
 
+  // 切换书籍时取消旧流并从 SQLite 加载该书持久化的 AI 导演对话记录
   useEffect(() => {
-    if (activeBook?.id !== prevBookIdRef.current) {
-      prevBookIdRef.current = activeBook?.id ?? null;
-      userStoppedRef.current = true;
-      try {
-        channelRef.current?.close();
-      } catch {
-        // ignore
-      }
-      channelRef.current = null;
+    const bookId = activeBook?.id ?? null;
+    if (bookId !== prevBookIdRef.current) {
+      prevBookIdRef.current = bookId;
+      stream.stop();
       setMessages([]);
       setLiveStatus("");
       setLiveToolCalls([]);
       setRunning(false);
     }
-  }, [activeBook?.id]);
+    if (!bookId) return;
+    let active = true;
+    void DirectorService.listMessages(bookId)
+      .then((list) => {
+        if (active) setMessages(list);
+      })
+      .catch(() => {
+        // ignore load error
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeBook?.id, directorOpen, stream]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -88,26 +98,37 @@ export function DirectorDrawer() {
     }
   }, [messages, liveToolCalls, liveStatus]);
 
-  useEffect(() => {
-    return () => {
-      userStoppedRef.current = true;
-      try {
-        channelRef.current?.close();
-      } catch {
-        // ignore
-      }
-      channelRef.current = null;
-    };
-  }, []);
-
   if (!directorOpen || !activeBook) return null;
 
   const handleStop = () => {
-    userStoppedRef.current = true;
+    stream.stop();
+  };
+
+  const handleClearHistory = async () => {
+    if (!activeBook || running) return;
     try {
-      channelRef.current?.close();
-    } catch {
-      // ignore
+      await DirectorService.clearMessages(activeBook.id);
+      setMessages([]);
+      notify({ tone: "ok", message: "已清空本书 AI 导演对话记录" });
+    } catch (err) {
+      notify({ tone: "danger", message: "清空对话失败", detail: formatErrorMessage(err) });
+    }
+  };
+
+  const handleUndoProseEdit = async (versionId: number, chapterId?: number) => {
+    if (!activeBook || undoingVersionId !== null) return;
+    setUndoingVersionId(versionId);
+    try {
+      await StudioService.restoreVersion(versionId);
+      await refreshBookData(activeBook.id, chapterId ?? activeChapter?.id ?? null);
+      if (chapterId && chapterId > 0) {
+        await refreshActiveChapter(chapterId);
+      }
+      notify({ tone: "ok", message: "已撤回该次正文修改" });
+    } catch (err) {
+      notify({ tone: "danger", message: "撤回正文修改失败", detail: formatErrorMessage(err) });
+    } finally {
+      setUndoingVersionId(null);
     }
   };
 
@@ -135,12 +156,11 @@ export function DirectorDrawer() {
     setMessages(nextHistory);
     if (!overrideText) setInput("");
 
-    userStoppedRef.current = false;
     setRunning(true);
     setLiveStatus("正在分析你的指令…");
     setLiveToolCalls([]);
 
-    const ch = new Channel<DirectorEvent>((ev) => {
+    const { channel: ch } = stream.open((ev) => {
       if (ev.kind === "started" || ev.kind === "thinking") {
         if (ev.message) setLiveStatus(ev.message);
       } else if (ev.kind === "tool_start" && ev.toolCall) {
@@ -154,7 +174,6 @@ export function DirectorDrawer() {
         setLiveStatus(formatErrorMessage(ev.error));
       }
     });
-    channelRef.current = ch;
 
     try {
       const reply = await DirectorService.sendInstruction(
@@ -185,7 +204,7 @@ export function DirectorDrawer() {
         bumpMemoryRevision();
       }
     } catch (err) {
-      if (!userStoppedRef.current) {
+      if (!stream.wasStopped()) {
         notify({
           tone: "danger",
           message: "AI 导演执行失败",
@@ -210,12 +229,7 @@ export function DirectorDrawer() {
         ]);
       }
     } finally {
-      try {
-        if (!ch.closed) ch.close();
-      } catch {
-        // ignore
-      }
-      if (channelRef.current === ch) channelRef.current = null;
+      stream.release(ch);
       setRunning(false);
       setLiveStatus("");
       setLiveToolCalls([]);
@@ -239,8 +253,8 @@ export function DirectorDrawer() {
           {messages.length > 0 && !running && (
             <button
               type="button"
-              onClick={() => setMessages([])}
-              title="清空对话"
+              onClick={() => void handleClearHistory()}
+              title="清空本书对话记录"
               aria-label="清空对话"
               className="rounded-md p-1 text-ink-muted transition-colors hover:bg-elevated hover:text-ink-primary"
             >
@@ -305,7 +319,20 @@ export function DirectorDrawer() {
                           <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-danger" />
                         )}
                         <div className="min-w-0 flex-1">
-                          <span className="font-medium text-ink-primary">{tc.label}</span>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-medium text-ink-primary">{tc.label}</span>
+                            {tc.status === "ok" && tc.undoVersionId && tc.undoVersionId > 0 && (
+                              <button
+                                type="button"
+                                disabled={undoingVersionId !== null}
+                                onClick={() => void handleUndoProseEdit(tc.undoVersionId!, tc.undoChapterId)}
+                                className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs text-accent transition-colors hover:bg-accent-soft disabled:opacity-40"
+                              >
+                                <RotateCcw className="h-3 w-3" />
+                                <span>{undoingVersionId === tc.undoVersionId ? "撤回中…" : "撤回正文"}</span>
+                              </button>
+                            )}
+                          </div>
                           {tc.resultSummary && (
                             <div className="mt-0.5 text-ink-muted">{tc.resultSummary}</div>
                           )}

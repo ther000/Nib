@@ -56,6 +56,11 @@ type StyleDataSource interface {
 	ListDeaiRules(ctx context.Context, bookID int64) ([]domain.DeaiRule, error)
 }
 
+// RelationDataSource 定义实体关系网只读契约（直接由 *store.Store 自动满足），用于 P2 注入角色/势力关系。
+type RelationDataSource interface {
+	ListEntityRelations(ctx context.Context, bookID int64) ([]domain.EntityRelation, error)
+}
+
 // Option 用于定制 Compiler 可选扩展依赖。
 type Option func(*Compiler)
 
@@ -79,12 +84,13 @@ func WithStyleSource(style StyleDataSource) Option {
 
 // Compiler 负责将书卷设定、世界铁律、节拍卡、实体快照、伏笔、前文衔接、摘要金字塔、精准检索与文风样章编译为透明的作战简报。
 type Compiler struct {
-	src   DataSource
-	mem   MemoryDataSource
-	style StyleDataSource
+	src       DataSource
+	mem       MemoryDataSource
+	style     StyleDataSource
+	relations RelationDataSource
 }
 
-// New 创建上下文编译器实例。若 src 本身实现了 MemoryDataSource 或 StyleDataSource，将自动激活对应槽位。
+// New 创建上下文编译器实例。若 src 本身实现了 MemoryDataSource / StyleDataSource / RelationDataSource，将自动激活对应槽位。
 func New(src DataSource, opts ...Option) *Compiler {
 	c := &Compiler{src: src}
 	if ms, ok := src.(MemoryDataSource); ok {
@@ -92,6 +98,9 @@ func New(src DataSource, opts ...Option) *Compiler {
 	}
 	if ss, ok := src.(StyleDataSource); ok {
 		c.style = ss
+	}
+	if rs, ok := src.(RelationDataSource); ok {
+		c.relations = rs
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -286,9 +295,20 @@ func (c *Compiler) Compile(ctx context.Context, chapterID int64, opts domain.Bri
 		remaining = 0
 	}
 
-	// P2（高优）：出场实体与钉选实体状态快照。
+	// P2（高优）：出场实体与钉选实体状态快照 + 关联实体关系网。
 	p2Cap := min(scaledBudget(totalBudget, defaultP2Budget), remaining)
 	p2Content, includedEntityIDs, p2Truncated := buildP2Content(p2Candidates, p2Cap)
+	if c.relations != nil && len(includedEntityIDs) > 0 && p2Cap > EstimateTokens(p2Content)+40 {
+		if rels, rErr := c.relations.ListEntityRelations(ctx, book.ID); rErr == nil && len(rels) > 0 {
+			if relText := formatRelevantRelations(rels, includedEntityIDs, p2Cap-EstimateTokens(p2Content)); relText != "" {
+				if p2Content != "" {
+					p2Content += "\n\n" + relText
+				} else {
+					p2Content = relText
+				}
+			}
+		}
+	}
 	p2Est := EstimateTokens(p2Content)
 	if p2Truncated {
 		warnings = append(warnings, "P2 出场实体档案因预算受限已压缩或裁剪部分低优先级实体")
@@ -766,6 +786,43 @@ func buildP2Content(candidates []p2Candidate, budget int) (string, []int64, bool
 		return "", []int64{}, true
 	}
 	return strings.TrimSpace(header + strings.Join(keptLines, "\n")), keptIDs, true
+}
+
+func formatRelevantRelations(rels []domain.EntityRelation, includedEntityIDs []int64, remainingBudget int) string {
+	if len(rels) == 0 || len(includedEntityIDs) == 0 || remainingBudget <= 30 {
+		return ""
+	}
+	inc := make(map[int64]bool, len(includedEntityIDs))
+	for _, id := range includedEntityIDs {
+		inc[id] = true
+	}
+	lines := make([]string, 0, len(rels))
+	for _, r := range rels {
+		if !inc[r.SourceEntityID] && !inc[r.TargetEntityID] {
+			continue
+		}
+		line := fmt.Sprintf("- %s —[%s]→ %s", r.SourceName, r.RelationType, r.TargetName)
+		if d := strings.TrimSpace(r.Description); d != "" {
+			line += "：" + d
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	header := "### 出场角色/势力关系网\n"
+	kept := make([]string, 0, len(lines))
+	for _, l := range lines {
+		cand := header + strings.Join(append(slices.Clone(kept), l), "\n")
+		if EstimateTokens(cand) > remainingBudget {
+			break
+		}
+		kept = append(kept, l)
+	}
+	if len(kept) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(header + strings.Join(kept, "\n"))
 }
 
 type scoredForeshadow struct {

@@ -431,6 +431,7 @@ export interface DirectorEvent {
 export type DirectorEventKind = string;
 
 export interface DirectorMessage {
+  id?: number;
   role: string;
   content: string;
   toolCalls?: DirectorToolCall[];
@@ -450,6 +451,8 @@ export interface DirectorToolCall {
   argsJson?: string;
   status: string;
   resultSummary?: string;
+  undoChapterId?: number;
+  undoVersionId?: number;
 }
 
 export type EmotionTag = string;
@@ -474,6 +477,19 @@ export interface EntityFilter {
 }
 
 export type EntityKind = string;
+
+export interface EntityRelation {
+  id: number;
+  bookId: number;
+  sourceEntityId: number;
+  sourceName?: string;
+  targetEntityId: number;
+  targetName?: string;
+  relationType: string;
+  description: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
 
 export interface EntitySnapshot {
   entity: Entity;
@@ -619,6 +635,14 @@ export interface GenrePreset {
 }
 
 export type HookType = string;
+
+export interface ImportBookResult {
+  book: Book;
+  volume: Volume;
+  chapterCount: number;
+  totalWords: number;
+  sourcePath: string;
+}
 
 export interface InsertChapterInput {
   bookId: number;
@@ -895,6 +919,15 @@ export interface UpsertEntityInput {
   attributes: Record<string, string>;
 }
 
+export interface UpsertEntityRelationInput {
+  id: number;
+  bookId: number;
+  sourceEntityId: number;
+  targetEntityId: number;
+  relationType: string;
+  description: string;
+}
+
 export interface UpsertForeshadowingInput {
   id: number;
   bookId: number;
@@ -995,8 +1028,12 @@ export const LibraryService = {
   deleteChapter: bind<[number], void>("LibraryService.DeleteChapter", (chapterID: number) => [chapterID]),
   /** DeleteVolume 删除指定卷及其下属章节。 */
   deleteVolume: bind<[number], void>("LibraryService.DeleteVolume", (id: number) => [id]),
+  /** ExportBookEPUB 弹出原生保存对话框，将整本书导出为标准 EPUB 3 电子书（用户取消时返回空字符串）。 */
+  exportBookEPUB: bind<[number], string>("LibraryService.ExportBookEPUB", (bookID: number) => [bookID]),
   /** ExportBookMarkdown 手动触发全书卷章树与设定铁律单向 Markdown 镜像导出。 */
   exportBookMarkdown: bind<[number], ExportResult>("LibraryService.ExportBookMarkdown", (bookID: number) => [bookID]),
+  /** ExportBookTXT 弹出原生保存对话框，将整本书合并导出为纯净中文 TXT 文件（用户取消时返回空字符串）。 */
+  exportBookTXT: bind<[number], string>("LibraryService.ExportBookTXT", (bookID: number) => [bookID]),
   /** FinalizeChapter 将章节状态置为 finalized，并在书籍配置了导出目录时触发单向 Markdown 同步。 */
   finalizeChapter: bind<[number], Chapter>("LibraryService.FinalizeChapter", (chapterID: number) => [chapterID]),
   /** GenerateBookGenesis 根据一句话灵感流式生成完整开书企划（书名、简介、金手指、初始设定、第一卷与初始章纲）。 */
@@ -1005,6 +1042,8 @@ export const LibraryService = {
   getChapter: bind<[number], Chapter>("LibraryService.GetChapter", (id: number) => [id]),
   /** GetVolumePacing 计算指定卷的情绪极性折线数据，并自动诊断连续蓄压过载、缺高潮爆发与超期未收伏笔。 */
   getVolumePacing: bind<[number], VolumePacingReport>("LibraryService.GetVolumePacing", (volumeID: number) => [volumeID]),
+  /** ImportBookFromFile 弹出原生文件选择对话框，读取本地 .txt / .md 旧稿并智能拆章建书；用户取消时返回 nil。 */
+  importBookFromFile: bind<[string], ImportBookResult | null>("LibraryService.ImportBookFromFile", (genre: string) => [genre]),
   /** InsertChapter 在指定卷的某章之后（afterChapterId=0 表示卷首）插入新章节并自动重排章序。 */
   insertChapter: bind<[InsertChapterInput], Chapter>("LibraryService.InsertChapter", (input: InsertChapterInput) => [input]),
   /** ListBeats 返回章节下的全部节拍卡（按 seq 升序）。 */
@@ -1039,14 +1078,22 @@ export const LibraryService = {
 export const AtlasService = {
   /** DeleteEntity 删除指定设定实体。 */
   deleteEntity: bind<[number], void>("AtlasService.DeleteEntity", (id: number) => [id]),
+  /** DeleteEntityRelation 删除指定实体关系。 */
+  deleteEntityRelation: bind<[number], void>("AtlasService.DeleteEntityRelation", (id: number) => [id]),
   /** ListEntities 按书籍与筛选条件列出设定实体（含世界铁律）。 */
   listEntities: bind<[number, EntityFilter], Entity[]>("AtlasService.ListEntities", (bookID: number, filter: EntityFilter) => [bookID, filter]),
+  /** ListEntityRelations 返回指定书籍的全部角色/势力关系。 */
+  listEntityRelations: bind<[number], EntityRelation[]>("AtlasService.ListEntityRelations", (bookID: number) => [bookID]),
   /** UpsertEntity 创建或更新设定实体 / 世界铁律。 */
   upsertEntity: bind<[UpsertEntityInput], Entity>("AtlasService.UpsertEntity", (input: UpsertEntityInput) => [input]),
+  /** UpsertEntityRelation 创建或更新实体间关系。 */
+  upsertEntityRelation: bind<[UpsertEntityRelationInput], EntityRelation>("AtlasService.UpsertEntityRelation", (input: UpsertEntityRelationInput) => [input]),
 } as const;
 
 /** SettingsService 提供多模型供应商（脱敏透出）、5 环节路由与本地导出目录选择绑定。 */
 export const SettingsService = {
+  /** BackupDatabase 弹出原生保存对话框，将本地 SQLite 书库安全刷盘并完整备份至指定文件；用户取消时返回空字符串。 */
+  backupDatabase: bind<[], string>("SettingsService.BackupDatabase", () => []),
   /** DeleteModelPricing 删除指定模型的自定义单价配置。 */
   deleteModelPricing: bind<[string, string], void>("SettingsService.DeleteModelPricing", (providerName: string, modelName: string) => [providerName, modelName]),
   /** DeleteProvider 删除指定供应商配置。 */
@@ -1191,6 +1238,10 @@ export const AutopilotService = {
 
 /** DirectorService 提供「全局 AI 导演」自然语言多步操控全书的桌面 RPC 绑定。 */
 export const DirectorService = {
+  /** ClearMessages 清空指定书籍的 AI 导演历史对话。 */
+  clearMessages: bind<[number], void>("DirectorService.ClearMessages", (bookID: number) => [bookID]),
+  /** ListMessages 返回指定书籍的 AI 导演持久化对话记录。 */
+  listMessages: bind<[number], DirectorMessage[]>("DirectorService.ListMessages", (bookID: number) => [bookID]),
   /** SendInstruction 向 AI 导演下达自然语言指令，通过 *mygo.Channel[domain.DirectorEvent] 实时推送规划与工具执行过程。 */
   sendInstruction: bind<[DirectorChatRequest, Channel<DirectorEvent>], DirectorReply>("DirectorService.SendInstruction", (req: DirectorChatRequest, ch: Channel<DirectorEvent>) => [req, ch]),
 } as const;

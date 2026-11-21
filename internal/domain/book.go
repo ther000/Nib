@@ -333,6 +333,15 @@ type ReplaceBookTextResult struct {
 	TotalMatches     int `json:"totalMatches"`
 }
 
+// ImportBookResult 表示从本地 TXT/Markdown 文件拆章导入书籍的结果。
+type ImportBookResult struct {
+	Book          Book   `json:"book"`
+	Volume        Volume `json:"volume"`
+	ChapterCount  int    `json:"chapterCount"`
+	TotalWords    int    `json:"totalWords"`
+	SourcePath    string `json:"sourcePath"`
+}
+
 // CountWords 按中文网文习惯统计正文字数（剔除空白字符后的 Unicode 字符数）。
 func CountWords(text string) int {
 	n := 0

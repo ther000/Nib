@@ -51,6 +51,16 @@ type Store interface {
 	ListEntities(ctx context.Context, bookID int64, filter domain.EntityFilter) ([]domain.Entity, error)
 	UpsertEntity(ctx context.Context, in domain.UpsertEntityInput) (domain.Entity, error)
 	DeleteEntity(ctx context.Context, id int64) error
+	ListEntityRelations(ctx context.Context, bookID int64) ([]domain.EntityRelation, error)
+	UpsertEntityRelation(ctx context.Context, in domain.UpsertEntityRelationInput) (domain.EntityRelation, error)
+	DeleteEntityRelation(ctx context.Context, id int64) error
+
+	// Director History
+	ListDirectorMessages(ctx context.Context, bookID int64) ([]domain.DirectorMessage, error)
+	ClearDirectorMessages(ctx context.Context, bookID int64) error
+
+	// Database Backup
+	BackupToFile(ctx context.Context, targetPath string) error
 
 	// Providers & Model Routes
 	ListProviders(ctx context.Context) ([]domain.Provider, error)
@@ -66,10 +76,12 @@ type Store interface {
 	Close() error
 }
 
-// Exporter 定义单向 Markdown 镜像导出接口（由 internal/exporter 实现）。
+// Exporter 定义单向 Markdown / TXT / EPUB 导出接口（由 internal/exporter 实现）。
 type Exporter interface {
 	ExportBook(ctx context.Context, bookID int64) (domain.ExportResult, error)
 	ExportChapter(ctx context.Context, chapterID int64) (string, error)
+	ExportBookTXT(ctx context.Context, bookID int64, targetPath string) (string, error)
+	ExportBookEPUB(ctx context.Context, bookID int64, targetPath string) (string, error)
 }
 
 // LLMClient 定义多协议供应商连通性探测与模型列表拉取接口（由 internal/llm 实现）。

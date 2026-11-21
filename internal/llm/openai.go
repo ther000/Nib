@@ -12,12 +12,38 @@ import (
 	"nib/internal/domain"
 )
 
+type openAIMessage struct {
+	Role       string           `json:"role"`
+	Content    any              `json:"content"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+}
+
+type openAIToolSpec struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description,omitempty"`
+		Parameters  map[string]any `json:"parameters,omitempty"`
+	} `json:"function"`
+}
+
+type openAIToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
 type openAIChatRequest struct {
-	Model         string        `json:"model"`
-	Messages      []ChatMessage `json:"messages"`
-	Temperature   float64       `json:"temperature"`
-	MaxTokens     int           `json:"max_tokens,omitempty"`
-	Stream        bool          `json:"stream"`
+	Model         string           `json:"model"`
+	Messages      []openAIMessage  `json:"messages"`
+	Tools         []openAIToolSpec `json:"tools,omitempty"`
+	Temperature   float64          `json:"temperature"`
+	MaxTokens     int              `json:"max_tokens,omitempty"`
+	Stream        bool             `json:"stream"`
 	StreamOptions *struct {
 		IncludeUsage bool `json:"include_usage"`
 	} `json:"stream_options,omitempty"`
@@ -29,6 +55,15 @@ type openAIStreamChunk struct {
 			Content          string `json:"content"`
 			ReasoningContent string `json:"reasoning_content"`
 			Reasoning        string `json:"reasoning"`
+			ToolCalls        []struct {
+				Index    int    `json:"index"`
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -51,15 +86,50 @@ func buildOpenAIRequest(ctx context.Context, provider domain.Provider, req ChatR
 		endpoint = base
 	}
 
-	msgs := make([]ChatMessage, 0, len(req.Messages)+1)
+	msgs := make([]openAIMessage, 0, len(req.Messages)+1)
 	if strings.TrimSpace(req.System) != "" {
-		msgs = append(msgs, ChatMessage{Role: "system", Content: req.System})
+		msgs = append(msgs, openAIMessage{Role: "system", Content: req.System})
 	}
-	msgs = append(msgs, req.Messages...)
+	for _, m := range req.Messages {
+		om := openAIMessage{
+			Role:       m.Role,
+			Content:    m.Content,
+			ToolCallID: m.ToolCallID,
+		}
+		if len(m.ToolCalls) > 0 {
+			om.ToolCalls = make([]openAIToolCall, 0, len(m.ToolCalls))
+			for _, tc := range m.ToolCalls {
+				var otc openAIToolCall
+				otc.ID = tc.ID
+				otc.Type = "function"
+				otc.Function.Name = tc.Name
+				otc.Function.Arguments = tc.Arguments
+				om.ToolCalls = append(om.ToolCalls, otc)
+			}
+			if strings.TrimSpace(m.Content) == "" {
+				om.Content = nil
+			}
+		}
+		msgs = append(msgs, om)
+	}
+
+	var tools []openAIToolSpec
+	if len(req.Tools) > 0 {
+		tools = make([]openAIToolSpec, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			var spec openAIToolSpec
+			spec.Type = "function"
+			spec.Function.Name = t.Name
+			spec.Function.Description = t.Description
+			spec.Function.Parameters = t.Parameters
+			tools = append(tools, spec)
+		}
+	}
 
 	payload := openAIChatRequest{
 		Model:       req.Model,
 		Messages:    msgs,
+		Tools:       tools,
 		Temperature: req.Temperature,
 		MaxTokens:   req.MaxTokens,
 		Stream:      true,
@@ -95,6 +165,13 @@ func parseOpenAIStream(
 	var seenValidEvent bool
 	var seenDelta bool
 	var errDone = errStreamCompleted
+	type toolAcc struct {
+		id   string
+		name string
+		args strings.Builder
+	}
+	toolMap := make(map[int]*toolAcc)
+	maxToolIdx := -1
 
 	err := readSSE(body, func(ev sseEvent) error {
 		data := strings.TrimSpace(ev.Data)
@@ -123,6 +200,26 @@ func parseOpenAIStream(
 			if ch.FinishReason != nil && *ch.FinishReason != "" {
 				finishReason = *ch.FinishReason
 				seenValidEvent = true
+			}
+			for _, tc := range ch.Delta.ToolCalls {
+				seenValidEvent = true
+				acc, ok := toolMap[tc.Index]
+				if !ok {
+					acc = &toolAcc{}
+					toolMap[tc.Index] = acc
+				}
+				if tc.Index > maxToolIdx {
+					maxToolIdx = tc.Index
+				}
+				if tc.ID != "" {
+					acc.id = tc.ID
+				}
+				if tc.Function.Name != "" {
+					acc.name += tc.Function.Name
+				}
+				if tc.Function.Arguments != "" {
+					acc.args.WriteString(tc.Function.Arguments)
+				}
 			}
 			reasoning := ch.Delta.ReasoningContent
 			if reasoning == "" {
@@ -176,6 +273,28 @@ func parseOpenAIStream(
 	}
 	if err != nil {
 		return usage, err
+	}
+	if len(toolMap) > 0 {
+		calls := make([]ToolCall, 0, len(toolMap))
+		for i := 0; i <= maxToolIdx; i++ {
+			if acc, ok := toolMap[i]; ok && strings.TrimSpace(acc.name) != "" {
+				id := acc.id
+				if id == "" {
+					id = fmt.Sprintf("call_%d", i+1)
+				}
+				calls = append(calls, ToolCall{
+					ID:        id,
+					Name:      strings.TrimSpace(acc.name),
+					Arguments: strings.TrimSpace(acc.args.String()),
+				})
+			}
+		}
+		if len(calls) > 0 {
+			seenValidEvent = true
+			if emitErr := emit(StreamEvent{ToolCalls: calls, FinishReason: finishReason}); emitErr != nil {
+				return usage, emitErr
+			}
+		}
 	}
 	if !seenDelta && !seenValidEvent {
 		return usage, &APIError{

@@ -67,3 +67,46 @@ func (s *AtlasService) DeleteEntity(ctx context.Context, id int64) error {
 	}
 	return st.DeleteEntity(ctx, id)
 }
+
+// ListEntityRelations 返回指定书籍的全部角色/势力关系。
+func (s *AtlasService) ListEntityRelations(ctx context.Context, bookID int64) ([]domain.EntityRelation, error) {
+	if err := validatePositiveID("bookId", bookID); err != nil {
+		return nil, err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return nil, err
+	}
+	rels, err := st.ListEntityRelations(ctx, bookID)
+	if err != nil {
+		return nil, err
+	}
+	if rels == nil {
+		return []domain.EntityRelation{}, nil
+	}
+	return rels, nil
+}
+
+// UpsertEntityRelation 创建或更新实体间关系。
+func (s *AtlasService) UpsertEntityRelation(ctx context.Context, input domain.UpsertEntityRelationInput) (domain.EntityRelation, error) {
+	if err := input.Validate(); err != nil {
+		return domain.EntityRelation{}, err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return domain.EntityRelation{}, err
+	}
+	return st.UpsertEntityRelation(ctx, input)
+}
+
+// DeleteEntityRelation 删除指定实体关系。
+func (s *AtlasService) DeleteEntityRelation(ctx context.Context, id int64) error {
+	if err := validatePositiveID("id", id); err != nil {
+		return err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return err
+	}
+	return st.DeleteEntityRelation(ctx, id)
+}

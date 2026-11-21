@@ -20,7 +20,7 @@ import type {
 } from "../mygo";
 
 export type WorkspaceTab = "architect" | "studio" | "atlas";
-export type AtlasSubTab = "entities" | "foreshadowings" | "summaries" | "style";
+export type AtlasSubTab = "entities" | "relations" | "foreshadowings" | "summaries" | "style";
 
 export interface OptionMeta<T extends string = string> {
   value: T;

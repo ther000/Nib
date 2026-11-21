@@ -17,17 +17,36 @@ const (
 	anthropicDefaultMaxToks = 4096
 )
 
+type anthropicMessage struct {
+	Role    string `json:"role"`
+	Content any    `json:"content"`
+}
+
+type anthropicTool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	InputSchema map[string]any `json:"input_schema"`
+}
+
 type anthropicRequest struct {
-	Model       string        `json:"model"`
-	System      string        `json:"system,omitempty"`
-	Messages    []ChatMessage `json:"messages"`
-	MaxTokens   int           `json:"max_tokens"`
-	Temperature float64       `json:"temperature"`
-	Stream      bool          `json:"stream"`
+	Model       string             `json:"model"`
+	System      string             `json:"system,omitempty"`
+	Messages    []anthropicMessage `json:"messages"`
+	Tools       []anthropicTool    `json:"tools,omitempty"`
+	MaxTokens   int                `json:"max_tokens"`
+	Temperature float64            `json:"temperature"`
+	Stream      bool               `json:"stream"`
 }
 
 type anthropicSSEPayload struct {
-	Type    string `json:"type"`
+	Type         string `json:"type"`
+	Index        int    `json:"index"`
+	ContentBlock *struct {
+		Type  string          `json:"type"`
+		ID    string          `json:"id"`
+		Name  string          `json:"name"`
+		Input json.RawMessage `json:"input"`
+	} `json:"content_block"`
 	Message *struct {
 		Usage *struct {
 			InputTokens              int `json:"input_tokens"`
@@ -37,10 +56,11 @@ type anthropicSSEPayload struct {
 		} `json:"usage"`
 	} `json:"message"`
 	Delta *struct {
-		Type       string `json:"type"`
-		Text       string `json:"text"`
-		Thinking   string `json:"thinking"`
-		StopReason string `json:"stop_reason"`
+		Type        string `json:"type"`
+		Text        string `json:"text"`
+		Thinking    string `json:"thinking"`
+		PartialJSON string `json:"partial_json"`
+		StopReason  string `json:"stop_reason"`
 	} `json:"delta"`
 	Usage *struct {
 		InputTokens  int `json:"input_tokens"`
@@ -68,15 +88,63 @@ func buildAnthropicRequest(ctx context.Context, provider domain.Provider, req Ch
 	if strings.TrimSpace(req.System) != "" {
 		sysParts = append(sysParts, req.System)
 	}
-	msgs := make([]ChatMessage, 0, len(req.Messages))
+	msgs := make([]anthropicMessage, 0, len(req.Messages))
 	for _, m := range req.Messages {
-		if strings.EqualFold(m.Role, "system") {
+		role := strings.ToLower(strings.TrimSpace(m.Role))
+		if role == "system" {
 			if strings.TrimSpace(m.Content) != "" {
 				sysParts = append(sysParts, m.Content)
 			}
 			continue
 		}
-		msgs = append(msgs, m)
+		if role == "tool" && m.ToolCallID != "" {
+			msgs = append(msgs, anthropicMessage{
+				Role: "user",
+				Content: []map[string]any{{
+					"type":        "tool_result",
+					"tool_use_id": m.ToolCallID,
+					"content":     m.Content,
+				}},
+			})
+			continue
+		}
+		if len(m.ToolCalls) > 0 {
+			blocks := make([]map[string]any, 0, len(m.ToolCalls)+1)
+			if strings.TrimSpace(m.Content) != "" {
+				blocks = append(blocks, map[string]any{"type": "text", "text": m.Content})
+			}
+			for _, tc := range m.ToolCalls {
+				var inputObj any = map[string]any{}
+				if strings.TrimSpace(tc.Arguments) != "" {
+					_ = json.Unmarshal([]byte(tc.Arguments), &inputObj)
+				}
+				blocks = append(blocks, map[string]any{
+					"type":  "tool_use",
+					"id":    tc.ID,
+					"name":  tc.Name,
+					"input": inputObj,
+				})
+			}
+			msgs = append(msgs, anthropicMessage{Role: "assistant", Content: blocks})
+			continue
+		}
+		msgs = append(msgs, anthropicMessage{Role: m.Role, Content: m.Content})
+	}
+
+	var tools []anthropicTool
+	if len(req.Tools) > 0 {
+		tools = make([]anthropicTool, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			schema := t.Parameters
+			if schema == nil {
+				schema = map[string]any{"type": "object", "properties": map[string]any{}}
+			}
+			tools = append(tools, anthropicTool{
+				Name:        t.Name,
+				Description: t.Description,
+				InputSchema: schema,
+			})
+		}
 	}
 
 	maxTokens := req.MaxTokens
@@ -88,6 +156,7 @@ func buildAnthropicRequest(ctx context.Context, provider domain.Provider, req Ch
 		Model:       req.Model,
 		System:      strings.Join(sysParts, "\n\n"),
 		Messages:    msgs,
+		Tools:       tools,
 		MaxTokens:   maxTokens,
 		Temperature: req.Temperature,
 		Stream:      true,
@@ -121,6 +190,14 @@ func parseAnthropicStream(
 	var seenValidEvent bool
 	var seenDelta bool
 	errDone := errStreamCompleted
+
+	type antToolAcc struct {
+		id   string
+		name string
+		args strings.Builder
+	}
+	toolBlocks := make(map[int]*antToolAcc)
+	maxBlockIdx := -1
 
 	err := readSSE(body, func(ev sseEvent) error {
 		data := strings.TrimSpace(ev.Data)
@@ -158,8 +235,25 @@ func parseAnthropicStream(
 				}
 				usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 			}
+		case "content_block_start":
+			if payload.ContentBlock != nil && payload.ContentBlock.Type == "tool_use" {
+				seenValidEvent = true
+				acc := &antToolAcc{id: payload.ContentBlock.ID, name: payload.ContentBlock.Name}
+				if len(payload.ContentBlock.Input) > 0 && string(payload.ContentBlock.Input) != "{}" {
+					acc.args.Write(payload.ContentBlock.Input)
+				}
+				toolBlocks[payload.Index] = acc
+				if payload.Index > maxBlockIdx {
+					maxBlockIdx = payload.Index
+				}
+			}
 		case "content_block_delta":
-			if payload.Delta != nil && payload.Delta.Type == "thinking_delta" && payload.Delta.Thinking != "" {
+			if payload.Delta != nil && payload.Delta.Type == "input_json_delta" {
+				if acc, ok := toolBlocks[payload.Index]; ok {
+					seenValidEvent = true
+					acc.args.WriteString(payload.Delta.PartialJSON)
+				}
+			} else if payload.Delta != nil && payload.Delta.Type == "thinking_delta" && payload.Delta.Thinking != "" {
 				seenValidEvent = true
 				if err := emit(StreamEvent{ReasoningDelta: payload.Delta.Thinking}); err != nil {
 					return err
@@ -204,6 +298,24 @@ func parseAnthropicStream(
 	}
 	if err != nil {
 		return usage, err
+	}
+	if len(toolBlocks) > 0 {
+		calls := make([]ToolCall, 0, len(toolBlocks))
+		for i := 0; i <= maxBlockIdx; i++ {
+			if acc, ok := toolBlocks[i]; ok && strings.TrimSpace(acc.name) != "" {
+				args := strings.TrimSpace(acc.args.String())
+				if args == "" {
+					args = "{}"
+				}
+				calls = append(calls, ToolCall{ID: acc.id, Name: acc.name, Arguments: args})
+			}
+		}
+		if len(calls) > 0 {
+			seenValidEvent = true
+			if emitErr := emit(StreamEvent{ToolCalls: calls, FinishReason: finishReason}); emitErr != nil {
+				return usage, emitErr
+			}
+		}
 	}
 	if !seenDelta && !seenValidEvent {
 		return usage, &APIError{

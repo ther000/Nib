@@ -10,10 +10,13 @@ type DirectorToolCall struct {
 	ArgsJSON      string `json:"argsJson,omitempty"`
 	Status        string `json:"status"` // "running" | "ok" | "error"
 	ResultSummary string `json:"resultSummary,omitempty"`
+	UndoChapterID int64  `json:"undoChapterId,omitempty"`
+	UndoVersionID int64  `json:"undoVersionId,omitempty"`
 }
 
-// DirectorMessage 表示作者与 AI 导演之间的一条对话消息。
+// DirectorMessage 表示作者与 AI 导演之间的一条持久化对话消息。
 type DirectorMessage struct {
+	ID        int64              `json:"id,omitempty"`
 	Role      string             `json:"role"` // "user" | "assistant"
 	Content   string             `json:"content"`
 	ToolCalls []DirectorToolCall `json:"toolCalls,omitempty"`

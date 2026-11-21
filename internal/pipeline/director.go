@@ -38,6 +38,20 @@ type DirectorStore interface {
 	SearchMemory(ctx context.Context, bookID int64, query string, maxChapterSeq int) ([]domain.MemorySearchHit, error)
 }
 
+// DirectorExtraStore 定义 AI 导演扩展能力所需的仓储接口（由 *store.Store 自动满足，测试替身可按需实现）。
+type DirectorExtraStore interface {
+	DeleteChapter(ctx context.Context, chapterID int64) error
+	MoveChapter(ctx context.Context, in domain.MoveChapterInput) (domain.Chapter, error)
+	ListChapterVersions(ctx context.Context, chapterID int64) ([]domain.ChapterVersion, error)
+	ListEntityRelations(ctx context.Context, bookID int64) ([]domain.EntityRelation, error)
+	UpsertEntityRelation(ctx context.Context, in domain.UpsertEntityRelationInput) (domain.EntityRelation, error)
+}
+
+// DirectorHistoryStore 定义 AI 导演对话持久化接口（由 *store.Store 自动满足）。
+type DirectorHistoryStore interface {
+	AppendDirectorMessage(ctx context.Context, bookID int64, msg domain.DirectorMessage) (domain.DirectorMessage, error)
+}
+
 type directorStepDecision struct {
 	Thought   string `json:"thought"`
 	Action    string `json:"action"` // "tool" | "final"
@@ -112,6 +126,14 @@ func (r *Runner) RunDirectorChat(
 	}
 	messages = append(messages, llm.ChatMessage{Role: "user", Content: strings.TrimSpace(req.Instruction)})
 
+	if hs, ok := r.store.(DirectorHistoryStore); ok {
+		_, _ = hs.AppendDirectorMessage(ctx, book.ID, domain.DirectorMessage{
+			Role:    "user",
+			Content: strings.TrimSpace(req.Instruction),
+		})
+	}
+
+	toolDefs := directorToolDefinitions()
 	toolCalls := make([]domain.DirectorToolCall, 0)
 	mutated := false
 	finalReply := ""
@@ -134,16 +156,21 @@ func (r *Runner) RunDirectorChat(
 			Model:       route.ModelName,
 			System:      sysPrompt,
 			Messages:    messages,
+			Tools:       toolDefs,
 			Temperature: 0.4,
 			MaxTokens:   maxTok,
 		}
 
 		start := time.Now()
 		var buf strings.Builder
+		var nativeCalls []llm.ToolCall
 		var usage domain.TokenUsage
-		streamUsage, streamErr := r.llm.Stream(ctx, provider, chatReq, func(ev llm.StreamEvent) error {
+		usedProv, usedModel, streamUsage, streamErr := r.streamWithFallback(ctx, route, provider, chatReq, func(ev llm.StreamEvent) error {
 			if ev.Delta != "" {
 				buf.WriteString(ev.Delta)
+			}
+			if len(ev.ToolCalls) > 0 {
+				nativeCalls = append(nativeCalls, ev.ToolCalls...)
 			}
 			if ev.Usage != nil {
 				usage = *ev.Usage
@@ -158,13 +185,80 @@ func (r *Runner) RunDirectorChat(
 			return domain.DirectorReply{}, streamErr
 		}
 		if hasUsage(usage) {
-			r.recordTokenUsage(ctx, book.ID, req.ActiveChapterID, domain.StageOutline, provider.Name, route.ModelName, usage, time.Since(start).Milliseconds())
+			r.recordTokenUsage(ctx, book.ID, req.ActiveChapterID, domain.StageOutline, usedProv.Name, usedModel, usage, time.Since(start).Milliseconds())
 		}
 
 		raw := strings.TrimSpace(buf.String())
+
+		// 优先路径：模型返回了原生 Function Calling ToolCalls
+		if len(nativeCalls) > 0 {
+			messages = append(messages, llm.ChatMessage{
+				Role:      "assistant",
+				Content:   raw,
+				ToolCalls: nativeCalls,
+			})
+			for idx, ntc := range nativeCalls {
+				callID := ntc.ID
+				if callID == "" {
+					callID = fmt.Sprintf("tc_%d_%d_%d", step, idx, time.Now().UnixMilli())
+				}
+				argsRaw := json.RawMessage(strings.TrimSpace(ntc.Arguments))
+				if len(argsRaw) == 0 {
+					argsRaw = json.RawMessage("{}")
+				}
+				tc := domain.DirectorToolCall{
+					ID:       callID,
+					Name:     strings.TrimSpace(ntc.Name),
+					Label:    directorToolLabel(strings.TrimSpace(ntc.Name)),
+					ArgsJSON: string(argsRaw),
+					Status:   "running",
+				}
+				tcCopy := tc
+				if err := send(domain.DirectorEvent{
+					Kind:     domain.DirectorEventToolStart,
+					Step:     step,
+					ToolCall: &tcCopy,
+					Message:  tc.Label + "…",
+				}); err != nil {
+					return domain.DirectorReply{}, domain.ErrGenerationCanceled
+				}
+
+				resultText, didMutate, undoChapID, undoVerID, toolErr := r.executeDirectorTool(ctx, ds, book.ID, tc.Name, argsRaw)
+				if didMutate {
+					mutated = true
+				}
+				tc.UndoChapterID = undoChapID
+				tc.UndoVersionID = undoVerID
+				if toolErr != nil {
+					tc.Status = "error"
+					tc.ResultSummary = toolErr.Error()
+					resultText = "工具执行失败：" + toolErr.Error()
+				} else {
+					tc.Status = "ok"
+					tc.ResultSummary = summarizeDirectorText(resultText, 120)
+				}
+				toolCalls = append(toolCalls, tc)
+				tcDone := tc
+				_ = send(domain.DirectorEvent{
+					Kind:     domain.DirectorEventToolResult,
+					Step:     step,
+					ToolCall: &tcDone,
+					Mutated:  mutated,
+				})
+
+				messages = append(messages, llm.ChatMessage{
+					Role:       "tool",
+					ToolCallID: callID,
+					ToolName:   tc.Name,
+					Content:    resultText,
+				})
+			}
+			continue
+		}
+
+		// 兼容兜底路径：部分旧中转站忽略 tools 参数而输出 JSON 指令或直接输出自然语言回复
 		dec, parseErr := parseDirectorDecision(raw)
 		if parseErr != nil {
-			// 如果模型直接输出了自然语言回复（非 JSON），当作最终回复平滑兜底。
 			finalReply = raw
 			break
 		}
@@ -180,7 +274,7 @@ func (r *Runner) RunDirectorChat(
 			break
 		}
 
-		// 执行工具
+		// 执行文本协议解析出的工具
 		callID := fmt.Sprintf("tc_%d_%d", step, time.Now().UnixMilli())
 		tc := domain.DirectorToolCall{
 			ID:       callID,
@@ -199,10 +293,12 @@ func (r *Runner) RunDirectorChat(
 			return domain.DirectorReply{}, domain.ErrGenerationCanceled
 		}
 
-		resultText, didMutate, toolErr := r.executeDirectorTool(ctx, ds, book.ID, tc.Name, dec.ToolArgs)
+		resultText, didMutate, undoChapID, undoVerID, toolErr := r.executeDirectorTool(ctx, ds, book.ID, tc.Name, dec.ToolArgs)
 		if didMutate {
 			mutated = true
 		}
+		tc.UndoChapterID = undoChapID
+		tc.UndoVersionID = undoVerID
 		if toolErr != nil {
 			tc.Status = "error"
 			tc.ResultSummary = toolErr.Error()
@@ -220,15 +316,22 @@ func (r *Runner) RunDirectorChat(
 			Mutated:  mutated,
 		})
 
-		// 将本轮决策与工具观测写回对话，继续下一轮推理
 		messages = append(messages,
 			llm.ChatMessage{Role: "assistant", Content: raw},
-			llm.ChatMessage{Role: "user", Content: fmt.Sprintf("【工具 %s 执行结果】\n%s\n\n如果任务已完成，请输出 action=\"final\" 的 JSON 并向作者简明汇报结果；如果还需继续操作，请调用下一个工具。", tc.Name, resultText)},
+			llm.ChatMessage{Role: "user", Content: fmt.Sprintf("【工具 %s 执行结果】\n%s\n\n如果任务已完成，请直接用简洁中文向作者汇报结果；如还需操作，请继续调用工具。", tc.Name, resultText)},
 		)
 	}
 
 	if strings.TrimSpace(finalReply) == "" {
 		finalReply = "已完成多步操作。如需继续调整，直接告诉我下一步想法。"
+	}
+
+	if hs, ok := r.store.(DirectorHistoryStore); ok {
+		_, _ = hs.AppendDirectorMessage(ctx, book.ID, domain.DirectorMessage{
+			Role:      "assistant",
+			Content:   finalReply,
+			ToolCalls: toolCalls,
+		})
 	}
 
 	_ = send(domain.DirectorEvent{
@@ -245,6 +348,292 @@ func (r *Runner) RunDirectorChat(
 }
 
 func (r *Runner) executeDirectorTool(
+	ctx context.Context,
+	ds DirectorStore,
+	bookID int64,
+	name string,
+	rawArgs json.RawMessage,
+) (string, bool, int64, int64, error) {
+	extra, _ := r.store.(DirectorExtraStore)
+	latestUndoVersion := func(chapID int64) int64 {
+		if extra == nil || chapID <= 0 {
+			return 0
+		}
+		if vers, err := extra.ListChapterVersions(ctx, chapID); err == nil && len(vers) > 0 {
+			return vers[0].ID
+		}
+		return 0
+	}
+
+	switch name {
+	case "list_chapters_range":
+		var args struct {
+			StartSeq int `json:"start_seq"`
+			EndSeq   int `json:"end_seq"`
+		}
+		_ = json.Unmarshal(rawArgs, &args)
+		chaps, err := ds.ListBookChapters(ctx, bookID)
+		if err != nil {
+			return "", false, 0, 0, err
+		}
+		var b strings.Builder
+		matched := 0
+		for _, ch := range chaps {
+			if args.StartSeq > 0 && ch.GlobalSeq < args.StartSeq {
+				continue
+			}
+			if args.EndSeq > 0 && ch.GlobalSeq > args.EndSeq {
+				continue
+			}
+			fmt.Fprintf(&b, "- 第%d章《%s》(chapter_id=%d, status=%s, %d字) %s\n",
+				ch.GlobalSeq, ch.Title, ch.ID, ch.Status, ch.WordCount, summarizeDirectorText(ch.OutlineSummary, 60))
+			matched++
+			if matched >= 50 {
+				b.WriteString("（结果超过 50 章已截断，请缩小起止章号范围）\n")
+				break
+			}
+		}
+		if matched == 0 {
+			return "该章号范围内暂无章节。", false, 0, 0, nil
+		}
+		return b.String(), false, 0, 0, nil
+
+	case "get_entity_detail":
+		var args struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(rawArgs, &args); err != nil || strings.TrimSpace(args.Name) == "" {
+			return "", false, 0, 0, errors.New("缺少实体名称 name")
+		}
+		q := strings.TrimSpace(args.Name)
+		ents, err := ds.ListEntities(ctx, bookID, domain.EntityFilter{Query: q})
+		if err != nil {
+			return "", false, 0, 0, err
+		}
+		if len(ents) == 0 {
+			return fmt.Sprintf("未找到名称包含「%s」的设定实体。", q), false, 0, 0, nil
+		}
+		var rels []domain.EntityRelation
+		if extra != nil {
+			rels, _ = extra.ListEntityRelations(ctx, bookID)
+		}
+		var b strings.Builder
+		for _, e := range ents[:min(len(ents), 5)] {
+			fmt.Fprintf(&b, "【%s】%s (id=%d, 铁律=%v)\n", e.Kind.Label(), e.Name, e.ID, e.IsInvariant)
+			if len(e.Aliases) > 0 {
+				fmt.Fprintf(&b, "别名：%s\n", strings.Join(e.Aliases, "、"))
+			}
+			if e.Summary != "" {
+				fmt.Fprintf(&b, "简介：%s\n", e.Summary)
+			}
+			for k, v := range e.Attributes {
+				fmt.Fprintf(&b, "  - %s: %s\n", k, v)
+			}
+			for _, rel := range rels {
+				if rel.SourceEntityID == e.ID || rel.TargetEntityID == e.ID {
+					fmt.Fprintf(&b, "  关系：%s —[%s]→ %s (%s)\n", rel.SourceName, rel.RelationType, rel.TargetName, rel.Description)
+				}
+			}
+			b.WriteByte('\n')
+		}
+		return b.String(), false, 0, 0, nil
+
+	case "delete_chapter":
+		if extra == nil {
+			return "", false, 0, 0, errors.New("当前存储不支持删除章节")
+		}
+		var args struct {
+			ChapterID  int64 `json:"chapter_id"`
+			ChapterSeq int   `json:"chapter_seq"`
+		}
+		_ = json.Unmarshal(rawArgs, &args)
+		chap, err := resolveDirectorChapter(ctx, r.store, ds, bookID, args.ChapterID, args.ChapterSeq)
+		if err != nil {
+			return "", false, 0, 0, err
+		}
+		if err := extra.DeleteChapter(ctx, chap.ID); err != nil {
+			return "", false, 0, 0, err
+		}
+		return fmt.Sprintf("已删除第 %d 章《%s》并自动重排剩余章序。", chap.GlobalSeq, chap.Title), true, 0, 0, nil
+
+	case "move_chapter":
+		if extra == nil {
+			return "", false, 0, 0, errors.New("当前存储不支持调整章序")
+		}
+		var args struct {
+			ChapterID      int64  `json:"chapter_id"`
+			ChapterSeq     int    `json:"chapter_seq"`
+			Direction      string `json:"direction"`
+			TargetVolumeID int64  `json:"target_volume_id"`
+		}
+		_ = json.Unmarshal(rawArgs, &args)
+		chap, err := resolveDirectorChapter(ctx, r.store, ds, bookID, args.ChapterID, args.ChapterSeq)
+		if err != nil {
+			return "", false, 0, 0, err
+		}
+		moved, err := extra.MoveChapter(ctx, domain.MoveChapterInput{
+			ChapterID:      chap.ID,
+			Direction:      args.Direction,
+			TargetVolumeID: args.TargetVolumeID,
+		})
+		if err != nil {
+			return "", false, 0, 0, err
+		}
+		return fmt.Sprintf("已调整《%s》顺序，当前为第 %d 章。", moved.Title, moved.GlobalSeq), true, 0, 0, nil
+
+	case "generate_arc_summary":
+		var args struct {
+			Level    string `json:"level"`
+			VolumeID int64  `json:"volume_id"`
+			StartSeq int    `json:"start_seq"`
+			EndSeq   int    `json:"end_seq"`
+		}
+		_ = json.Unmarshal(rawArgs, &args)
+		lvl := domain.ArcSummaryLevel(strings.TrimSpace(args.Level))
+		if !lvl.Valid() {
+			lvl = domain.ArcSummaryLevelArc10
+		}
+		var volPtr *int64
+		if args.VolumeID > 0 {
+			v := args.VolumeID
+			volPtr = &v
+		}
+		arc, err := r.GenerateArcSummary(ctx, domain.GenerateArcSummaryRequest{
+			BookID:   bookID,
+			Level:    lvl,
+			VolumeID: volPtr,
+			StartSeq: args.StartSeq,
+			EndSeq:   args.EndSeq,
+		})
+		if err != nil {
+			return "", false, 0, 0, err
+		}
+		return fmt.Sprintf("已生成第 %d~%d 章摘要：%s", arc.StartSeq, arc.EndSeq, summarizeDirectorText(arc.Summary, 100)), true, 0, 0, nil
+
+	case "upsert_entity_relation":
+		if extra == nil {
+			return "", false, 0, 0, errors.New("当前存储不支持实体关系管理")
+		}
+		var args struct {
+			SourceName   string `json:"source_name"`
+			TargetName   string `json:"target_name"`
+			RelationType string `json:"relation_type"`
+			Description  string `json:"description"`
+		}
+		if err := json.Unmarshal(rawArgs, &args); err != nil {
+			return "", false, 0, 0, err
+		}
+		ents, err := ds.ListEntities(ctx, bookID, domain.EntityFilter{})
+		if err != nil {
+			return "", false, 0, 0, err
+		}
+		findID := func(name string) int64 {
+			t := strings.TrimSpace(name)
+			for _, e := range ents {
+				if strings.EqualFold(strings.TrimSpace(e.Name), t) {
+					return e.ID
+				}
+			}
+			return 0
+		}
+		srcID := findID(args.SourceName)
+		dstID := findID(args.TargetName)
+		if srcID == 0 || dstID == 0 {
+			return "", false, 0, 0, fmt.Errorf("未在设定库中找到实体「%s」或「%s」，请先使用 upsert_entity 创建", args.SourceName, args.TargetName)
+		}
+		saved, err := extra.UpsertEntityRelation(ctx, domain.UpsertEntityRelationInput{
+			BookID:         bookID,
+			SourceEntityID: srcID,
+			TargetEntityID: dstID,
+			RelationType:   args.RelationType,
+			Description:    args.Description,
+		})
+		if err != nil {
+			return "", false, 0, 0, err
+		}
+		return fmt.Sprintf("已记录关系：%s —[%s]→ %s。", saved.SourceName, saved.RelationType, saved.TargetName), true, 0, 0, nil
+
+	case "replace_chapter_paragraphs":
+		var args struct {
+			ChapterID      int64  `json:"chapter_id"`
+			ChapterSeq     int    `json:"chapter_seq"`
+			StartParagraph int    `json:"start_paragraph"` // 1-based inclusive
+			EndParagraph   int    `json:"end_paragraph"`   // 1-based inclusive
+			NewText        string `json:"new_text"`
+		}
+		if err := json.Unmarshal(rawArgs, &args); err != nil {
+			return "", false, 0, 0, err
+		}
+		chap, err := resolveDirectorChapter(ctx, r.store, ds, bookID, args.ChapterID, args.ChapterSeq)
+		if err != nil {
+			return "", false, 0, 0, err
+		}
+		rawNorm := strings.ReplaceAll(chap.Content, "\r\n", "\n")
+		paras := make([]string, 0)
+		for _, p := range strings.Split(rawNorm, "\n") {
+			if strings.TrimSpace(p) != "" {
+				paras = append(paras, strings.TrimSpace(p))
+			}
+		}
+		if len(paras) == 0 {
+			return "", false, 0, 0, errors.New("当前章节暂无正文段落可替换")
+		}
+		sp := args.StartParagraph
+		ep := args.EndParagraph
+		if sp <= 0 {
+			sp = 1
+		}
+		if ep <= 0 || ep < sp {
+			ep = sp
+		}
+		if sp > len(paras) {
+			return "", false, 0, 0, fmt.Errorf("起始段落 %d 超出章节总段数 %d", sp, len(paras))
+		}
+		if ep > len(paras) {
+			ep = len(paras)
+		}
+		newParas := make([]string, 0, len(paras))
+		newParas = append(newParas, paras[:sp-1]...)
+		for _, np := range strings.Split(strings.ReplaceAll(strings.TrimSpace(args.NewText), "\r\n", "\n"), "\n") {
+			if strings.TrimSpace(np) != "" {
+				newParas = append(newParas, strings.TrimSpace(np))
+			}
+		}
+		newParas = append(newParas, paras[ep:]...)
+		merged := strings.Join(newParas, "\n\n")
+		saved, err := ds.SaveChapterDraft(ctx, domain.SaveChapterDraftInput{
+			ChapterID: chap.ID,
+			Content:   merged,
+			Status:    domain.ChapterStatusReviewing,
+		})
+		if err != nil {
+			return "", false, 0, 0, err
+		}
+		undoVer := latestUndoVersion(chap.ID)
+		return fmt.Sprintf("已局部修改第 %d 章《%s》第 %d~%d 段（当前共 %d 字，修改前已自动归档快照）。",
+			saved.GlobalSeq, saved.Title, sp, ep, saved.WordCount), true, chap.ID, undoVer, nil
+
+	default:
+		res, mut, err := r.executeDirectorCoreTool(ctx, ds, bookID, name, rawArgs)
+		if err != nil || !mut {
+			return res, mut, 0, 0, err
+		}
+		// 若是修改正文的核心工具，解析章号并回传可一键撤回的快照 ID
+		if name == "write_chapter_content" || name == "generate_chapter" || name == "audit_and_polish_chapter" {
+			var cidArgs struct {
+				ChapterID  int64 `json:"chapter_id"`
+				ChapterSeq int   `json:"chapter_seq"`
+			}
+			_ = json.Unmarshal(rawArgs, &cidArgs)
+			if ch, cErr := resolveDirectorChapter(ctx, r.store, ds, bookID, cidArgs.ChapterID, cidArgs.ChapterSeq); cErr == nil {
+				return res, mut, ch.ID, latestUndoVersion(ch.ID), nil
+			}
+		}
+		return res, mut, 0, 0, nil
+	}
+}
+
+func (r *Runner) executeDirectorCoreTool(
 	ctx context.Context,
 	ds DirectorStore,
 	bookID int64,
@@ -998,8 +1387,61 @@ func directorToolLabel(name string) string {
 		return "启动 AI 自动托管"
 	case "stop_autopilot":
 		return "停止 AI 自动托管"
+	case "list_chapters_range":
+		return "查询指定区间目录"
+	case "get_entity_detail":
+		return "查看设定详情与关系"
+	case "delete_chapter":
+		return "删除章节"
+	case "move_chapter":
+		return "调整章节顺序"
+	case "generate_arc_summary":
+		return "自动生成弧线/卷摘要"
+	case "upsert_entity_relation":
+		return "更新角色/势力关系"
+	case "replace_chapter_paragraphs":
+		return "局部修改章节段落"
 	default:
 		return name
+	}
+}
+
+func directorToolDefinitions() []llm.ToolDefinition {
+	obj := func(props map[string]any, required ...string) map[string]any {
+		m := map[string]any{
+			"type":       "object",
+			"properties": props,
+		}
+		if len(required) > 0 {
+			m["required"] = required
+		}
+		return m
+	}
+	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
+	num := func(desc string) map[string]any { return map[string]any{"type": "integer", "description": desc} }
+	bl := func(desc string) map[string]any { return map[string]any{"type": "boolean", "description": desc} }
+
+	return []llm.ToolDefinition{
+		{Name: "get_book_overview", Description: "重新获取全书最新概览", Parameters: obj(map[string]any{})},
+		{Name: "list_chapters_range", Description: "按起止章号查询全书目录（长篇超过 25 章时必用）", Parameters: obj(map[string]any{"start_seq": num("起始章号"), "end_seq": num("结束章号")})},
+		{Name: "read_chapter", Description: "读取指定章节的大纲、节拍与正文", Parameters: obj(map[string]any{"chapter_id": num("章节ID"), "chapter_seq": num("全局章号")})},
+		{Name: "get_entity_detail", Description: "按名称查看角色/势力/道具的完整属性与关系网", Parameters: obj(map[string]any{"name": str("实体名称或关键词")}, "name")},
+		{Name: "search_memory", Description: "全文检索全书正文与设定记录", Parameters: obj(map[string]any{"query": str("检索关键词")}, "query")},
+		{Name: "update_book", Description: "更新书籍名称、简介、金手指或目标章字数", Parameters: obj(map[string]any{"title": str("书名"), "premise": str("简介"), "golden_finger": str("金手指"), "target_chapter_words": num("每章目标字数")})},
+		{Name: "upsert_entity", Description: "新增或更新角色、势力、地点、道具、体系或世界铁律", Parameters: obj(map[string]any{"kind": str("character|faction|location|item|system|rule"), "name": str("名称"), "summary": str("简介"), "is_invariant": bl("是否世界铁律"), "attributes": map[string]any{"type": "object", "description": "属性键值"}}, "name")},
+		{Name: "upsert_entity_relation", Description: "记录两个实体之间的关系（如师徒、死敌、同盟、隶属）", Parameters: obj(map[string]any{"source_name": str("源实体名"), "target_name": str("目标实体名"), "relation_type": str("关系类型"), "description": str("关系说明")}, "source_name", "target_name", "relation_type")},
+		{Name: "upsert_foreshadowing", Description: "新增或更新伏笔状态与目标回收章号", Parameters: obj(map[string]any{"title": str("伏笔标题"), "description": str("伏笔内容"), "planted_seq": num("埋设章号"), "target_resolve_seq": num("计划回收章号"), "status": str("planted|hinted|resolved|abandoned")}, "title")},
+		{Name: "upsert_volume", Description: "新建或更新分卷", Parameters: obj(map[string]any{"seq": num("卷序"), "title": str("卷名"), "goal": str("卷目标"), "climax_plan": str("卷末高潮")}, "title")},
+		{Name: "upsert_chapter_outline", Description: "新建或更新单章大纲、情绪、钩子与节拍卡", Parameters: obj(map[string]any{"chapter_id": num("章节ID"), "chapter_seq": num("全局章号"), "volume_id": num("分卷ID"), "title": str("章名"), "emotion_tag": str("setup|suppress|turn|burst|harvest"), "hook_type": str("mystery|crisis|counterattack_eve|reward_pending|new_arc"), "hook_note": str("钩子说明"), "outline_summary": str("章纲"), "beats": map[string]any{"type": "array", "items": map[string]any{"type": "object"}}})},
+		{Name: "batch_generate_outlines", Description: "一次性批量生成后续 1~10 章大纲与节拍", Parameters: obj(map[string]any{"volume_id": num("分卷ID"), "count": num("生成章数1-10"), "arc_goal": str("阶段剧情目标")})},
+		{Name: "delete_chapter", Description: "删除指定章节并自动重排章序", Parameters: obj(map[string]any{"chapter_id": num("章节ID"), "chapter_seq": num("全局章号")})},
+		{Name: "move_chapter", Description: "上移/下移章节或跨卷移动", Parameters: obj(map[string]any{"chapter_id": num("章节ID"), "chapter_seq": num("全局章号"), "direction": str("up|down"), "target_volume_id": num("目标卷ID")})},
+		{Name: "generate_chapter", Description: "调用写作管线按作战简报生成某章完整正文", Parameters: obj(map[string]any{"chapter_id": num("章节ID"), "chapter_seq": num("全局章号")})},
+		{Name: "replace_chapter_paragraphs", Description: "局部修改某章指定段落范围（优先用于局部修稿，比整章重写更稳）", Parameters: obj(map[string]any{"chapter_id": num("章节ID"), "chapter_seq": num("全局章号"), "start_paragraph": num("起始段落号，从1开始"), "end_paragraph": num("结束段落号，从1开始"), "new_text": str("替换后的段落文本")}, "start_paragraph", "end_paragraph", "new_text")},
+		{Name: "audit_and_polish_chapter", Description: "对指定章节执行本地扫描 + AI 审校并自动应用局部润色", Parameters: obj(map[string]any{"chapter_id": num("章节ID"), "chapter_seq": num("全局章号")})},
+		{Name: "generate_arc_summary", Description: "AI 汇总指定章号区间（arc_10）或整卷（volume）的长期记忆摘要", Parameters: obj(map[string]any{"level": str("arc_10|volume"), "volume_id": num("卷ID"), "start_seq": num("起始章号"), "end_seq": num("结束章号")})},
+		{Name: "start_autopilot", Description: "启动后台全自动托管连续写稿", Parameters: obj(map[string]any{"target_chapters": num("章数1-20"), "arc_goal": str("剧情目标"), "auto_outline": bl("自动续写章纲"), "auto_polish": bl("自动审校润色"), "auto_commit_memory": bl("自动同步记忆")})},
+		{Name: "stop_autopilot", Description: "停止正在运行的后台托管", Parameters: obj(map[string]any{})},
 	}
 }
 

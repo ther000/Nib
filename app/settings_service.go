@@ -273,6 +273,33 @@ func (s *SettingsService) PickExportDir(ctx context.Context) (string, error) {
 	return picker(ctx)
 }
 
+// BackupDatabase 弹出原生保存对话框，将本地 SQLite 书库安全刷盘并完整备份至指定文件；用户取消时返回空字符串。
+func (s *SettingsService) BackupDatabase(ctx context.Context) (string, error) {
+	st, err := s.rt.store()
+	if err != nil {
+		return "", err
+	}
+	defaultName := fmt.Sprintf("nib-backup-%s.db", time.Now().Format("20060102-1504"))
+	targetPath, err := mygo.Dialog.Save(mygo.SaveDialogOptions{
+		Parent:      mygo.CallerWindow(ctx),
+		Title:       "备份 Nib 全部书库数据",
+		DefaultPath: defaultName,
+		Filters: []mygo.FileFilter{
+			{Name: "SQLite 数据库备份 (*.db)", Extensions: []string{"db"}},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(targetPath) == "" {
+		return "", nil
+	}
+	if err := st.BackupToFile(ctx, targetPath); err != nil {
+		return "", err
+	}
+	return targetPath, nil
+}
+
 // GetUsageSummary 聚合指定书籍（或 bookID=0 时全局）的各环节、各模型 Token 消耗与调用统计。
 func (s *SettingsService) GetUsageSummary(ctx context.Context, bookID int64) (domain.UsageSummary, error) {
 	if bookID < 0 {

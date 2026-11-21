@@ -167,6 +167,26 @@ func (s *Store) Path() string {
 	return s.path
 }
 
+// BackupToFile 安全刷盘 WAL 后将本地 SQLite 数据库原子备份至目标路径。
+func (s *Store) BackupToFile(ctx context.Context, targetPath string) error {
+	if s == nil || s.db == nil {
+		return errors.New("database not initialized")
+	}
+	if isMemoryPath(s.path) {
+		return fmt.Errorf("%w: 内存数据库不支持文件备份", domain.ErrValidation)
+	}
+	cleanTarget := filepath.Clean(strings.TrimSpace(targetPath))
+	if cleanTarget == "" || cleanTarget == "." {
+		return fmt.Errorf("%w: 备份目标路径不能为空", domain.ErrValidation)
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if _, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE);`); err != nil {
+		return fmt.Errorf("checkpoint WAL before backup: %w", err)
+	}
+	return copyFileAtomic(s.path, cleanTarget)
+}
+
 func isMemoryPath(p string) bool {
 	if p == ":memory:" {
 		return true

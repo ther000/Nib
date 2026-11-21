@@ -140,6 +140,52 @@ export function SettingsModal() {
   const [bookExportDir, setBookExportDir] = useState("");
   const [bookTargetWords, setBookTargetWords] = useState("2500");
   const [savingBookSettings, setSavingBookSettings] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState<"txt" | "epub" | "db" | null>(null);
+
+  const handleExportTXT = async () => {
+    if (!activeBook || exportingFormat) return;
+    setExportingFormat("txt");
+    try {
+      const savedPath = await LibraryService.exportBookTXT(activeBook.id);
+      if (savedPath) {
+        notify({ tone: "ok", message: "已导出整本 TXT", detail: savedPath });
+      }
+    } catch (err) {
+      notify({ tone: "danger", message: "导出 TXT 失败", detail: formatErrorMessage(err) });
+    } finally {
+      setExportingFormat(null);
+    }
+  };
+
+  const handleExportEPUB = async () => {
+    if (!activeBook || exportingFormat) return;
+    setExportingFormat("epub");
+    try {
+      const savedPath = await LibraryService.exportBookEPUB(activeBook.id);
+      if (savedPath) {
+        notify({ tone: "ok", message: "已导出 EPUB 电子书", detail: savedPath });
+      }
+    } catch (err) {
+      notify({ tone: "danger", message: "导出 EPUB 失败", detail: formatErrorMessage(err) });
+    } finally {
+      setExportingFormat(null);
+    }
+  };
+
+  const handleBackupDatabase = async () => {
+    if (exportingFormat) return;
+    setExportingFormat("db");
+    try {
+      const savedPath = await SettingsService.backupDatabase();
+      if (savedPath) {
+        notify({ tone: "ok", message: "已安全备份全部书库数据", detail: savedPath });
+      }
+    } catch (err) {
+      notify({ tone: "danger", message: "备份数据库失败", detail: formatErrorMessage(err) });
+    } finally {
+      setExportingFormat(null);
+    }
+  };
 
   // Model pricing state
   const [pricingList, setPricingList] = useState<ModelPricing[]>([]);
@@ -1867,8 +1913,47 @@ export function SettingsModal() {
                         </button>
                       </div>
                     </div>
+
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={exportingFormat !== null}
+                        onClick={() => void handleExportTXT()}
+                        className="rounded-md border border-border-subtle bg-surface px-3 py-1.5 text-xs font-medium text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
+                      >
+                        {exportingFormat === "txt" ? "导出中…" : "导出整本 TXT"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={exportingFormat !== null}
+                        onClick={() => void handleExportEPUB()}
+                        className="rounded-md border border-border-subtle bg-surface px-3 py-1.5 text-xs font-medium text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
+                      >
+                        {exportingFormat === "epub" ? "打包中…" : "导出 EPUB 电子书"}
+                      </button>
+                    </div>
                   </section>
                 )}
+
+                {/* Database Backup */}
+                <section className="border-t border-border-subtle pt-4">
+                  <div className="mb-2 text-xs font-medium text-ink-secondary">
+                    本地数据安全备份
+                  </div>
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-border-subtle bg-surface/50 p-3.5">
+                    <div className="text-xs text-ink-secondary">
+                      将所有书籍、章节正文、历史版本快照与设定记忆完整打包备份为一个本地 .db 文件
+                    </div>
+                    <button
+                      type="button"
+                      disabled={exportingFormat !== null}
+                      onClick={() => void handleBackupDatabase()}
+                      className="shrink-0 rounded-md border border-border-subtle bg-elevated px-3.5 py-1.5 text-xs font-medium text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
+                    >
+                      {exportingFormat === "db" ? "备份中…" : "一键备份书库"}
+                    </button>
+                  </div>
+                </section>
               </div>
             </div>
           )}
