@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   AlertTriangle,
   ArrowRight,
   BookMarked,
   Clock,
+  Copy,
   Flag,
   GitFork,
   History,
+  Pencil,
   Plus,
   Search,
+  Shield,
   ShieldAlert,
   Sparkles,
   Trash2,
@@ -25,6 +28,7 @@ import {
   type GenreFieldSpec,
 } from "../mygo";
 import { useApp } from "../stores/AppContext";
+import { useContextMenu } from "../components/ContextMenu";
 import {
   ENTITY_KINDS,
   STATE_EVENT_STATUS_LABELS,
@@ -76,6 +80,7 @@ export function AtlasView() {
     refreshEntities,
     notify,
   } = useApp();
+  const { openContextMenu } = useContextMenu();
 
   const latestChapterSeq = useMemo(
     () => chapters.reduce((max, c) => (c.globalSeq > max ? c.globalSeq : max), 0),
@@ -446,6 +451,74 @@ export function AtlasView() {
     }
   };
 
+  const handleToggleEntityInvariant = useCallback(
+    async (ent: Entity) => {
+      if (!activeBook) return;
+      try {
+        await AtlasService.upsertEntity({
+          id: ent.id,
+          bookId: activeBook.id,
+          kind: ent.kind,
+          name: ent.name,
+          aliases: Array.isArray(ent.aliases) ? ent.aliases : [],
+          isInvariant: !ent.isInvariant,
+          summary: ent.summary,
+          attributes: ent.attributes ?? {},
+        });
+        await refreshEntities(activeBook.id);
+        notify({
+          tone: "ok",
+          message: !ent.isInvariant
+            ? `已将「${ent.name}」设为世界铁律`
+            : `已取消「${ent.name}」的世界铁律标记`,
+        });
+      } catch (err) {
+        notify({ tone: "danger", message: "更新实体状态失败", detail: formatErrorMessage(err) });
+      }
+    },
+    [activeBook, refreshEntities, notify]
+  );
+
+  const openEntityContextMenu = useCallback(
+    (e: ReactMouseEvent, ent: Entity) => {
+      openContextMenu(e, [
+        {
+          label: "编辑档案",
+          icon: <Pencil className="h-3.5 w-3.5" />,
+          onSelect: () => openEditEntity(ent),
+        },
+        {
+          label: "复制名称",
+          icon: <Copy className="h-3.5 w-3.5" />,
+          onSelect: async () => {
+            try {
+              await navigator.clipboard.writeText(ent.name);
+              notify({ tone: "ok", message: `已复制「${ent.name}」` });
+            } catch {
+              // ignore
+            }
+          },
+        },
+        {
+          label: ent.isInvariant ? "取消世界铁律标记" : "设为世界铁律 (P0)",
+          icon: <Shield className="h-3.5 w-3.5" />,
+          onSelect: () => void handleToggleEntityInvariant(ent),
+        },
+        { type: "separator" },
+        {
+          label: "删除实体…",
+          icon: <Trash2 className="h-3.5 w-3.5" />,
+          danger: true,
+          onSelect: () => {
+            openEditEntity(ent);
+            setConfirmDelete(true);
+          },
+        },
+      ]);
+    },
+    [openContextMenu, openEditEntity, notify, handleToggleEntityInvariant]
+  );
+
   useEffect(() => {
     if (!editor) return;
     const onKey = (e: KeyboardEvent) => {
@@ -554,6 +627,7 @@ export function AtlasView() {
                     key={inv.id}
                     type="button"
                     onClick={() => openEditEntity(inv)}
+                    onContextMenu={(e) => openEntityContextMenu(e, inv)}
                     title={inv.summary || inv.name}
                     className="flex max-w-[260px] items-center gap-1.5 rounded-full border border-danger/30 bg-danger-soft/70 px-2.5 py-1 text-xs text-ink-primary transition-colors hover:border-danger/60"
                   >
@@ -755,6 +829,7 @@ export function AtlasView() {
                         key={ent.id}
                         type="button"
                         onClick={() => openEditEntity(ent)}
+                        onContextMenu={(e) => openEntityContextMenu(e, ent)}
                         className="group flex flex-col rounded-xl border border-border-subtle bg-surface p-4 text-left transition-colors hover:border-border-strong hover:bg-elevated/60"
                       >
                         <div className="flex items-start justify-between gap-2">

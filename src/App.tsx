@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { AppProvider, useApp } from "./stores/AppContext";
+import { ContextMenuProvider } from "./components/ContextMenu";
 import { TopBar } from "./components/TopBar";
 import { AutopilotModal, AutopilotStatusBar } from "./components/AutopilotConsole";
 import { DirectorDrawer } from "./components/DirectorDrawer";
@@ -177,7 +178,9 @@ function NibShell() {
 export function App() {
   return (
     <AppProvider>
-      <NibShell />
+      <ContextMenuProvider>
+        <NibShell />
+      </ContextMenuProvider>
     </AppProvider>
   );
 }

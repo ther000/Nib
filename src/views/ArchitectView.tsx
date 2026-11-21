@@ -6,7 +6,9 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Copy,
   Layers,
+  PenLine,
   Pencil,
   Plus,
   Save,
@@ -21,6 +23,7 @@ import {
   type Volume,
 } from "../mygo";
 import { useApp } from "../stores/AppContext";
+import { useContextMenu } from "../components/ContextMenu";
 import { VolumePacingChart } from "../components/architect/VolumePacingChart";
 import { BatchSchedulerPanel } from "../components/architect/BatchSchedulerPanel";
 import { BatchOutlineModal } from "../components/architect/BatchOutlineModal";
@@ -94,6 +97,7 @@ export function ArchitectView() {
     notify,
     registerSaveHandler,
   } = useApp();
+  const { openContextMenu } = useContextMenu();
 
   // Phase 4 outline modal & pacing refresh counter
   const [outlineModalOpen, setOutlineModalOpen] = useState(false);
@@ -667,7 +671,47 @@ export function ArchitectView() {
                 return (
                   <div key={vol.id} className="select-none">
                     {/* Volume header */}
-                    <div className="group flex items-center gap-1 rounded-md px-1.5 py-1.5 transition-colors hover:bg-elevated/70">
+                    <div
+                      onContextMenu={(e) => {
+                        openContextMenu(e, [
+                          {
+                            label: "在本卷新建章",
+                            icon: <Plus className="h-3.5 w-3.5" />,
+                            onSelect: () => {
+                              setCollapsedVolIds((prev) => {
+                                const next = new Set(prev);
+                                next.delete(vol.id);
+                                return next;
+                              });
+                              setAddingChapterVolId(vol.id);
+                              setNewChapterTitle("");
+                            },
+                          },
+                          {
+                            label: "编辑卷信息",
+                            icon: <Pencil className="h-3.5 w-3.5" />,
+                            onSelect: () => openEditVolume(vol),
+                          },
+                          {
+                            label: collapsed ? "展开本卷" : "收起本卷",
+                            icon: collapsed ? (
+                              <ChevronRight className="h-3.5 w-3.5" />
+                            ) : (
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            ),
+                            onSelect: () => toggleVolumeCollapse(vol.id),
+                          },
+                          { type: "separator" },
+                          {
+                            label: "删除本卷",
+                            icon: <Trash2 className="h-3.5 w-3.5" />,
+                            danger: true,
+                            onSelect: () => setConfirmDeleteVolId(vol.id),
+                          },
+                        ]);
+                      }}
+                      className="group flex items-center gap-1 rounded-md px-1.5 py-1.5 transition-colors hover:bg-elevated/70"
+                    >
                       <button
                         type="button"
                         onClick={() => toggleVolumeCollapse(vol.id)}
@@ -752,6 +796,60 @@ export function ArchitectView() {
                           return (
                             <div key={chap.id} className="flex flex-col">
                               <div
+                                onContextMenu={(e) => {
+                                  openContextMenu(e, [
+                                    {
+                                      label: "进入正文写作",
+                                      icon: <PenLine className="h-3.5 w-3.5" />,
+                                      onSelect: () => void jumpToChapter(chap.id),
+                                    },
+                                    {
+                                      label: "选中编排本章",
+                                      icon: <Layers className="h-3.5 w-3.5" />,
+                                      onSelect: () => void selectChapter(chap.id),
+                                    },
+                                    { type: "separator" },
+                                    {
+                                      label: "在此章后插入新章",
+                                      icon: <Plus className="h-3.5 w-3.5" />,
+                                      onSelect: () => {
+                                        setInsertingAfterChap({ volId: vol.id, afterChapId: chap.id });
+                                        setInsertChapterTitle("");
+                                      },
+                                    },
+                                    {
+                                      label: "上移一章",
+                                      icon: <ArrowUp className="h-3.5 w-3.5" />,
+                                      disabled: chapIdx === 0 || movingChapterId !== null,
+                                      onSelect: () => void handleMoveChapter(chap.id, "up"),
+                                    },
+                                    {
+                                      label: "下移一章",
+                                      icon: <ArrowDown className="h-3.5 w-3.5" />,
+                                      disabled: chapIdx === volChapters.length - 1 || movingChapterId !== null,
+                                      onSelect: () => void handleMoveChapter(chap.id, "down"),
+                                    },
+                                    {
+                                      label: "复制章节标题",
+                                      icon: <Copy className="h-3.5 w-3.5" />,
+                                      onSelect: async () => {
+                                        try {
+                                          await navigator.clipboard.writeText(chap.title);
+                                          notify({ tone: "ok", message: "已复制章节标题" });
+                                        } catch {
+                                          // ignore
+                                        }
+                                      },
+                                    },
+                                    { type: "separator" },
+                                    {
+                                      label: "删除本章",
+                                      icon: <Trash2 className="h-3.5 w-3.5" />,
+                                      danger: true,
+                                      onSelect: () => setConfirmDeleteChapId(chap.id),
+                                    },
+                                  ]);
+                                }}
                                 className={`group flex w-full items-center gap-1 rounded-md px-2 py-1.5 transition-colors ${
                                   selected
                                     ? "bg-accent-soft text-ink-primary"

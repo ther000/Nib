@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { Channel } from "mygo-runtime";
 import {
   AlertCircle,
@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Clipboard,
   Copy,
   Download,
   FastForward,
@@ -24,10 +25,12 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  Scissors,
   Search,
   ShieldCheck,
   Sparkles,
   Square,
+  TextSelect,
   X,
 } from "lucide-react";
 import {
@@ -48,6 +51,7 @@ import {
   type TokenUsage,
 } from "../mygo";
 import { useApp } from "../stores/AppContext";
+import { useContextMenu, type ContextMenuItem } from "../components/ContextMenu";
 import { useMygoChannel } from "../hooks/useMygoStream";
 import { AuditProseParagraph } from "../components/AuditProseParagraph";
 import { DeltaReviewPanel } from "../components/DeltaReviewPanel";
@@ -96,6 +100,7 @@ export function StudioView() {
     registerSaveHandler,
     registerGenerateHandler,
   } = useApp();
+  const { openContextMenu } = useContextMenu();
 
   // Editor state
   const [title, setTitle] = useState("");
@@ -807,8 +812,15 @@ export function StudioView() {
   }, [generating, selectionRewriting, selectionPreview]);
 
   const runSelectionRewrite = useCallback(
-    async (action: "expand" | "condense" | "dialogue" | "vivid" | "deai" | "custom") => {
-      if (!activeChapter || !selectionRange || selectionRewriting) return;
+    async (
+      action: "expand" | "condense" | "dialogue" | "vivid" | "deai" | "custom",
+      overrideRange?: { start: number; end: number; text: string }
+    ) => {
+      const activeRange = overrideRange ?? selectionRange;
+      if (!activeChapter || !activeRange || selectionRewriting) return;
+      if (overrideRange) {
+        setSelectionRange(overrideRange);
+      }
       if (action === "custom" && !selectionCustomPrompt.trim()) {
         notify({ tone: "warn", message: "请先输入自定义改写要求" });
         return;
@@ -832,9 +844,9 @@ export function StudioView() {
         const res = await StudioService.rewriteSelection(
           {
             chapterId: activeChapter.id,
-            selectedText: selectionRange.text,
-            beforeContext: content.slice(Math.max(0, selectionRange.start - 360), selectionRange.start),
-            afterContext: content.slice(selectionRange.end, Math.min(content.length, selectionRange.end + 360)),
+            selectedText: activeRange.text,
+            beforeContext: content.slice(Math.max(0, activeRange.start - 360), activeRange.start),
+            afterContext: content.slice(activeRange.end, Math.min(content.length, activeRange.end + 360)),
             action,
             customInstruction: action === "custom" ? selectionCustomPrompt.trim() : "",
           },
@@ -1481,6 +1493,278 @@ export function StudioView() {
     [versions, selectedVersionId]
   );
 
+  // 正文编辑区右键菜单（结合选区 AI 微调 + 桌面基础编辑 + 章节高频动作）
+  const handleTextareaContextMenu = useCallback(
+    (e: ReactMouseEvent<HTMLTextAreaElement>) => {
+      const el = textareaRef.current;
+      if (!el || !activeChapter) return;
+      const start = el.selectionStart ?? 0;
+      const end = el.selectionEnd ?? 0;
+      const hasSelection = end > start;
+      const selectedText = hasSelection ? el.value.slice(start, end) : "";
+      const aiEligible = !generating && selectedText.trim().length >= 2;
+      const range = aiEligible ? { start, end, text: selectedText } : null;
+      if (range) {
+        setSelectionRange(range);
+      }
+
+      const items: ContextMenuItem[] = [];
+      if (range) {
+        items.push({ type: "label", label: `AI 选区微调（${countWords(range.text)} 字）` });
+        const actions: Array<{ key: "expand" | "condense" | "dialogue" | "vivid" | "deai"; label: string }> = [
+          { key: "expand", label: "扩写细节" },
+          { key: "condense", label: "精简紧凑" },
+          { key: "dialogue", label: "优化对话" },
+          { key: "vivid", label: "增强动作感" },
+          { key: "deai", label: "去 AI 味" },
+        ];
+        for (const act of actions) {
+          items.push({
+            label: act.label,
+            icon: <Sparkles className="h-3.5 w-3.5" />,
+            disabled: selectionRewriting,
+            onSelect: () => void runSelectionRewrite(act.key, range),
+          });
+        }
+        items.push({ type: "separator" });
+      }
+
+      items.push(
+        {
+          label: "剪切",
+          icon: <Scissors className="h-3.5 w-3.5" />,
+          shortcut: "Ctrl+X",
+          disabled: !hasSelection || generating,
+          onSelect: async () => {
+            if (!hasSelection) return;
+            try {
+              await navigator.clipboard.writeText(selectedText);
+            } catch {
+              // ignore
+            }
+            const next = content.slice(0, start) + content.slice(end);
+            setContent(next);
+            setDirty(true);
+            setSelectionRange(null);
+            requestAnimationFrame(() => {
+              el.focus();
+              el.setSelectionRange(start, start);
+            });
+          },
+        },
+        {
+          label: "复制",
+          icon: <Copy className="h-3.5 w-3.5" />,
+          shortcut: "Ctrl+C",
+          disabled: !hasSelection,
+          onSelect: async () => {
+            if (!hasSelection) return;
+            try {
+              await navigator.clipboard.writeText(selectedText);
+            } catch {
+              // ignore
+            }
+          },
+        },
+        {
+          label: "粘贴",
+          icon: <Clipboard className="h-3.5 w-3.5" />,
+          shortcut: "Ctrl+V",
+          disabled: generating,
+          onSelect: async () => {
+            let pasted = "";
+            try {
+              pasted = await navigator.clipboard.readText();
+            } catch {
+              return;
+            }
+            if (!pasted) return;
+            const next = content.slice(0, start) + pasted + content.slice(end);
+            setContent(next);
+            setDirty(true);
+            const caret = start + pasted.length;
+            requestAnimationFrame(() => {
+              el.focus();
+              el.setSelectionRange(caret, caret);
+            });
+          },
+        },
+        {
+          label: "全选",
+          icon: <TextSelect className="h-3.5 w-3.5" />,
+          shortcut: "Ctrl+A",
+          disabled: content.length === 0,
+          onSelect: () => {
+            el.focus();
+            el.select();
+          },
+        },
+        { type: "separator" }
+      );
+
+      if (hasSelection && selectedText.trim().length > 0 && selectedText.length <= 80) {
+        items.push({
+          label: "在文中查找 / 替换选中词",
+          icon: <Search className="h-3.5 w-3.5" />,
+          shortcut: "Ctrl+H",
+          onSelect: () => {
+            setFindQuery(selectedText.trim());
+            setFindOpen(true);
+          },
+        });
+      } else {
+        if (generating) {
+          items.push({
+            label: "停止生成",
+            icon: <Square className="h-3.5 w-3.5" />,
+            shortcut: "Ctrl+Enter",
+            danger: true,
+            onSelect: () => stopGeneration(),
+          });
+        } else if (content.trim().length > 0) {
+          items.push(
+            {
+              label: "紧接结尾续写",
+              icon: <FastForward className="h-3.5 w-3.5" />,
+              onSelect: () => void startGeneration("continue"),
+            },
+            {
+              label: "按节拍重新生成",
+              icon: <RefreshCw className="h-3.5 w-3.5" />,
+              onSelect: () => void startGeneration("rewrite"),
+            }
+          );
+        } else {
+          items.push({
+            label: "生成本章",
+            icon: <Play className="h-3.5 w-3.5" />,
+            shortcut: "Ctrl+Enter",
+            onSelect: () => void startGeneration("rewrite"),
+          });
+        }
+        items.push(
+          { type: "separator" },
+          {
+            label: "保存正文",
+            icon: <Save className="h-3.5 w-3.5" />,
+            shortcut: "Ctrl+S",
+            disabled: generating || saving,
+            onSelect: () => void handleSave(),
+          },
+          {
+            label: "复制纯净正文",
+            icon: <Copy className="h-3.5 w-3.5" />,
+            disabled: !content.trim(),
+            onSelect: () => void handleCopyCleanProse(),
+          },
+          {
+            label: "查找与替换",
+            icon: <Search className="h-3.5 w-3.5" />,
+            shortcut: "Ctrl+H",
+            onSelect: () => setFindOpen(true),
+          },
+          {
+            label: "切换校对视图",
+            icon: <BookOpen className="h-3.5 w-3.5" />,
+            disabled: generating,
+            onSelect: () => setReadingMode(true),
+          }
+        );
+      }
+
+      openContextMenu(e, items);
+    },
+    [
+      activeChapter,
+      generating,
+      selectionRewriting,
+      content,
+      saving,
+      runSelectionRewrite,
+      stopGeneration,
+      startGeneration,
+      handleSave,
+      handleCopyCleanProse,
+      openContextMenu,
+    ]
+  );
+
+  // 校对 / 流式阅读区右键菜单
+  const handleReadingContextMenu = useCallback(
+    (e: ReactMouseEvent<HTMLElement>) => {
+      if (!activeChapter) return;
+      const selectedText = window.getSelection()?.toString() ?? "";
+      const items: ContextMenuItem[] = [];
+      if (selectedText.trim().length > 0) {
+        items.push({
+          label: "复制选中文本",
+          icon: <Copy className="h-3.5 w-3.5" />,
+          shortcut: "Ctrl+C",
+          onSelect: async () => {
+            try {
+              await navigator.clipboard.writeText(selectedText);
+            } catch {
+              // ignore
+            }
+          },
+        });
+        if (selectedText.length <= 80) {
+          items.push({
+            label: "在文中查找 / 替换选中词",
+            icon: <Search className="h-3.5 w-3.5" />,
+            shortcut: "Ctrl+H",
+            onSelect: () => {
+              setFindQuery(selectedText.trim());
+              setFindOpen(true);
+            },
+          });
+        }
+        items.push({ type: "separator" });
+      }
+      if (!generating) {
+        items.push({
+          label: "切回编辑模式",
+          icon: <Pencil className="h-3.5 w-3.5" />,
+          onSelect: () => setReadingMode(false),
+        });
+      }
+      items.push(
+        {
+          label: "复制纯净正文",
+          icon: <Copy className="h-3.5 w-3.5" />,
+          disabled: !content.trim(),
+          onSelect: () => void handleCopyCleanProse(),
+        },
+        {
+          label: "本地 AI 味扫描",
+          icon: <ShieldCheck className="h-3.5 w-3.5" />,
+          disabled: generating || !content.trim(),
+          onSelect: () => {
+            setDrawerTab("audit");
+            setStudioDrawerOpen(true);
+            void runLocalLint(activeChapter.id, false);
+          },
+        },
+        {
+          label: "查找与替换",
+          icon: <Search className="h-3.5 w-3.5" />,
+          shortcut: "Ctrl+H",
+          onSelect: () => setFindOpen(true),
+        }
+      );
+      openContextMenu(e, items);
+    },
+    [
+      activeChapter,
+      generating,
+      content,
+      handleCopyCleanProse,
+      runLocalLint,
+      setStudioDrawerOpen,
+      openContextMenu,
+    ]
+  );
+
   if (!activeChapter) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-canvas px-6 text-center">
@@ -1963,6 +2247,7 @@ export function StudioView() {
             {generating || readingMode ? (
               <article
                 className="nib-prose-column min-h-[480px]"
+                onContextMenu={handleReadingContextMenu}
                 onDoubleClick={() => {
                   if (!generating && readingMode) setReadingMode(false);
                 }}
@@ -2016,6 +2301,7 @@ export function StudioView() {
                 onSelect={handleEditorSelect}
                 onMouseUp={handleEditorSelect}
                 onKeyUp={handleEditorSelect}
+                onContextMenu={handleTextareaContextMenu}
                 onChange={(e) => {
                   setContent(e.target.value);
                   setDirty(true);

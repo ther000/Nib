@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   ArrowRight,
   BarChart3,
+  BookMarked,
   BookOpen,
   BookPlus,
+  Download,
+  FileText,
   PenLine,
   Plus,
   RefreshCw,
@@ -11,8 +14,9 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { LibraryService, SettingsService, type UsageSummary } from "../mygo";
+import { LibraryService, SettingsService, type Book, type UsageSummary } from "../mygo";
 import { useApp } from "../stores/AppContext";
+import { useContextMenu } from "../components/ContextMenu";
 import {
   PIPELINE_STAGES,
   formatCompactTokens,
@@ -36,6 +40,7 @@ export function HomeView() {
     openCreateBook,
     notify,
   } = useApp();
+  const { openContextMenu } = useContextMenu();
 
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
@@ -135,6 +140,65 @@ export function HomeView() {
     }
   };
 
+  const openBookContextMenu = useCallback(
+    (e: ReactMouseEvent, book: Book) => {
+      openContextMenu(e, [
+        {
+          label: "继续写作",
+          icon: <PenLine className="h-3.5 w-3.5" />,
+          onSelect: () => void openBook(book.id, "studio"),
+        },
+        {
+          label: "打开编排大纲",
+          icon: <BookOpen className="h-3.5 w-3.5" />,
+          onSelect: () => void openBook(book.id, "architect"),
+        },
+        {
+          label: "打开设定账本",
+          icon: <BookMarked className="h-3.5 w-3.5" />,
+          onSelect: () => void openBook(book.id, "atlas"),
+        },
+        { type: "separator" },
+        {
+          label: "导出整本 TXT",
+          icon: <FileText className="h-3.5 w-3.5" />,
+          onSelect: async () => {
+            try {
+              const outPath = await LibraryService.exportBookTXT(book.id);
+              if (outPath) {
+                notify({ tone: "ok", message: `已导出《${book.title}》TXT`, detail: outPath });
+              }
+            } catch (err) {
+              notify({ tone: "danger", message: "导出 TXT 失败", detail: formatErrorMessage(err) });
+            }
+          },
+        },
+        {
+          label: "导出 EPUB 电子书",
+          icon: <Download className="h-3.5 w-3.5" />,
+          onSelect: async () => {
+            try {
+              const outPath = await LibraryService.exportBookEPUB(book.id);
+              if (outPath) {
+                notify({ tone: "ok", message: `已导出《${book.title}》EPUB`, detail: outPath });
+              }
+            } catch (err) {
+              notify({ tone: "danger", message: "导出 EPUB 失败", detail: formatErrorMessage(err) });
+            }
+          },
+        },
+        { type: "separator" },
+        {
+          label: "删除书籍…",
+          icon: <Trash2 className="h-3.5 w-3.5" />,
+          danger: true,
+          onSelect: () => setConfirmDeleteId(book.id),
+        },
+      ]);
+    },
+    [openContextMenu, openBook, notify]
+  );
+
   return (
     <main className="flex-1 overflow-y-auto px-8 py-10">
       <div className="mx-auto flex w-full max-w-[940px] flex-col gap-8">
@@ -224,7 +288,10 @@ export function HomeView() {
 
         {/* Continue Writing Hero */}
         {featuredBook && (
-          <section className="rounded-xl border border-accent/25 bg-surface p-6 transition-colors hover:border-accent/45">
+          <section
+            onContextMenu={(e) => openBookContextMenu(e, featuredBook)}
+            className="rounded-xl border border-accent/25 bg-surface p-6 transition-colors hover:border-accent/45"
+          >
             <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
               <div className="min-w-0 flex-1">
                 <div className="mb-2.5 flex flex-wrap items-center gap-2.5 text-xs">
@@ -292,6 +359,7 @@ export function HomeView() {
                 return (
                   <div
                     key={book.id}
+                    onContextMenu={(e) => openBookContextMenu(e, book)}
                     className={`group relative flex flex-col justify-between rounded-xl border bg-surface p-4 transition-colors ${
                       isFeatured
                         ? "border-border-strong"
