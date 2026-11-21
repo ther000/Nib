@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"modernc.org/sqlite"
 
@@ -192,6 +193,197 @@ func (s *Store) BackupToFile(ctx context.Context, targetPath string) error {
 		return fmt.Errorf("checkpoint WAL before backup: %w", err)
 	}
 	return copyFileAtomic(s.path, cleanTarget)
+}
+
+// CreateAutoBackup 在指定目录创建当日滚动备份；同日已存在则跳过，并只保留最近 keep 份。
+func (s *Store) CreateAutoBackup(ctx context.Context, backupDir string, keep int) (string, error) {
+	if s == nil || s.db == nil {
+		return "", errors.New("database not initialized")
+	}
+	if isMemoryPath(s.path) {
+		return "", nil
+	}
+	if keep <= 0 {
+		keep = 7
+	}
+	dir := strings.TrimSpace(backupDir)
+	if dir == "" {
+		return "", fmt.Errorf("%w: 备份目录不能为空", domain.ErrValidation)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create backup dir: %w", err)
+	}
+	target := filepath.Join(dir, "nib-"+time.Now().Format("20060102")+".db")
+	if fi, err := os.Stat(target); err == nil && fi.Size() > 0 {
+		return target, nil
+	}
+	if err := s.BackupToFile(ctx, target); err != nil {
+		return "", err
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return target, nil
+	}
+	backups := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, "nib-") || !strings.HasSuffix(name, ".db") {
+			continue
+		}
+		backups = append(backups, filepath.Join(dir, name))
+	}
+	sort.Strings(backups)
+	for len(backups) > keep {
+		remove := backups[0]
+		backups = backups[1:]
+		_ = os.Remove(remove)
+	}
+	return target, nil
+}
+
+// RestoreDataFromFile 校验备份文件并把其中数据整体恢复进当前库。
+// 恢复前会先把当前库热备为 <db>.pre-restore-*.db；恢复通过 ATTACH + 事务整表复制完成，
+// 当前 Store 的连接池与上层引擎无需重建即可看到恢复后的数据。
+func (s *Store) RestoreDataFromFile(ctx context.Context, backupPath string) (string, error) {
+	if s == nil || s.db == nil {
+		return "", errors.New("database not initialized")
+	}
+	if isMemoryPath(s.path) {
+		return "", fmt.Errorf("%w: 内存数据库不支持恢复", domain.ErrValidation)
+	}
+	source := filepath.Clean(strings.TrimSpace(backupPath))
+	if source == "" || source == "." {
+		return "", fmt.Errorf("%w: 备份文件路径不能为空", domain.ErrValidation)
+	}
+	if fi, err := os.Stat(source); err != nil || fi.IsDir() || fi.Size() == 0 {
+		return "", fmt.Errorf("%w: 备份文件不存在或为空", domain.ErrValidation)
+	}
+	if samePath, err := filepath.Abs(source); err == nil {
+		if current, err := filepath.Abs(s.path); err == nil && strings.EqualFold(samePath, current) {
+			return "", fmt.Errorf("%w: 不能恢复当前正在使用的数据库", domain.ErrValidation)
+		}
+	}
+
+	stageDir := filepath.Dir(s.path)
+	stageFile, err := os.CreateTemp(stageDir, ".nib-restore-stage-*.db")
+	if err != nil {
+		return "", fmt.Errorf("create restore staging file: %w", err)
+	}
+	stagePath := stageFile.Name()
+	_ = stageFile.Close()
+	_ = os.Remove(stagePath)
+	defer os.Remove(stagePath)
+
+	if err := copyFileAtomic(source, stagePath); err != nil {
+		return "", fmt.Errorf("stage backup file: %w", err)
+	}
+
+	// 先把备份升级到当前最新 schema，旧备份也能安全恢复。
+	staged, err := Open(stagePath)
+	if err != nil {
+		return "", fmt.Errorf("validate backup database: %w", err)
+	}
+	if staged.schemaVersion > s.schemaVersion {
+		_ = staged.Close()
+		return "", fmt.Errorf("%w: 备份来自更新版本的 Nib，请先升级应用", domain.ErrValidation)
+	}
+	if _, err := staged.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		_ = staged.Close()
+		return "", fmt.Errorf("checkpoint staged backup: %w", err)
+	}
+	if err := staged.Close(); err != nil {
+		return "", err
+	}
+
+	preRestorePath := fmt.Sprintf("%s.pre-restore-%s.db", s.path, time.Now().Format("20060102-150405"))
+	if err := s.BackupToFile(ctx, preRestorePath); err != nil {
+		return "", fmt.Errorf("backup current database before restore: %w", err)
+	}
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return "", err
+	}
+	defer func() { _, _ = conn.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`) }()
+
+	if _, err := conn.ExecContext(ctx, `ATTACH DATABASE ? AS restore`, stagePath); err != nil {
+		return "", fmt.Errorf("attach restore database: %w", err)
+	}
+	defer func() { _, _ = conn.ExecContext(context.Background(), `DETACH DATABASE restore`) }()
+
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return "", err
+	}
+	if _, err := conn.ExecContext(ctx, `PRAGMA defer_foreign_keys = ON`); err != nil {
+		_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+		return "", err
+	}
+
+	names, err := tableNamesForRestore(ctx, conn)
+	if err != nil {
+		_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+		return "", err
+	}
+	for _, name := range names {
+		quoted := quoteSQLiteIdentifier(name)
+		if _, err := conn.ExecContext(ctx, `DELETE FROM main.`+quoted); err != nil {
+			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+			return "", fmt.Errorf("clear table %s: %w", name, err)
+		}
+		if _, err := conn.ExecContext(ctx, `INSERT INTO main.`+quoted+` SELECT * FROM restore.`+quoted); err != nil {
+			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+			return "", fmt.Errorf("copy table %s: %w", name, err)
+		}
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+		return "", err
+	}
+	return preRestorePath, nil
+}
+
+func tableNamesForRestore(ctx context.Context, conn *sql.Conn) ([]string, error) {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT name FROM main.sqlite_master
+		WHERE type = 'table'
+		  AND name NOT LIKE 'sqlite_%'
+		  AND name NOT LIKE '%_fts%'
+		  AND name <> 'schema_migrations'
+		ORDER BY name ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		var exists int
+		if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM restore.sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&exists); err != nil {
+			return nil, err
+		}
+		if exists == 0 {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
+}
+
+func quoteSQLiteIdentifier(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 func isMemoryPath(p string) bool {

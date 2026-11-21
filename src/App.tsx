@@ -9,6 +9,7 @@ import { CreateBookModal } from "./components/CreateBookModal";
 import { CommandPalette } from "./components/CommandPalette";
 import { MemorySearchModal } from "./components/MemorySearchModal";
 import { ToastHost } from "./components/ToastHost";
+import { ScratchNotesDrawer } from "./components/ScratchNotesDrawer";
 import { HomeView } from "./views/HomeView";
 import { ArchitectView } from "./views/ArchitectView";
 import { StudioView } from "./views/StudioView";
@@ -223,6 +224,7 @@ function NibShell() {
       )}
 
       <CreateBookModal />
+      <ScratchNotesDrawer />
       <AutopilotModal />
       <MemorySearchModal />
       <CommandPalette />

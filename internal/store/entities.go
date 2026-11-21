@@ -172,6 +172,9 @@ func (s *Store) UpsertEntity(ctx context.Context, in domain.UpsertEntityInput) (
 // DeleteEntity 按 ID 删除设定实体。
 func (s *Store) DeleteEntity(ctx context.Context, id int64) error {
 	return s.withWriteTx(ctx, func(tx *sql.Tx) error {
+		if err := snapshotEntityTrashTx(ctx, tx, id); err != nil {
+			return err
+		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM entities WHERE id = ?`, id)
 		if err != nil {
 			return mapSQLiteError(err)

@@ -97,6 +97,46 @@ func (s *LibraryService) GetWritingStats(ctx context.Context, bookID int64, days
 	return st.GetWritingStats(ctx, bookID, days)
 }
 
+// ListScratchNotes 返回指定书籍的灵感便签/废稿池（置顶优先）。
+func (s *LibraryService) ListScratchNotes(ctx context.Context, bookID int64) ([]domain.ScratchNote, error) {
+	if err := validatePositiveID("bookId", bookID); err != nil {
+		return nil, err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return nil, err
+	}
+	notes, err := st.ListScratchNotes(ctx, bookID)
+	if err != nil {
+		return nil, err
+	}
+	if notes == nil {
+		return []domain.ScratchNote{}, nil
+	}
+	return notes, nil
+}
+
+// UpsertScratchNote 新建或更新一条灵感便签。
+func (s *LibraryService) UpsertScratchNote(ctx context.Context, in domain.UpsertScratchNoteInput) (domain.ScratchNote, error) {
+	st, err := s.rt.store()
+	if err != nil {
+		return domain.ScratchNote{}, err
+	}
+	return st.UpsertScratchNote(ctx, in)
+}
+
+// DeleteScratchNote 永久删除一条灵感便签。
+func (s *LibraryService) DeleteScratchNote(ctx context.Context, id int64) error {
+	if err := validatePositiveID("id", id); err != nil {
+		return err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return err
+	}
+	return st.DeleteScratchNote(ctx, id)
+}
+
 // ListVolumes 返回指定书籍下的全部卷（按 seq 升序）。
 func (s *LibraryService) ListVolumes(ctx context.Context, bookID int64) ([]domain.Volume, error) {
 	if err := validatePositiveID("bookId", bookID); err != nil {

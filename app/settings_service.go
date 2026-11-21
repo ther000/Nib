@@ -3,6 +3,9 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -298,6 +301,105 @@ func (s *SettingsService) BackupDatabase(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return targetPath, nil
+}
+
+// ListAutoBackups 返回数据目录 backups/ 下的自动滚动备份（最新在前）。
+func (s *SettingsService) ListAutoBackups(ctx context.Context) ([]domain.AutoBackupInfo, error) {
+	st, err := s.rt.store()
+	if err != nil {
+		return nil, err
+	}
+	dbPath := strings.TrimSpace(st.Path())
+	if dbPath == "" || strings.HasPrefix(dbPath, ":memory:") {
+		return []domain.AutoBackupInfo{}, nil
+	}
+	dir := filepath.Join(filepath.Dir(dbPath), "backups")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []domain.AutoBackupInfo{}, nil
+		}
+		return nil, err
+	}
+	out := make([]domain.AutoBackupInfo, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".db") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		out = append(out, domain.AutoBackupInfo{
+			Name:       entry.Name(),
+			Path:       filepath.Join(dir, entry.Name()),
+			SizeBytes:  info.Size(),
+			ModifiedAt: info.ModTime().Format(time.RFC3339),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ModifiedAt > out[j].ModifiedAt })
+	return out, nil
+}
+
+// RestoreDatabaseFromFile 校验并恢复指定备份文件，返回恢复前自动生成的当前库热备路径。
+func (s *SettingsService) RestoreDatabaseFromFile(ctx context.Context, backupPath string) (string, error) {
+	if strings.TrimSpace(backupPath) == "" {
+		return "", &domain.ValidationError{Field: "backupPath", Message: "请选择要恢复的备份文件"}
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return "", err
+	}
+	return st.RestoreDataFromFile(ctx, backupPath)
+}
+
+// ListTrash 返回回收站条目。
+func (s *SettingsService) ListTrash(ctx context.Context) ([]domain.TrashItem, error) {
+	st, err := s.rt.store()
+	if err != nil {
+		return nil, err
+	}
+	items, err := st.ListTrashItems(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		return []domain.TrashItem{}, nil
+	}
+	return items, nil
+}
+
+// RestoreTrash 恢复一条回收站记录。
+func (s *SettingsService) RestoreTrash(ctx context.Context, trashID int64) (domain.TrashRestoreResult, error) {
+	if err := validatePositiveID("id", trashID); err != nil {
+		return domain.TrashRestoreResult{}, err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return domain.TrashRestoreResult{}, err
+	}
+	return st.RestoreTrashItem(ctx, trashID)
+}
+
+// DeleteTrash 永久删除一条回收站记录。
+func (s *SettingsService) DeleteTrash(ctx context.Context, trashID int64) error {
+	if err := validatePositiveID("id", trashID); err != nil {
+		return err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return err
+	}
+	return st.DeleteTrashItem(ctx, trashID)
+}
+
+// ClearTrash 清空回收站。
+func (s *SettingsService) ClearTrash(ctx context.Context) (int64, error) {
+	st, err := s.rt.store()
+	if err != nil {
+		return 0, err
+	}
+	return st.ClearTrash(ctx)
 }
 
 // GetUsageSummary 聚合指定书籍（或 bookID=0 时全局）的各环节、各模型 Token 消耗与调用统计。

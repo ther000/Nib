@@ -365,6 +365,9 @@ func (s *Store) DeleteChapter(ctx context.Context, chapterID int64) error {
 		if err != nil {
 			return err
 		}
+		if err := snapshotChapterTrashTx(ctx, tx, chapterID); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM chapters WHERE id = ?`, chapterID); err != nil {
 			return mapSQLiteError(err)
 		}

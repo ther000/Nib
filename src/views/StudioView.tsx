@@ -265,6 +265,29 @@ export function StudioView() {
     setContent(activeChapter.content);
   }, [activeChapter?.updatedAt, activeChapter?.content, activeChapter?.title, dirty, generating]);
 
+  // 接收「灵感便签」面板的插入请求，在正文光标处插入文本。
+  useEffect(() => {
+    const handleInsertText = (event: Event) => {
+      const text = (event as CustomEvent<{ text?: string }>).detail?.text;
+      if (!text) return;
+      const el = textareaRef.current;
+      const start = el?.selectionStart ?? content.length;
+      const end = el?.selectionEnd ?? content.length;
+      const next = content.slice(0, start) + text + content.slice(end);
+      setContent(next);
+      setDirty(true);
+      requestAnimationFrame(() => {
+        const target = textareaRef.current;
+        if (!target) return;
+        target.focus();
+        const cursor = start + text.length;
+        target.setSelectionRange(cursor, cursor);
+      });
+    };
+    window.addEventListener("nib:insert-text", handleInsertText);
+    return () => window.removeEventListener("nib:insert-text", handleInsertText);
+  }, [content]);
+
   // Auto-resize textarea height cleanly after content/mode/layout/typography changes
   useLayoutEffect(() => {
     const el = textareaRef.current;

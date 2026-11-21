@@ -55,6 +55,13 @@ export interface ArcSummary {
 
 export type ArcSummaryLevel = string;
 
+export interface AutoBackupInfo {
+  name: string;
+  path: string;
+  sizeBytes: number;
+  modifiedAt: string;
+}
+
 export type AutopilotDecisionAction = string;
 
 export interface AutopilotGate {
@@ -833,6 +840,17 @@ export interface SaveChapterDraftInput {
 
 export type SceneType = string;
 
+export interface ScratchNote {
+  id: number;
+  bookId: number;
+  title: string;
+  content: string;
+  tags: string[];
+  pinned: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface StageUsageStat {
   stage: string;
   calls: number;
@@ -880,6 +898,25 @@ export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+}
+
+export interface TrashItem {
+  id: number;
+  itemType: TrashItemType;
+  bookId: number;
+  title: string;
+  summary: string;
+  deletedAt: string;
+  retentionAt: string;
+}
+
+export type TrashItemType = string;
+
+export interface TrashRestoreResult {
+  itemType: TrashItemType;
+  itemId: number;
+  title: string;
+  message: string;
 }
 
 export interface UpdateBookInput {
@@ -973,6 +1010,15 @@ export interface UpsertProviderInput {
   enabled: boolean;
 }
 
+export interface UpsertScratchNoteInput {
+  id: number;
+  bookId: number;
+  title: string;
+  content: string;
+  tags: string[];
+  pinned: boolean;
+}
+
 export interface UpsertStyleProfileInput {
   bookId: number;
   avgSentenceChars: number;
@@ -1058,6 +1104,8 @@ export const LibraryService = {
   deleteBook: bind<[number], void>("LibraryService.DeleteBook", (id: number) => [id]),
   /** DeleteChapter 删除指定章节并自动重排剩余章节顺序。 */
   deleteChapter: bind<[number], void>("LibraryService.DeleteChapter", (chapterID: number) => [chapterID]),
+  /** DeleteScratchNote 永久删除一条灵感便签。 */
+  deleteScratchNote: bind<[number], void>("LibraryService.DeleteScratchNote", (id: number) => [id]),
   /** DeleteVolume 删除指定卷及其下属章节。 */
   deleteVolume: bind<[number], void>("LibraryService.DeleteVolume", (id: number) => [id]),
   /** ExportBookEPUB 弹出原生保存对话框，将整本书导出为标准 EPUB 3 电子书（用户取消时返回空字符串）。 */
@@ -1090,6 +1138,8 @@ export const LibraryService = {
   listChapters: bind<[number], Chapter[]>("LibraryService.ListChapters", (volumeID: number) => [volumeID]),
   /** ListGenrePresets 返回全部内置男频题材包规格（xuanhuan / xianxia / urban / general）。 */
   listGenrePresets: bind<[], GenrePreset[]>("LibraryService.ListGenrePresets", () => []),
+  /** ListScratchNotes 返回指定书籍的灵感便签/废稿池（置顶优先）。 */
+  listScratchNotes: bind<[number], ScratchNote[]>("LibraryService.ListScratchNotes", (bookID: number) => [bookID]),
   /** ListVolumes 返回指定书籍下的全部卷（按 seq 升序）。 */
   listVolumes: bind<[number], Volume[]>("LibraryService.ListVolumes", (bookID: number) => [bookID]),
   /** MoveChapter 调整章节顺序（up / down）或跨卷移动并自动重排章序。 */
@@ -1104,6 +1154,8 @@ export const LibraryService = {
   updateBook: bind<[UpdateBookInput], Book>("LibraryService.UpdateBook", (input: UpdateBookInput) => [input]),
   /** UpdateChapterMeta 更新章节标题、状态、情绪标签、钩子与章纲摘要。 */
   updateChapterMeta: bind<[UpdateChapterMetaInput], Chapter>("LibraryService.UpdateChapterMeta", (input: UpdateChapterMetaInput) => [input]),
+  /** UpsertScratchNote 新建或更新一条灵感便签。 */
+  upsertScratchNote: bind<[UpsertScratchNoteInput], ScratchNote>("LibraryService.UpsertScratchNote", (in_: UpsertScratchNoteInput) => [in_]),
   /** UpsertVolume 创建或更新卷信息。 */
   upsertVolume: bind<[UpsertVolumeInput], Volume>("LibraryService.UpsertVolume", (input: UpsertVolumeInput) => [input]),
 } as const;
@@ -1128,10 +1180,14 @@ export const AtlasService = {
 export const SettingsService = {
   /** BackupDatabase 弹出原生保存对话框，将本地 SQLite 书库安全刷盘并完整备份至指定文件；用户取消时返回空字符串。 */
   backupDatabase: bind<[], string>("SettingsService.BackupDatabase", () => []),
+  /** ClearTrash 清空回收站。 */
+  clearTrash: bind<[], number>("SettingsService.ClearTrash", () => []),
   /** DeleteModelPricing 删除指定模型的自定义单价配置。 */
   deleteModelPricing: bind<[string, string], void>("SettingsService.DeleteModelPricing", (providerName: string, modelName: string) => [providerName, modelName]),
   /** DeleteProvider 删除指定供应商配置。 */
   deleteProvider: bind<[number], void>("SettingsService.DeleteProvider", (id: number) => [id]),
+  /** DeleteTrash 永久删除一条回收站记录。 */
+  deleteTrash: bind<[number], void>("SettingsService.DeleteTrash", (trashID: number) => [trashID]),
   /**
    * FetchProviderModels 自动向已保存的供应商拉取上游模型目录：
    * - 全量候选模型存入 FetchedModels；
@@ -1142,14 +1198,22 @@ export const SettingsService = {
   fetchProviderModels: bind<[number], FetchModelsResult>("SettingsService.FetchProviderModels", (id: number) => [id]),
   /** GetUsageSummary 聚合指定书籍（或 bookID=0 时全局）的各环节、各模型 Token 消耗与调用统计。 */
   getUsageSummary: bind<[number], UsageSummary>("SettingsService.GetUsageSummary", (bookID: number) => [bookID]),
+  /** ListAutoBackups 返回数据目录 backups/ 下的自动滚动备份（最新在前）。 */
+  listAutoBackups: bind<[], AutoBackupInfo[]>("SettingsService.ListAutoBackups", () => []),
   /** ListModelPricing 返回全部自定义模型单价列表。 */
   listModelPricing: bind<[], ModelPricing[]>("SettingsService.ListModelPricing", () => []),
   /** ListModelRoutes 返回全部 5 个创作环节的模型路由配置。 */
   listModelRoutes: bind<[], ModelRoute[]>("SettingsService.ListModelRoutes", () => []),
   /** ListProviders 返回全部供应商的脱敏视图（严禁向前端透出明文 API Key）。 */
   listProviders: bind<[], ProviderPublic[]>("SettingsService.ListProviders", () => []),
+  /** ListTrash 返回回收站条目。 */
+  listTrash: bind<[], TrashItem[]>("SettingsService.ListTrash", () => []),
   /** PickExportDir 调起系统原生文件夹选择对话框；若用户取消则返回空字符串与 nil 错误。 */
   pickExportDir: bind<[], string>("SettingsService.PickExportDir", () => []),
+  /** RestoreDatabaseFromFile 校验并恢复指定备份文件，返回恢复前自动生成的当前库热备路径。 */
+  restoreDatabaseFromFile: bind<[string], string>("SettingsService.RestoreDatabaseFromFile", (backupPath: string) => [backupPath]),
+  /** RestoreTrash 恢复一条回收站记录。 */
+  restoreTrash: bind<[number], TrashRestoreResult>("SettingsService.RestoreTrash", (trashID: number) => [trashID]),
   /** SaveModelRoute 校验并更新单个创作环节的模型路由配置。 */
   saveModelRoute: bind<[ModelRoute], ModelRoute>("SettingsService.SaveModelRoute", (route: ModelRoute) => [route]),
   /** SetWindowTheme 同步主窗口隐藏标题栏上的系统按钮配色（深色/浅色）。 */

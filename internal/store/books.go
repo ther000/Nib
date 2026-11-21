@@ -176,6 +176,9 @@ func (s *Store) UpdateBook(ctx context.Context, in domain.UpdateBookInput) (doma
 // DeleteBook 按 ID 删除书籍（级联删除全部卷、章、节拍、版本与设定实体）。
 func (s *Store) DeleteBook(ctx context.Context, id int64) error {
 	return s.withWriteTx(ctx, func(tx *sql.Tx) error {
+		if err := snapshotBookTrashTx(ctx, tx, id); err != nil {
+			return err
+		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM books WHERE id = ?`, id)
 		if err != nil {
 			return mapSQLiteError(err)
@@ -296,6 +299,9 @@ func (s *Store) UpsertVolume(ctx context.Context, in domain.UpsertVolumeInput) (
 // DeleteVolume 按 ID 删除卷（级联删除卷内章节、节拍与版本）。
 func (s *Store) DeleteVolume(ctx context.Context, id int64) error {
 	return s.withWriteTx(ctx, func(tx *sql.Tx) error {
+		if err := snapshotVolumeTrashTx(ctx, tx, id); err != nil {
+			return err
+		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM volumes WHERE id = ?`, id)
 		if err != nil {
 			return mapSQLiteError(err)

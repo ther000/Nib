@@ -24,6 +24,18 @@ type Store interface {
 	DeleteBook(ctx context.Context, id int64) error
 	GetWritingStats(ctx context.Context, bookID int64, days int) (domain.WritingStatsSummary, error)
 
+	// Scratch Notes
+	ListScratchNotes(ctx context.Context, bookID int64) ([]domain.ScratchNote, error)
+	UpsertScratchNote(ctx context.Context, in domain.UpsertScratchNoteInput) (domain.ScratchNote, error)
+	DeleteScratchNote(ctx context.Context, id int64) error
+
+	// Trash & Restore
+	ListTrashItems(ctx context.Context) ([]domain.TrashItem, error)
+	RestoreTrashItem(ctx context.Context, trashID int64) (domain.TrashRestoreResult, error)
+	DeleteTrashItem(ctx context.Context, trashID int64) error
+	ClearTrash(ctx context.Context) (int64, error)
+	RestoreDataFromFile(ctx context.Context, backupPath string) (string, error)
+
 	// Volumes
 	ListVolumes(ctx context.Context, bookID int64) ([]domain.Volume, error)
 	UpsertVolume(ctx context.Context, in domain.UpsertVolumeInput) (domain.Volume, error)
@@ -62,6 +74,7 @@ type Store interface {
 
 	// Database Backup
 	BackupToFile(ctx context.Context, targetPath string) error
+	Path() string
 
 	// Providers & Model Routes
 	ListProviders(ctx context.Context) ([]domain.Provider, error)

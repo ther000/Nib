@@ -112,6 +112,12 @@ func initRuntime(rt *app.Runtime, dbPath string) (func(), error) {
 	if err := st.RecoverInterruptedAutopilotRuns(context.Background()); err != nil {
 		log.Printf("nib: recover interrupted autopilot runs warning: %v", err)
 	}
+	if _, err := st.CreateAutoBackup(context.Background(), filepath.Join(filepath.Dir(dbPath), "backups"), 7); err != nil {
+		log.Printf("nib: daily auto backup warning: %v", err)
+	}
+	if _, err := st.CleanupExpiredTrash(context.Background()); err != nil {
+		log.Printf("nib: cleanup expired trash warning: %v", err)
+	}
 
 	storeExp := exporter.NewStoreExporter(st)
 	pipeExp := exporter.New()

@@ -6,6 +6,7 @@ import {
   Command,
   Feather,
   Home,
+  Lightbulb,
   Loader2,
   Moon,
   Plus,
@@ -219,6 +220,15 @@ export function TopBar() {
       <div className="flex items-center gap-1">
         {inWorkspace && activeBook && (
           <>
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new Event("nib:toggle-notes"))}
+              title="灵感便签"
+              aria-label="灵感便签"
+              className="mr-0.5 flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+            >
+              <Lightbulb className="h-3.5 w-3.5" />
+            </button>
             <button
               type="button"
               onClick={toggleDirector}

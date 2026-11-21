@@ -401,6 +401,32 @@ func (f *fakeStore) BackupToFile(_ context.Context, _ string) error {
 	return nil
 }
 
+func (f *fakeStore) Path() string { return ":memory:" }
+
+func (f *fakeStore) ListScratchNotes(_ context.Context, _ int64) ([]domain.ScratchNote, error) {
+	return []domain.ScratchNote{}, nil
+}
+
+func (f *fakeStore) UpsertScratchNote(_ context.Context, in domain.UpsertScratchNoteInput) (domain.ScratchNote, error) {
+	return domain.ScratchNote{ID: f.allocID(), BookID: in.BookID, Title: in.Title, Content: in.Content, Tags: in.Tags, Pinned: in.Pinned}, nil
+}
+
+func (f *fakeStore) DeleteScratchNote(_ context.Context, _ int64) error { return nil }
+
+func (f *fakeStore) ListTrashItems(_ context.Context) ([]domain.TrashItem, error) {
+	return []domain.TrashItem{}, nil
+}
+
+func (f *fakeStore) RestoreTrashItem(_ context.Context, id int64) (domain.TrashRestoreResult, error) {
+	return domain.TrashRestoreResult{ItemID: id}, nil
+}
+
+func (f *fakeStore) DeleteTrashItem(_ context.Context, _ int64) error { return nil }
+
+func (f *fakeStore) ClearTrash(_ context.Context) (int64, error) { return 0, nil }
+
+func (f *fakeStore) RestoreDataFromFile(_ context.Context, _ string) (string, error) { return "", nil }
+
 func (f *fakeStore) ListProviders(_ context.Context) ([]domain.Provider, error) {
 	out := make([]domain.Provider, 0, len(f.providers))
 	for _, p := range f.providers {
