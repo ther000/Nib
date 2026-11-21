@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"sort"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -288,6 +289,87 @@ func (s *LibraryService) DeleteChapter(ctx context.Context, chapterID int64) err
 		return err
 	}
 	return st.DeleteChapter(ctx, chapterID)
+}
+
+// BatchFinalizeChapters 批量定稿选中章节。
+func (s *LibraryService) BatchFinalizeChapters(ctx context.Context, chapterIDs []int64) (int, error) {
+	if len(chapterIDs) == 0 {
+		return 0, &domain.ValidationError{Field: "chapterIds", Message: "请选择至少一章"}
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return 0, err
+	}
+	return st.BatchFinalizeChapters(ctx, chapterIDs)
+}
+
+// BatchDeleteChapters 批量删除选中章节（进入回收站，可在设置中恢复）。
+func (s *LibraryService) BatchDeleteChapters(ctx context.Context, chapterIDs []int64) (int, error) {
+	if len(chapterIDs) == 0 {
+		return 0, &domain.ValidationError{Field: "chapterIds", Message: "请选择至少一章"}
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return 0, err
+	}
+	return st.BatchDeleteChapters(ctx, chapterIDs)
+}
+
+// ExportChaptersTXT 弹出原生保存对话框，将选中章节按书内顺序合并导出为 ASCII 纯净 TXT。
+func (s *LibraryService) ExportChaptersTXT(ctx context.Context, bookID int64, chapterIDs []int64) (string, error) {
+	if err := validatePositiveID("bookId", bookID); err != nil {
+		return "", err
+	}
+	if len(chapterIDs) == 0 {
+		return "", &domain.ValidationError{Field: "chapterIds", Message: "请选择至少一章"}
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return "", err
+	}
+	book, err := st.GetBook(ctx, bookID)
+	if err != nil {
+		return "", err
+	}
+	volumes, err := st.ListVolumes(ctx, bookID)
+	if err != nil {
+		return "", err
+	}
+	chapters := make([]domain.Chapter, 0, len(chapterIDs))
+	seen := make(map[int64]struct{}, len(chapterIDs))
+	for _, id := range chapterIDs {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		chapter, err := st.GetChapter(ctx, id)
+		if err != nil {
+			return "", err
+		}
+		if chapter.BookID != bookID {
+			return "", &domain.ValidationError{Field: "chapterIds", Message: "所选章节不属于当前书籍"}
+		}
+		chapters = append(chapters, chapter)
+	}
+	sort.Slice(chapters, func(i, j int) bool { return chapters[i].GlobalSeq < chapters[j].GlobalSeq })
+	targetPath, err := mygo.Dialog.Save(mygo.SaveDialogOptions{
+		Parent:      mygo.CallerWindow(ctx),
+		Title:       "导出选中章节 TXT",
+		DefaultPath: exporter.SanitizeFilename(book.Title) + "-选章.txt",
+		Filters: []mygo.FileFilter{
+			{Name: "纯文本小说 (*.txt)", Extensions: []string{"txt"}},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(targetPath) == "" {
+		return "", nil
+	}
+	return exporter.ExportBookTXT(book, volumes, chapters, targetPath)
 }
 
 // ReplaceBookText 在全书范围查找并替换文本（每章正文修改前自动保存历史快照）。

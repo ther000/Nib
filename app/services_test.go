@@ -244,6 +244,29 @@ func (f *fakeStore) DeleteChapter(_ context.Context, chapterID int64) error {
 	return nil
 }
 
+func (f *fakeStore) BatchFinalizeChapters(_ context.Context, chapterIDs []int64) (int, error) {
+	count := 0
+	for _, id := range chapterIDs {
+		if c, ok := f.chapters[id]; ok {
+			c.Status = domain.ChapterStatusFinalized
+			f.chapters[id] = c
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (f *fakeStore) BatchDeleteChapters(_ context.Context, chapterIDs []int64) (int, error) {
+	count := 0
+	for _, id := range chapterIDs {
+		if _, ok := f.chapters[id]; ok {
+			delete(f.chapters, id)
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (f *fakeStore) ReplaceBookText(_ context.Context, in domain.ReplaceBookTextInput) (domain.ReplaceBookTextResult, error) {
 	var res domain.ReplaceBookTextResult
 	for id, c := range f.chapters {

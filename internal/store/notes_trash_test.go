@@ -161,6 +161,57 @@ func TestTrashChapterEntityAndBookRestore(t *testing.T) {
 	}
 }
 
+func TestBatchChapterOperationsAndSameVolumeReorder(t *testing.T) {
+	ctx := context.Background()
+	st := openMemoryStore(t)
+	book, err := st.CreateBook(ctx, domain.CreateBookInput{Title: "批量章节测试", Genre: domain.GenreUrban})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	vol, err := st.UpsertVolume(ctx, domain.UpsertVolumeInput{BookID: book.ID, Title: "第一卷"})
+	if err != nil {
+		t.Fatalf("UpsertVolume: %v", err)
+	}
+	ids := make([]int64, 0, 3)
+	for i := 1; i <= 3; i++ {
+		ch, err := st.CreateChapter(ctx, domain.CreateChapterInput{BookID: book.ID, VolumeID: vol.ID, Title: "章节" + string(rune('0'+i))})
+		if err != nil {
+			t.Fatalf("CreateChapter: %v", err)
+		}
+		ids = append(ids, ch.ID)
+	}
+
+	// 同卷拖拽：把第 3 章移到卷首。
+	if _, err := st.MoveChapter(ctx, domain.MoveChapterInput{ChapterID: ids[2], TargetVolumeID: vol.ID, TargetVolSeq: 1}); err != nil {
+		t.Fatalf("same-volume reorder: %v", err)
+	}
+	list, _ := st.ListChapters(ctx, vol.ID)
+	if len(list) != 3 || list[0].ID != ids[2] {
+		t.Fatalf("unexpected order after reorder: %+v", list)
+	}
+
+	if count, err := st.BatchFinalizeChapters(ctx, []int64{ids[0], ids[1]}); err != nil || count != 2 {
+		t.Fatalf("BatchFinalizeChapters: count=%d err=%v", count, err)
+	}
+	first, _ := st.GetChapter(ctx, ids[0])
+	second, _ := st.GetChapter(ctx, ids[1])
+	if first.Status != domain.ChapterStatusFinalized || second.Status != domain.ChapterStatusFinalized {
+		t.Fatalf("batch finalize failed: %+v %+v", first, second)
+	}
+
+	if count, err := st.BatchDeleteChapters(ctx, []int64{ids[0], ids[1]}); err != nil || count != 2 {
+		t.Fatalf("BatchDeleteChapters: count=%d err=%v", count, err)
+	}
+	remaining, _ := st.ListBookChapters(ctx, book.ID)
+	if len(remaining) != 1 || remaining[0].ID != ids[2] || remaining[0].GlobalSeq != 1 {
+		t.Fatalf("unexpected remaining chapters: %+v", remaining)
+	}
+	trash, _ := st.ListTrashItems(ctx)
+	if len(trash) != 2 {
+		t.Fatalf("expected 2 trash entries, got %+v", trash)
+	}
+}
+
 func TestAutoBackupAndRestoreDataFromFile(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

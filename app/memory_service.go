@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 
+	"github.com/egoist/mygo"
+
 	"nib/internal/domain"
 )
 
@@ -206,6 +208,49 @@ func (s *MemoryService) ExtractChapterDelta(ctx context.Context, chapterID int64
 	}
 	normalizeChapterDelta(&delta)
 	return delta, nil
+}
+
+// ReverseExtractBook 从旧稿采样章节流式反推设定、关系、伏笔与摘要，仅返回审阅清单。
+func (s *MemoryService) ReverseExtractBook(
+	ctx context.Context,
+	req domain.ReverseExtractRequest,
+	ch *mygo.Channel[domain.ReverseExtractChunk],
+) (domain.ReverseExtractPreview, error) {
+	if err := req.Validate(); err != nil {
+		return domain.ReverseExtractPreview{}, err
+	}
+	eng, genCtx, release, err := s.rt.trackReverseExtractEngine(ctx)
+	if err != nil {
+		return domain.ReverseExtractPreview{}, err
+	}
+	defer release()
+
+	emit := func(chunk domain.ReverseExtractChunk) error {
+		if ch == nil {
+			return nil
+		}
+		return ch.Send(chunk)
+	}
+	preview, err := eng.ReverseExtractBook(genCtx, req, emit)
+	if err != nil {
+		if genCtx.Err() != nil {
+			return domain.ReverseExtractPreview{}, domain.ErrGenerationCanceled
+		}
+		return domain.ReverseExtractPreview{}, err
+	}
+	return preview, nil
+}
+
+// ApplyReverseExtract 将作者勾选后的旧稿反推结果写入设定账本。
+func (s *MemoryService) ApplyReverseExtract(ctx context.Context, in domain.ApplyReverseExtractInput) (domain.ApplyReverseExtractResult, error) {
+	if err := in.Validate(); err != nil {
+		return domain.ApplyReverseExtractResult{}, err
+	}
+	eng, err := s.rt.reverseExtractEngine()
+	if err != nil {
+		return domain.ApplyReverseExtractResult{}, err
+	}
+	return eng.ApplyReverseExtract(ctx, in)
 }
 
 // GetPendingDelta 查询指定章节当前待审核的记忆变更单；若不存在返回 nil。

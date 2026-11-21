@@ -30,6 +30,19 @@ export interface ApplyGenesisResult {
   chapters: Chapter[];
 }
 
+export interface ApplyReverseExtractInput {
+  bookId: number;
+  preview: ReverseExtractPreview;
+}
+
+export interface ApplyReverseExtractResult {
+  entitiesCreated: number;
+  entitiesUpdated: number;
+  relationsCreated: number;
+  foreshadowings: number;
+  arcSummaries: number;
+}
+
 export interface ApplySurgicalDiffInput {
   chapterId: number;
   diffId: string;
@@ -813,6 +826,60 @@ export interface ReplaceBookTextResult {
   totalMatches: number;
 }
 
+export interface ReverseExtractArcSummary {
+  level: ArcSummaryLevel;
+  startSeq: number;
+  endSeq: number;
+  summary: string;
+}
+
+export interface ReverseExtractChunk {
+  kind: string;
+  delta?: string;
+  preview?: ReverseExtractPreview;
+  error?: string;
+  usage?: TokenUsage;
+}
+
+export interface ReverseExtractEntity {
+  name: string;
+  kind: EntityKind;
+  aliases: string[];
+  summary: string;
+  isInvariant: boolean;
+  attributes: Record<string, string>;
+  existingMatch: boolean;
+}
+
+export interface ReverseExtractForeshadowing {
+  title: string;
+  description: string;
+  plantedChapterSeq: number;
+  targetResolveSeq: number;
+}
+
+export interface ReverseExtractPreview {
+  entities: ReverseExtractEntity[];
+  relations: ReverseExtractRelation[];
+  foreshadowings: ReverseExtractForeshadowing[];
+  arcSummaries: ReverseExtractArcSummary[];
+  warnings: string[];
+}
+
+export interface ReverseExtractRelation {
+  sourceName: string;
+  targetName: string;
+  relationType: string;
+  description: string;
+}
+
+export interface ReverseExtractRequest {
+  bookId: number;
+  startSeq: number;
+  endSeq: number;
+  maxChapters: number;
+}
+
 export interface RewriteSelectionRequest {
   chapterId: number;
   selectedText: string;
@@ -1094,6 +1161,10 @@ export interface WritingStatsSummary {
 export const LibraryService = {
   /** ApplyBookGenesis 将作者确认后的开书企划一次性写入书库。 */
   applyBookGenesis: bind<[ApplyGenesisInput], ApplyGenesisResult>("LibraryService.ApplyBookGenesis", (in_: ApplyGenesisInput) => [in_]),
+  /** BatchDeleteChapters 批量删除选中章节（进入回收站，可在设置中恢复）。 */
+  batchDeleteChapters: bind<[number[]], number>("LibraryService.BatchDeleteChapters", (chapterIDs: number[]) => [chapterIDs]),
+  /** BatchFinalizeChapters 批量定稿选中章节。 */
+  batchFinalizeChapters: bind<[number[]], number>("LibraryService.BatchFinalizeChapters", (chapterIDs: number[]) => [chapterIDs]),
   /** BatchGenerateOutlines 调用 outline 模型路由流式批量生成 1~10 章结构化章纲与节拍卡并落库为 outlined 状态。 */
   batchGenerateOutlines: bind<[BatchOutlineRequest, Channel<OutlineChunk>], Chapter[]>("LibraryService.BatchGenerateOutlines", (req: BatchOutlineRequest, ch: Channel<OutlineChunk>) => [req, ch]),
   /** CreateBook 校验参数并创建一本新书。 */
@@ -1114,6 +1185,8 @@ export const LibraryService = {
   exportBookMarkdown: bind<[number], ExportResult>("LibraryService.ExportBookMarkdown", (bookID: number) => [bookID]),
   /** ExportBookTXT 弹出原生保存对话框，将整本书合并导出为纯净中文 TXT 文件（用户取消时返回空字符串）。 */
   exportBookTXT: bind<[number], string>("LibraryService.ExportBookTXT", (bookID: number) => [bookID]),
+  /** ExportChaptersTXT 弹出原生保存对话框，将选中章节按书内顺序合并导出为 ASCII 纯净 TXT。 */
+  exportChaptersTXT: bind<[number, number[]], string>("LibraryService.ExportChaptersTXT", (bookID: number, chapterIDs: number[]) => [bookID, chapterIDs]),
   /** FinalizeChapter 将章节状态置为 finalized，并在书籍配置了导出目录时触发单向 Markdown 同步。 */
   finalizeChapter: bind<[number], Chapter>("LibraryService.FinalizeChapter", (chapterID: number) => [chapterID]),
   /** GenerateBookGenesis 根据一句话灵感流式生成完整开书企划（书名、简介、金手指、初始设定、第一卷与初始章纲）。 */
@@ -1250,6 +1323,8 @@ export const StudioService = {
 export const MemoryService = {
   /** ApplyDeltaDecisions 在事务内应用作者对记忆变更单的逐条审定结论，提交选定项为 committed 并对下游受影响章节标脏。 */
   applyDeltaDecisions: bind<[ApplyDeltaInput], ApplyDeltaResult>("MemoryService.ApplyDeltaDecisions", (in_: ApplyDeltaInput) => [in_]),
+  /** ApplyReverseExtract 将作者勾选后的旧稿反推结果写入设定账本。 */
+  applyReverseExtract: bind<[ApplyReverseExtractInput], ApplyReverseExtractResult>("MemoryService.ApplyReverseExtract", (in_: ApplyReverseExtractInput) => [in_]),
   /** DeleteForeshadowing 删除指定伏笔记录。 */
   deleteForeshadowing: bind<[number], void>("MemoryService.DeleteForeshadowing", (id: number) => [id]),
   /** ExtractChapterDelta 调用 extract 模型路由抽取本章增量状态与伏笔变更提案（写入 pending 态变更单，绝不静默入库）。 */
@@ -1264,6 +1339,8 @@ export const MemoryService = {
   listForeshadowings: bind<[number, string], Foreshadowing[]>("MemoryService.ListForeshadowings", (bookID: number, status: string) => [bookID, status]),
   /** ListStateEvents 查询实体状态变更事件流水；entityID=0 表示查询全书，upToSeq=0 表示不限截止章号。 */
   listStateEvents: bind<[number, number, number, boolean], EntityStateEvent[]>("MemoryService.ListStateEvents", (bookID: number, entityID: number, upToSeq: number, includePending: boolean) => [bookID, entityID, upToSeq, includePending]),
+  /** ReverseExtractBook 从旧稿采样章节流式反推设定、关系、伏笔与摘要，仅返回审阅清单。 */
+  reverseExtractBook: bind<[ReverseExtractRequest, Channel<ReverseExtractChunk>], ReverseExtractPreview>("MemoryService.ReverseExtractBook", (req: ReverseExtractRequest, ch: Channel<ReverseExtractChunk>) => [req, ch]),
   /** SearchMemory 执行 FTS5 trigram + 双字 LIKE 回退混合记忆检索（maxChapterSeq=0 表示不限章号上限）。 */
   searchMemory: bind<[number, string, number], MemorySearchHit[]>("MemoryService.SearchMemory", (bookID: number, query: string, maxChapterSeq: number) => [bookID, query, maxChapterSeq]),
   /** SnapshotAt 按时间轴折算截至 chapterSeq（含）时的全书实体状态快照（严禁透漏未来章节事件）。 */

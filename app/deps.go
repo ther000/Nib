@@ -49,6 +49,8 @@ type Store interface {
 	InsertChapter(ctx context.Context, in domain.InsertChapterInput) (domain.Chapter, error)
 	MoveChapter(ctx context.Context, in domain.MoveChapterInput) (domain.Chapter, error)
 	DeleteChapter(ctx context.Context, chapterID int64) error
+	BatchFinalizeChapters(ctx context.Context, chapterIDs []int64) (int, error)
+	BatchDeleteChapters(ctx context.Context, chapterIDs []int64) (int, error)
 	ReplaceBookText(ctx context.Context, in domain.ReplaceBookTextInput) (domain.ReplaceBookTextResult, error)
 	UpdateChapterMeta(ctx context.Context, in domain.UpdateChapterMetaInput) (domain.Chapter, error)
 	SaveChapterDraft(ctx context.Context, in domain.SaveChapterDraftInput) (domain.Chapter, error)
@@ -182,6 +184,16 @@ type BatchEngine interface {
 	StartBatchRun(ctx context.Context, bookID int64, chapterIDs []int64, mode domain.BatchMode) (domain.BatchRun, error)
 	CancelBatchRun(ctx context.Context, batchID int64) (domain.BatchRun, error)
 	RetryBatchItem(ctx context.Context, itemID int64) (domain.BatchRun, error)
+}
+
+// ReverseExtractEngine 定义旧稿导入后的 AI 设定反推与确认落库接口（由 internal/pipeline 实现）。
+type ReverseExtractEngine interface {
+	ReverseExtractBook(
+		ctx context.Context,
+		req domain.ReverseExtractRequest,
+		emit func(domain.ReverseExtractChunk) error,
+	) (domain.ReverseExtractPreview, error)
+	ApplyReverseExtract(ctx context.Context, in domain.ApplyReverseExtractInput) (domain.ApplyReverseExtractResult, error)
 }
 
 // GenesisEngine 定义「AI 一句话开书」企划生成与一键落库接口（由 internal/pipeline 实现，零 MyGo 依赖）。
@@ -600,6 +612,54 @@ func (r *Runtime) autopilotEngine() (AutopilotEngine, error) {
 		return ae, nil
 	}
 	return nil, ErrRuntimeNotReady
+}
+
+func (r *Runtime) reverseExtractEngine() (ReverseExtractEngine, error) {
+	if r == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.ready || r.closed {
+		return nil, ErrRuntimeNotReady
+	}
+	if eng, ok := r.deps.Pipeline.(ReverseExtractEngine); ok {
+		return eng, nil
+	}
+	return nil, ErrRuntimeNotReady
+}
+
+func (r *Runtime) trackReverseExtractEngine(callCtx context.Context) (ReverseExtractEngine, context.Context, func(), error) {
+	if r == nil {
+		return nil, nil, nil, ErrRuntimeNotReady
+	}
+	r.mu.RLock()
+	if !r.ready || r.closed {
+		r.mu.RUnlock()
+		return nil, nil, nil, ErrRuntimeNotReady
+	}
+	eng, ok := r.deps.Pipeline.(ReverseExtractEngine)
+	if !ok || eng == nil {
+		r.mu.RUnlock()
+		return nil, nil, nil, ErrRuntimeNotReady
+	}
+	baseCtx := r.baseCtx
+	r.activeWG.Add(1)
+	r.mu.RUnlock()
+
+	engCtx, cancel := context.WithCancel(callCtx)
+	var stopWatch func() bool
+	if baseCtx != nil {
+		stopWatch = context.AfterFunc(baseCtx, cancel)
+	}
+	release := func() {
+		if stopWatch != nil {
+			stopWatch()
+		}
+		cancel()
+		r.activeWG.Done()
+	}
+	return eng, engCtx, release, nil
 }
 
 func (r *Runtime) arcSummaryGenerator() (ArcSummaryGenerator, error) {

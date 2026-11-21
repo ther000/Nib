@@ -2183,6 +2183,17 @@ export function SettingsModal() {
                       >
                         {exportingFormat === "epub" ? "打包中…" : "导出 EPUB 电子书"}
                       </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          window.dispatchEvent(
+                            new CustomEvent("nib:reverse-extract", { detail: { bookId: activeBook.id } })
+                          )
+                        }
+                        className="rounded-md border border-accent/40 bg-accent-soft px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:border-accent"
+                      >
+                        AI 反推旧稿设定
+                      </button>
                     </div>
                   </section>
                 )}

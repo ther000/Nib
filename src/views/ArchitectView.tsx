@@ -7,7 +7,10 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  Download,
+  GripVertical,
   Layers,
+  ListChecks,
   PenLine,
   Pencil,
   Plus,
@@ -111,6 +114,11 @@ export function ArchitectView() {
   const [insertChapterTitle, setInsertChapterTitle] = useState("");
   const [insertingChapter, setInsertingChapter] = useState(false);
   const [movingChapterId, setMovingChapterId] = useState<number | null>(null);
+  const [draggingChapterId, setDraggingChapterId] = useState<number | null>(null);
+  const [dragOverVolumeId, setDragOverVolumeId] = useState<number | null>(null);
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedChapterIds, setSelectedChapterIds] = useState<Set<number>>(new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
   const [volumeDialog, setVolumeDialog] = useState<VolumeDialogState | null>(null);
   const [savingVolume, setSavingVolume] = useState(false);
 
@@ -454,6 +462,86 @@ export function ArchitectView() {
     }
   };
 
+  const handleMoveChapterToVolume = async (chapId: number, targetVolumeId: number, targetVolSeq = 0) => {
+    if (!activeBook || movingChapterId !== null) return;
+    setMovingChapterId(chapId);
+    try {
+      await LibraryService.moveChapter({ chapterId: chapId, targetVolumeId, targetVolSeq });
+      await refreshBookData(activeBook.id, activeChapterId);
+      setPacingRefreshKey((k) => k + 1);
+    } catch (err) {
+      notify({ tone: "danger", message: "移动章节失败", detail: formatErrorMessage(err) });
+    } finally {
+      setMovingChapterId(null);
+    }
+  };
+
+  const handleDropChapter = async (targetVolumeId: number, targetVolSeq: number) => {
+    const chapId = draggingChapterId;
+    setDraggingChapterId(null);
+    setDragOverVolumeId(null);
+    if (!chapId) return;
+    await handleMoveChapterToVolume(chapId, targetVolumeId, targetVolSeq);
+  };
+
+  const toggleChapterSelection = (chapId: number) => {
+    setSelectedChapterIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(chapId)) next.delete(chapId);
+      else next.add(chapId);
+      return next;
+    });
+  };
+
+  const handleBatchFinalize = async () => {
+    if (!activeBook || selectedChapterIds.size === 0) return;
+    setBatchBusy(true);
+    try {
+      const count = await LibraryService.batchFinalizeChapters(Array.from(selectedChapterIds));
+      await refreshBookData(activeBook.id, activeChapterId);
+      setSelectedChapterIds(new Set());
+      notify({ tone: "ok", message: `已定稿 ${count} 章` });
+    } catch (err) {
+      notify({ tone: "danger", message: "批量定稿失败", detail: formatErrorMessage(err) });
+    } finally {
+      setBatchBusy(false);
+    }
+  };
+
+  const handleBatchDelete = async () => {
+    if (!activeBook || selectedChapterIds.size === 0) return;
+    const confirmed = window.confirm(`确认删除选中的 ${selectedChapterIds.size} 章？删除后可在设置里的回收站恢复。`);
+    if (!confirmed) return;
+    setBatchBusy(true);
+    try {
+      const count = await LibraryService.batchDeleteChapters(Array.from(selectedChapterIds));
+      setSelectedChapterIds(new Set());
+      const nextPreferred = selectedChapterIds.has(activeChapterId ?? -1) ? null : activeChapterId;
+      await refreshBookData(activeBook.id, nextPreferred);
+      setPacingRefreshKey((k) => k + 1);
+      notify({ tone: "ok", message: `已删除 ${count} 章，可在回收站恢复` });
+    } catch (err) {
+      notify({ tone: "danger", message: "批量删除失败", detail: formatErrorMessage(err) });
+    } finally {
+      setBatchBusy(false);
+    }
+  };
+
+  const handleBatchExport = async () => {
+    if (!activeBook || selectedChapterIds.size === 0) return;
+    setBatchBusy(true);
+    try {
+      const outPath = await LibraryService.exportChaptersTXT(activeBook.id, Array.from(selectedChapterIds));
+      if (outPath) {
+        notify({ tone: "ok", message: `已导出 ${selectedChapterIds.size} 章`, detail: outPath });
+      }
+    } catch (err) {
+      notify({ tone: "danger", message: "导出选中章节失败", detail: formatErrorMessage(err) });
+    } finally {
+      setBatchBusy(false);
+    }
+  };
+
   const handleInsertChapterAfter = async (volId: number, afterChapId: number) => {
     if (!activeBook || insertingChapter) return;
     const trimmed = insertChapterTitle.trim();
@@ -644,6 +732,20 @@ export function ArchitectView() {
             )}
             <button
               type="button"
+              onClick={() => {
+                setBatchMode((value) => !value);
+                setSelectedChapterIds(new Set());
+              }}
+              title="批量管理章节"
+              className={`flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium transition-colors ${
+                batchMode ? "bg-accent-soft text-accent" : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+              }`}
+            >
+              <ListChecks className="h-3.5 w-3.5" />
+              <span>批量</span>
+            </button>
+            <button
+              type="button"
               onClick={openCreateVolume}
               title="新建卷"
               className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
@@ -653,6 +755,63 @@ export function ArchitectView() {
             </button>
           </div>
         </div>
+
+        {batchMode && (
+          <div className="flex flex-col gap-1.5 border-b border-border-subtle bg-accent-soft/25 px-2.5 py-2">
+            <div className="flex items-center justify-between text-[11px] text-ink-secondary">
+              <span>已选 {selectedChapterIds.size} 章</span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={batchBusy || selectedChapterIds.size === 0}
+                  onClick={() => void handleBatchFinalize()}
+                  className="rounded border border-border-subtle bg-surface px-2 py-0.5 text-[11px] text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
+                >
+                  定稿
+                </button>
+                <button
+                  type="button"
+                  disabled={batchBusy || selectedChapterIds.size === 0}
+                  onClick={() => void handleBatchExport()}
+                  className="flex items-center gap-1 rounded border border-border-subtle bg-surface px-2 py-0.5 text-[11px] text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
+                >
+                  <Download className="h-3 w-3" />
+                  导出
+                </button>
+                <button
+                  type="button"
+                  disabled={batchBusy || selectedChapterIds.size === 0}
+                  onClick={() => void handleBatchDelete()}
+                  className="rounded border border-border-subtle bg-surface px-2 py-0.5 text-[11px] text-danger transition-colors hover:border-danger/40 disabled:opacity-40"
+                >
+                  删除
+                </button>
+              </div>
+            </div>
+            {selectedChapterIds.size > 0 && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const all = new Set(chapters.map((chapter) => chapter.id));
+                    setSelectedChapterIds(all);
+                  }}
+                  className="text-[11px] text-ink-muted hover:text-accent"
+                >
+                  全选
+                </button>
+                <span className="text-border-strong">/</span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedChapterIds(new Set())}
+                  className="text-[11px] text-ink-muted hover:text-accent"
+                >
+                  清空
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto px-2 py-2">
           {volumes.length === 0 ? (
@@ -715,7 +874,22 @@ export function ArchitectView() {
                           },
                         ]);
                       }}
-                      className="group flex items-center gap-1 rounded-md px-1.5 py-1.5 transition-colors hover:bg-elevated/70"
+                      onDragOver={(e) => {
+                        if (draggingChapterId === null) return;
+                        e.preventDefault();
+                        setDragOverVolumeId(vol.id);
+                      }}
+                      onDragLeave={() => {
+                        if (dragOverVolumeId === vol.id) setDragOverVolumeId(null);
+                      }}
+                      onDrop={(e) => {
+                        if (draggingChapterId === null) return;
+                        e.preventDefault();
+                        void handleDropChapter(vol.id, 0);
+                      }}
+                      className={`group flex items-center gap-1 rounded-md px-1.5 py-1.5 transition-colors hover:bg-elevated/70 ${
+                        dragOverVolumeId === vol.id ? "bg-accent-soft/40 ring-1 ring-accent/30" : ""
+                      }`}
                     >
                       <button
                         type="button"
@@ -834,6 +1008,14 @@ export function ArchitectView() {
                                       disabled: chapIdx === volChapters.length - 1 || movingChapterId !== null,
                                       onSelect: () => void handleMoveChapter(chap.id, "down"),
                                     },
+                                    ...volumes
+                                      .filter((target) => target.id !== vol.id)
+                                      .map((target) => ({
+                                        label: `移动到「${target.title}」`,
+                                        icon: <ArrowRight className="h-3.5 w-3.5" />,
+                                        disabled: movingChapterId !== null,
+                                        onSelect: () => void handleMoveChapterToVolume(chap.id, target.id),
+                                      })),
                                     {
                                       label: "复制章节标题",
                                       icon: <Copy className="h-3.5 w-3.5" />,
@@ -855,15 +1037,54 @@ export function ArchitectView() {
                                     },
                                   ]);
                                 }}
+                                draggable={!batchMode && movingChapterId === null}
+                                onDragStart={(e) => {
+                                  e.dataTransfer.effectAllowed = "move";
+                                  e.dataTransfer.setData("text/plain", String(chap.id));
+                                  setDraggingChapterId(chap.id);
+                                }}
+                                onDragEnd={() => {
+                                  setDraggingChapterId(null);
+                                  setDragOverVolumeId(null);
+                                }}
+                                onDragOver={(e) => {
+                                  if (draggingChapterId === null) return;
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setDragOverVolumeId(vol.id);
+                                }}
+                                onDrop={(e) => {
+                                  if (draggingChapterId === null) return;
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  void handleDropChapter(vol.id, chapIdx + 1);
+                                }}
                                 className={`group flex w-full items-center gap-1 rounded-md px-2 py-1.5 transition-colors ${
                                   selected
                                     ? "bg-accent-soft text-ink-primary"
                                     : "text-ink-secondary hover:bg-elevated/60 hover:text-ink-primary"
-                                }`}
+                                } ${dragOverVolumeId === vol.id ? "ring-1 ring-accent/25" : ""}`}
                               >
+                                {batchMode && (
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleChapterSelection(chap.id)}
+                                    aria-label={selectedChapterIds.has(chap.id) ? "取消选择" : "选择本章"}
+                                    className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                      selectedChapterIds.has(chap.id)
+                                        ? "border-accent bg-accent text-canvas"
+                                        : "border-border-strong bg-canvas"
+                                    }`}
+                                  >
+                                    {selectedChapterIds.has(chap.id) && <Check className="h-3 w-3" />}
+                                  </button>
+                                )}
+                                {!batchMode && (
+                                  <GripVertical className="h-3 w-3 shrink-0 cursor-grab text-ink-muted opacity-0 group-hover:opacity-100" />
+                                )}
                                 <button
                                   type="button"
-                                  onClick={() => void selectChapter(chap.id)}
+                                  onClick={() => (batchMode ? toggleChapterSelection(chap.id) : void selectChapter(chap.id))}
                                   className="flex min-w-0 flex-1 items-center gap-2 text-left"
                                 >
                                   <span

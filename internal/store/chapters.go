@@ -375,6 +375,86 @@ func (s *Store) DeleteChapter(ctx context.Context, chapterID int64) error {
 	})
 }
 
+// BatchFinalizeChapters 批量把章节状态改为 finalized，返回实际更新章数。
+func (s *Store) BatchFinalizeChapters(ctx context.Context, chapterIDs []int64) (int, error) {
+	ids := uniquePositiveIDs(chapterIDs)
+	if len(ids) == 0 {
+		return 0, &domain.ValidationError{Field: "chapterIds", Message: "请选择至少一章"}
+	}
+	var updated int
+	err := s.withWriteTx(ctx, func(tx *sql.Tx) error {
+		for _, id := range ids {
+			res, err := tx.ExecContext(ctx, `
+				UPDATE chapters
+				SET status = 'finalized', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				WHERE id = ?
+			`, id)
+			if err != nil {
+				return mapSQLiteError(err)
+			}
+			affected, err := res.RowsAffected()
+			if err != nil {
+				return err
+			}
+			updated += int(affected)
+		}
+		return nil
+	})
+	return updated, err
+}
+
+// BatchDeleteChapters 批量删除章节（逐章写入回收站快照）并重排受影响书籍的章序。
+func (s *Store) BatchDeleteChapters(ctx context.Context, chapterIDs []int64) (int, error) {
+	ids := uniquePositiveIDs(chapterIDs)
+	if len(ids) == 0 {
+		return 0, &domain.ValidationError{Field: "chapterIds", Message: "请选择至少一章"}
+	}
+	var deleted int
+	err := s.withWriteTx(ctx, func(tx *sql.Tx) error {
+		books := make(map[int64]struct{})
+		for _, id := range ids {
+			chapter, err := getChapterRow(ctx, tx, id)
+			if err != nil {
+				if errors.Is(err, domain.ErrNotFound) {
+					continue
+				}
+				return err
+			}
+			if err := snapshotChapterTrashTx(ctx, tx, id); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM chapters WHERE id = ?`, id); err != nil {
+				return mapSQLiteError(err)
+			}
+			books[chapter.BookID] = struct{}{}
+			deleted++
+		}
+		for bookID := range books {
+			if err := resequenceBookChaptersTx(ctx, tx, bookID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return deleted, err
+}
+
+func uniquePositiveIDs(ids []int64) []int64 {
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
 // InsertChapter 在指定卷内某章之后（afterChapterId=0 表示卷首）插入新章，并重排全书与卷内章序。
 func (s *Store) InsertChapter(ctx context.Context, in domain.InsertChapterInput) (domain.Chapter, error) {
 	if err := in.Validate(); err != nil {
@@ -480,7 +560,32 @@ func (s *Store) MoveChapter(ctx context.Context, in domain.MoveChapterInput) (do
 		}
 
 		dir := strings.ToLower(strings.TrimSpace(in.Direction))
-		if in.TargetVolumeID > 0 && in.TargetVolumeID != chap.VolumeID {
+		if in.TargetVolumeID > 0 && in.TargetVolumeID == chap.VolumeID && in.TargetVolSeq > 0 {
+			// 同卷内按目标序号重排（拖拽排序）。
+			volIDs, err := listVolumeChapterIDsTx(ctx, tx, chap.VolumeID)
+			if err != nil {
+				return err
+			}
+			ordered := make([]int64, 0, len(volIDs))
+			for _, cid := range volIDs {
+				if cid != chap.ID {
+					ordered = append(ordered, cid)
+				}
+			}
+			insertIdx := in.TargetVolSeq - 1
+			if insertIdx < 0 {
+				insertIdx = 0
+			}
+			if insertIdx > len(ordered) {
+				insertIdx = len(ordered)
+			}
+			ordered = append(ordered[:insertIdx], append([]int64{chap.ID}, ordered[insertIdx:]...)...)
+			for i, cid := range ordered {
+				if _, err := tx.ExecContext(ctx, `UPDATE chapters SET vol_seq = ? WHERE id = ?`, i+1, cid); err != nil {
+					return mapSQLiteError(err)
+				}
+			}
+		} else if in.TargetVolumeID > 0 && in.TargetVolumeID != chap.VolumeID {
 			var targetBookID int64
 			if err := tx.QueryRowContext(ctx, `SELECT book_id FROM volumes WHERE id = ?`, in.TargetVolumeID).Scan(&targetBookID); err != nil {
 				if errors.Is(err, sql.ErrNoRows) {

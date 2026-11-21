@@ -57,6 +57,10 @@ export function HomeView() {
       notify({
         tone: "ok",
         message: `已导入《${res.book.title}》（${res.chapterCount} 章，${formatNumber(res.totalWords)} 字）`,
+        actionLabel: "AI 反推设定",
+        onAction: () => {
+          window.dispatchEvent(new CustomEvent("nib:reverse-extract", { detail: { bookId: res.book.id } }));
+        },
       });
     } catch (err) {
       notify({ tone: "danger", message: "导入旧稿失败", detail: formatErrorMessage(err) });
