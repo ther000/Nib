@@ -68,6 +68,16 @@ func (f *fakeStore) CreateBook(_ context.Context, in domain.CreateBookInput) (do
 		GoldenFinger:       in.GoldenFinger,
 		TargetChapterWords: in.TargetChapterWords,
 		ExportDir:          in.ExportDir,
+		POVMode:            in.POVMode,
+		PacingStyle:        in.PacingStyle,
+		WritingPrompt:      in.WritingPrompt,
+		DailyWordGoal:      in.DailyWordGoal,
+	}
+	if b.POVMode == "" {
+		b.POVMode = "third_limited"
+	}
+	if b.DailyWordGoal <= 0 {
+		b.DailyWordGoal = domain.DefaultDailyWordGoal
 	}
 	f.books[b.ID] = b
 	return b, nil
@@ -84,6 +94,18 @@ func (f *fakeStore) UpdateBook(_ context.Context, in domain.UpdateBookInput) (do
 	b.GoldenFinger = in.GoldenFinger
 	b.TargetChapterWords = in.TargetChapterWords
 	b.ExportDir = in.ExportDir
+	if in.POVMode != "" {
+		b.POVMode = in.POVMode
+	}
+	if in.PacingStyle != "" {
+		b.PacingStyle = in.PacingStyle
+	}
+	if in.WritingPrompt != "" {
+		b.WritingPrompt = in.WritingPrompt
+	}
+	if in.DailyWordGoal > 0 {
+		b.DailyWordGoal = in.DailyWordGoal
+	}
 	f.books[b.ID] = b
 	return b, nil
 }
@@ -91,6 +113,28 @@ func (f *fakeStore) UpdateBook(_ context.Context, in domain.UpdateBookInput) (do
 func (f *fakeStore) DeleteBook(_ context.Context, id int64) error {
 	delete(f.books, id)
 	return nil
+}
+
+func (f *fakeStore) GetWritingStats(_ context.Context, bookID int64, days int) (domain.WritingStatsSummary, error) {
+	out := domain.WritingStatsSummary{BookID: bookID, DailyGoal: domain.DefaultDailyWordGoal}
+	if days <= 0 {
+		days = 14
+	}
+	out.Daily = make([]domain.DailyWordStat, days)
+	for _, c := range f.chapters {
+		if bookID > 0 && c.BookID != bookID {
+			continue
+		}
+		out.TotalChapters++
+		out.TotalWords += c.WordCount
+		if c.Status == domain.ChapterStatusFinalized {
+			out.FinalizedChapters++
+		}
+	}
+	if b, ok := f.books[bookID]; ok && b.DailyWordGoal > 0 {
+		out.DailyGoal = b.DailyWordGoal
+	}
+	return out, nil
 }
 
 func (f *fakeStore) ListVolumes(_ context.Context, bookID int64) ([]domain.Volume, error) {

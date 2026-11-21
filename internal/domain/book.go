@@ -10,6 +10,7 @@ const (
 	MinTargetChapterWords     = 300
 	MaxTargetChapterWords     = 50000
 	DefaultBeatTargetWords    = 500
+	DefaultDailyWordGoal      = 4000
 )
 
 // Book 表示单部长篇作品根容器（对应 books 表）。
@@ -21,6 +22,13 @@ type Book struct {
 	GoldenFinger       string  `json:"goldenFinger"`
 	TargetChapterWords int     `json:"targetChapterWords"`
 	ExportDir          string  `json:"exportDir"`
+	POVMode            string  `json:"povMode"`
+	PacingStyle        string  `json:"pacingStyle"`
+	WritingPrompt      string  `json:"writingPrompt"`
+	DailyWordGoal      int     `json:"dailyWordGoal"`
+	ChapterCount       int     `json:"chapterCount"`
+	FinalizedCount     int     `json:"finalizedCount"`
+	TotalWords         int     `json:"totalWords"`
 	CreatedAt          string  `json:"createdAt"`
 	UpdatedAt          string  `json:"updatedAt"`
 }
@@ -33,6 +41,10 @@ type CreateBookInput struct {
 	GoldenFinger       string  `json:"goldenFinger"`
 	TargetChapterWords int     `json:"targetChapterWords"`
 	ExportDir          string  `json:"exportDir"`
+	POVMode            string  `json:"povMode,omitempty"`
+	PacingStyle        string  `json:"pacingStyle,omitempty"`
+	WritingPrompt      string  `json:"writingPrompt,omitempty"`
+	DailyWordGoal      int     `json:"dailyWordGoal,omitempty"`
 }
 
 func (in CreateBookInput) Validate() error {
@@ -44,6 +56,9 @@ func (in CreateBookInput) Validate() error {
 	}
 	if in.TargetChapterWords != 0 && (in.TargetChapterWords < MinTargetChapterWords || in.TargetChapterWords > MaxTargetChapterWords) {
 		return newValidationError("targetChapterWords", "目标章字数需在 300 到 50000 之间")
+	}
+	if in.DailyWordGoal < 0 || in.DailyWordGoal > 200000 {
+		return newValidationError("dailyWordGoal", "日更目标字数需在 0 到 200000 之间")
 	}
 	return nil
 }
@@ -57,6 +72,10 @@ type UpdateBookInput struct {
 	GoldenFinger       string  `json:"goldenFinger"`
 	TargetChapterWords int     `json:"targetChapterWords"`
 	ExportDir          string  `json:"exportDir"`
+	POVMode            string  `json:"povMode,omitempty"`
+	PacingStyle        string  `json:"pacingStyle,omitempty"`
+	WritingPrompt      string  `json:"writingPrompt,omitempty"`
+	DailyWordGoal      int     `json:"dailyWordGoal,omitempty"`
 }
 
 func (in UpdateBookInput) Validate() error {
@@ -70,7 +89,30 @@ func (in UpdateBookInput) Validate() error {
 		GoldenFinger:       in.GoldenFinger,
 		TargetChapterWords: in.TargetChapterWords,
 		ExportDir:          in.ExportDir,
+		POVMode:            in.POVMode,
+		PacingStyle:        in.PacingStyle,
+		WritingPrompt:      in.WritingPrompt,
+		DailyWordGoal:      in.DailyWordGoal,
 	}.Validate()
+}
+
+// DailyWordStat 表示单日码字产出统计。
+type DailyWordStat struct {
+	Date            string `json:"date"`
+	WordsDelta      int    `json:"wordsDelta"`
+	ChaptersTouched int    `json:"chaptersTouched"`
+}
+
+// WritingStatsSummary 表示首页与单书的写作产出总览。
+type WritingStatsSummary struct {
+	BookID            int64           `json:"bookId"`
+	TodayWords        int             `json:"todayWords"`
+	DailyGoal         int             `json:"dailyGoal"`
+	StreakDays        int             `json:"streakDays"`
+	TotalWords        int             `json:"totalWords"`
+	TotalChapters     int             `json:"totalChapters"`
+	FinalizedChapters int             `json:"finalizedChapters"`
+	Daily             []DailyWordStat `json:"daily"`
 }
 
 // Volume 表示书籍的一级大弧线卷单元（对应 volumes 表）。

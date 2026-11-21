@@ -22,6 +22,7 @@ type Store interface {
 	CreateBook(ctx context.Context, in domain.CreateBookInput) (domain.Book, error)
 	UpdateBook(ctx context.Context, in domain.UpdateBookInput) (domain.Book, error)
 	DeleteBook(ctx context.Context, id int64) error
+	GetWritingStats(ctx context.Context, bookID int64, days int) (domain.WritingStatsSummary, error)
 
 	// Volumes
 	ListVolumes(ctx context.Context, bookID int64) ([]domain.Volume, error)

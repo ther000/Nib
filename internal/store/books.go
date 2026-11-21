@@ -6,16 +6,36 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"nib/internal/domain"
 )
 
-// ListBooks 返回全部书籍列表（按创建时间倒序、ID 倒序）。
+const bookSelectWithStats = `
+	SELECT
+		b.id, b.title, b.genre, b.premise, b.golden_finger,
+		b.target_chapter_words, b.export_dir,
+		b.pov_mode, b.pacing_style, b.writing_prompt, b.daily_word_goal,
+		COALESCE(c.chap_count, 0),
+		COALESCE(c.finalized_count, 0),
+		COALESCE(c.total_words, 0),
+		b.created_at, b.updated_at
+	FROM books b
+	LEFT JOIN (
+		SELECT
+			book_id,
+			COUNT(*) AS chap_count,
+			SUM(CASE WHEN status = 'finalized' THEN 1 ELSE 0 END) AS finalized_count,
+			COALESCE(SUM(word_count), 0) AS total_words
+		FROM chapters
+		GROUP BY book_id
+	) c ON c.book_id = b.id
+`
+
+// ListBooks 返回全部书籍列表（含聚合章数与总字数，按创建时间倒序、ID 倒序）。
 func (s *Store) ListBooks(ctx context.Context) ([]domain.Book, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, title, genre, premise, golden_finger, target_chapter_words, export_dir, created_at, updated_at
-		FROM books
-		ORDER BY created_at DESC, id DESC
+	rows, err := s.db.QueryContext(ctx, bookSelectWithStats+`
+		ORDER BY b.created_at DESC, b.id DESC
 	`)
 	if err != nil {
 		return nil, mapSQLiteError(err)
@@ -51,13 +71,25 @@ func (s *Store) CreateBook(ctx context.Context, in domain.CreateBookInput) (doma
 	if targetWords == 0 {
 		targetWords = domain.DefaultTargetChapterWords
 	}
+	povMode := strings.TrimSpace(in.POVMode)
+	if povMode == "" {
+		povMode = "third_limited"
+	}
+	dailyGoal := in.DailyWordGoal
+	if dailyGoal <= 0 {
+		dailyGoal = domain.DefaultDailyWordGoal
+	}
 
 	var result domain.Book
 	err := s.withWriteTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO books (title, genre, premise, golden_finger, target_chapter_words, export_dir)
-			VALUES (?, ?, ?, ?, ?, ?)
-		`, strings.TrimSpace(in.Title), string(in.Genre), in.Premise, in.GoldenFinger, targetWords, strings.TrimSpace(in.ExportDir))
+			INSERT INTO books (
+				title, genre, premise, golden_finger, target_chapter_words, export_dir,
+				pov_mode, pacing_style, writing_prompt, daily_word_goal
+			)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, strings.TrimSpace(in.Title), string(in.Genre), in.Premise, in.GoldenFinger, targetWords, strings.TrimSpace(in.ExportDir),
+			povMode, strings.TrimSpace(in.PacingStyle), strings.TrimSpace(in.WritingPrompt), dailyGoal)
 		if err != nil {
 			return mapSQLiteError(err)
 		}
@@ -74,7 +106,7 @@ func (s *Store) CreateBook(ctx context.Context, in domain.CreateBookInput) (doma
 	return result, nil
 }
 
-// UpdateBook 更新书籍核心设定。
+// UpdateBook 更新书籍核心设定与写作规范。
 func (s *Store) UpdateBook(ctx context.Context, in domain.UpdateBookInput) (domain.Book, error) {
 	if err := in.Validate(); err != nil {
 		return domain.Book{}, err
@@ -87,6 +119,25 @@ func (s *Store) UpdateBook(ctx context.Context, in domain.UpdateBookInput) (doma
 
 	var result domain.Book
 	err := s.withWriteTx(ctx, func(tx *sql.Tx) error {
+		existing, err := getBookRow(ctx, tx, in.ID)
+		if err != nil {
+			return err
+		}
+		povMode := strings.TrimSpace(in.POVMode)
+		if povMode == "" {
+			povMode = existing.POVMode
+			if povMode == "" {
+				povMode = "third_limited"
+			}
+		}
+		dailyGoal := in.DailyWordGoal
+		if dailyGoal <= 0 {
+			dailyGoal = existing.DailyWordGoal
+			if dailyGoal <= 0 {
+				dailyGoal = domain.DefaultDailyWordGoal
+			}
+		}
+
 		res, err := tx.ExecContext(ctx, `
 			UPDATE books
 			SET title = ?,
@@ -95,9 +146,14 @@ func (s *Store) UpdateBook(ctx context.Context, in domain.UpdateBookInput) (doma
 			    golden_finger = ?,
 			    target_chapter_words = ?,
 			    export_dir = ?,
+			    pov_mode = ?,
+			    pacing_style = ?,
+			    writing_prompt = ?,
+			    daily_word_goal = ?,
 			    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			WHERE id = ?
-		`, strings.TrimSpace(in.Title), string(in.Genre), in.Premise, in.GoldenFinger, targetWords, strings.TrimSpace(in.ExportDir), in.ID)
+		`, strings.TrimSpace(in.Title), string(in.Genre), in.Premise, in.GoldenFinger, targetWords, strings.TrimSpace(in.ExportDir),
+			povMode, strings.TrimSpace(in.PacingStyle), strings.TrimSpace(in.WritingPrompt), dailyGoal, in.ID)
 		if err != nil {
 			return mapSQLiteError(err)
 		}
@@ -260,18 +316,28 @@ func scanBook(sc rowScanner) (domain.Book, error) {
 		b     domain.Book
 		genre string
 	)
-	if err := sc.Scan(&b.ID, &b.Title, &genre, &b.Premise, &b.GoldenFinger, &b.TargetChapterWords, &b.ExportDir, &b.CreatedAt, &b.UpdatedAt); err != nil {
+	if err := sc.Scan(
+		&b.ID, &b.Title, &genre, &b.Premise, &b.GoldenFinger,
+		&b.TargetChapterWords, &b.ExportDir,
+		&b.POVMode, &b.PacingStyle, &b.WritingPrompt, &b.DailyWordGoal,
+		&b.ChapterCount, &b.FinalizedCount, &b.TotalWords,
+		&b.CreatedAt, &b.UpdatedAt,
+	); err != nil {
 		return domain.Book{}, mapSQLiteError(err)
 	}
 	b.Genre = domain.GenreID(genre)
+	if b.POVMode == "" {
+		b.POVMode = "third_limited"
+	}
+	if b.DailyWordGoal <= 0 {
+		b.DailyWordGoal = domain.DefaultDailyWordGoal
+	}
 	return b, nil
 }
 
 func getBookRow(ctx context.Context, q queryRower, id int64) (domain.Book, error) {
-	row := q.QueryRowContext(ctx, `
-		SELECT id, title, genre, premise, golden_finger, target_chapter_words, export_dir, created_at, updated_at
-		FROM books
-		WHERE id = ?
+	row := q.QueryRowContext(ctx, bookSelectWithStats+`
+		WHERE b.id = ?
 	`, id)
 	b, err := scanBook(row)
 	if err != nil {
@@ -281,6 +347,145 @@ func getBookRow(ctx context.Context, q queryRower, id int64) (domain.Book, error
 		return domain.Book{}, err
 	}
 	return b, nil
+}
+
+// recordDailyWritingDeltaTx 在章节保存/出稿事务内记录当日码字净增量。
+// 旧版本库（迁移 008 之前）没有 writing_stats_daily 表，enabled=false 时直接跳过。
+func recordDailyWritingDeltaTx(ctx context.Context, tx *sql.Tx, bookID int64, delta int, enabled bool) error {
+	if !enabled || bookID <= 0 || delta == 0 {
+		return nil
+	}
+	today := time.Now().Format("2006-01-02")
+	initialWords := delta
+	if initialWords < 0 {
+		initialWords = 0
+	}
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO writing_stats_daily (stat_date, book_id, words_delta, chapters_touched)
+		VALUES (?, ?, ?, 1)
+		ON CONFLICT(stat_date, book_id) DO UPDATE SET
+			words_delta = MAX(0, writing_stats_daily.words_delta + excluded.words_delta),
+			chapters_touched = writing_stats_daily.chapters_touched + 1
+	`, today, bookID, initialWords)
+	if err != nil {
+		return mapSQLiteError(err)
+	}
+	return nil
+}
+
+// GetWritingStats 汇总单书（bookID > 0）或全部作品（bookID == 0）的近 N 天码字产出与日更进度。
+func (s *Store) GetWritingStats(ctx context.Context, bookID int64, days int) (domain.WritingStatsSummary, error) {
+	if days <= 0 {
+		days = 14
+	}
+	if days > 90 {
+		days = 90
+	}
+
+	summary := domain.WritingStatsSummary{
+		BookID:    bookID,
+		DailyGoal: domain.DefaultDailyWordGoal,
+		Daily:     make([]domain.DailyWordStat, 0, days),
+	}
+
+	// 1. 统计当前范围总字数、总章数、定稿章数和日更目标
+	if bookID > 0 {
+		book, err := s.GetBook(ctx, bookID)
+		if err != nil {
+			return domain.WritingStatsSummary{}, err
+		}
+		summary.DailyGoal = book.DailyWordGoal
+		summary.TotalWords = book.TotalWords
+		summary.TotalChapters = book.ChapterCount
+		summary.FinalizedChapters = book.FinalizedCount
+	} else {
+		var goalSum int
+		if err := s.db.QueryRowContext(ctx, `
+			SELECT
+				COALESCE((SELECT SUM(word_count) FROM chapters), 0),
+				COALESCE((SELECT COUNT(*) FROM chapters), 0),
+				COALESCE((SELECT COUNT(*) FROM chapters WHERE status = 'finalized'), 0),
+				COALESCE((SELECT MAX(daily_word_goal) FROM books), 0)
+		`).Scan(&summary.TotalWords, &summary.TotalChapters, &summary.FinalizedChapters, &goalSum); err != nil {
+			return domain.WritingStatsSummary{}, mapSQLiteError(err)
+		}
+		if goalSum > 0 {
+			summary.DailyGoal = goalSum
+		}
+	}
+
+	// 2. 拉取近 90 天内每日汇总（同时支持计算连续更新天数）
+	now := time.Now()
+	todayStr := now.Format("2006-01-02")
+	sinceStr := now.AddDate(0, 0, -89).Format("2006-01-02")
+
+	byDate := make(map[string]domain.DailyWordStat)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if bookID > 0 {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT stat_date, words_delta, chapters_touched
+			FROM writing_stats_daily
+			WHERE book_id = ? AND stat_date >= ?
+			ORDER BY stat_date ASC
+		`, bookID, sinceStr)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT stat_date, COALESCE(SUM(words_delta), 0), COALESCE(SUM(chapters_touched), 0)
+			FROM writing_stats_daily
+			WHERE stat_date >= ?
+			GROUP BY stat_date
+			ORDER BY stat_date ASC
+		`, sinceStr)
+	}
+	if err != nil {
+		return domain.WritingStatsSummary{}, mapSQLiteError(err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var d domain.DailyWordStat
+		if err := rows.Scan(&d.Date, &d.WordsDelta, &d.ChaptersTouched); err != nil {
+			return domain.WritingStatsSummary{}, mapSQLiteError(err)
+		}
+		byDate[d.Date] = d
+	}
+	if err := rows.Err(); err != nil {
+		return domain.WritingStatsSummary{}, err
+	}
+
+	// 3. 补齐连续 days 天序列（从早到晚）
+	for i := days - 1; i >= 0; i-- {
+		dt := now.AddDate(0, 0, -i).Format("2006-01-02")
+		if item, ok := byDate[dt]; ok {
+			summary.Daily = append(summary.Daily, item)
+		} else {
+			summary.Daily = append(summary.Daily, domain.DailyWordStat{Date: dt})
+		}
+	}
+
+	if todayItem, ok := byDate[todayStr]; ok {
+		summary.TodayWords = todayItem.WordsDelta
+	}
+
+	// 4. 计算连续码字天数（今日有产出从今日起算，否则若昨日有产出从昨日起算）
+	streak := 0
+	startOffset := 0
+	if summary.TodayWords <= 0 {
+		startOffset = 1
+	}
+	for i := startOffset; i < 90; i++ {
+		dt := now.AddDate(0, 0, -i).Format("2006-01-02")
+		if item, ok := byDate[dt]; ok && item.WordsDelta > 0 {
+			streak++
+		} else {
+			break
+		}
+	}
+	summary.StreakDays = streak
+	return summary, nil
 }
 
 func scanVolume(sc rowScanner) (domain.Volume, error) {

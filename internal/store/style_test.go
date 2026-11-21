@@ -28,10 +28,7 @@ func TestPhase2ToPhase3UpgradeBackupAndSeededDeaiRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open v2 db: %v", err)
 	}
-	book, err := stV2.CreateBook(ctx, domain.CreateBookInput{Title: "修真去AI味测试", Genre: domain.GenreXianxia})
-	if err != nil {
-		t.Fatalf("CreateBook v2: %v", err)
-	}
+	book := createLegacyBook(t, stV2, "修真去AI味测试", domain.GenreXianxia)
 	if err := stV2.Close(); err != nil {
 		t.Fatalf("close v2: %v", err)
 	}
@@ -54,9 +51,9 @@ func TestPhase2ToPhase3UpgradeBackupAndSeededDeaiRules(t *testing.T) {
 		t.Fatalf("open .bak.2 db: %v", err)
 	}
 	defer bakStore.Close()
-	bakBook, err := bakStore.GetBook(ctx, book.ID)
-	if err != nil || bakBook.Title != "修真去AI味测试" {
-		t.Fatalf("backup DB missing v2 book: %+v err=%v", bakBook, err)
+	var bakTitle string
+	if err := bakStore.db.QueryRowContext(ctx, `SELECT title FROM books WHERE id = ?`, book.ID).Scan(&bakTitle); err != nil || bakTitle != "修真去AI味测试" {
+		t.Fatalf("backup DB missing v2 book: title=%q err=%v", bakTitle, err)
 	}
 
 	// 3. 验证 003_phase3_style.sql 已预置全部全局去 AI 味默认规则（book_id = 0）。

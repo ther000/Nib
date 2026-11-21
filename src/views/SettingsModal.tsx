@@ -146,6 +146,10 @@ export function SettingsModal() {
   // Workspace / Active Book settings state
   const [bookExportDir, setBookExportDir] = useState("");
   const [bookTargetWords, setBookTargetWords] = useState("2500");
+  const [bookPovMode, setBookPovMode] = useState("third_limited");
+  const [bookPacingStyle, setBookPacingStyle] = useState("");
+  const [bookWritingPrompt, setBookWritingPrompt] = useState("");
+  const [bookDailyGoal, setBookDailyGoal] = useState("4000");
   const [savingBookSettings, setSavingBookSettings] = useState(false);
   const [exportingFormat, setExportingFormat] = useState<"txt" | "epub" | "db" | null>(null);
 
@@ -359,11 +363,15 @@ export function SettingsModal() {
     });
   }, [settingsOpen, modelRoutes]);
 
-  // Sync active book export dir & target words
+  // Sync active book writing profile & export settings
   useEffect(() => {
     if (!settingsOpen) return;
     setBookExportDir(activeBook?.exportDir ?? "");
     setBookTargetWords(String(activeBook?.targetChapterWords ?? 2500));
+    setBookPovMode(activeBook?.povMode || "third_limited");
+    setBookPacingStyle(activeBook?.pacingStyle ?? "");
+    setBookWritingPrompt(activeBook?.writingPrompt ?? "");
+    setBookDailyGoal(String(activeBook?.dailyWordGoal ?? 4000));
   }, [settingsOpen, activeBook]);
 
   // Close on Escape
@@ -732,6 +740,15 @@ export function SettingsModal() {
       notify({ tone: "warn", message: "每章目标字数需在 300 到 50,000 字之间" });
       return;
     }
+    const parsedDailyGoal = Number.parseInt(bookDailyGoal, 10);
+    if (!Number.isFinite(parsedDailyGoal) || parsedDailyGoal < 100 || parsedDailyGoal > 200000) {
+      notify({ tone: "warn", message: "日更目标需在 100 到 200,000 字之间" });
+      return;
+    }
+    if (bookWritingPrompt.length > 4000) {
+      notify({ tone: "warn", message: "固定写作指令不能超过 4,000 字" });
+      return;
+    }
 
     setSavingBookSettings(true);
     try {
@@ -743,6 +760,10 @@ export function SettingsModal() {
         goldenFinger: activeBook.goldenFinger,
         targetChapterWords: parsedWords,
         exportDir: bookExportDir.trim(),
+        povMode: bookPovMode,
+        pacingStyle: bookPacingStyle.trim(),
+        writingPrompt: bookWritingPrompt.trim(),
+        dailyWordGoal: parsedDailyGoal,
       });
       await refreshBooks(activeBook.id);
       notify({ tone: "ok", message: "书籍设置已保存" });
@@ -825,7 +846,7 @@ export function SettingsModal() {
               }`}
             >
               <Sliders className="h-3.5 w-3.5" />
-              <span>阅读与备份</span>
+              <span>写作与备份</span>
             </button>
           </nav>
         </aside>
@@ -838,7 +859,7 @@ export function SettingsModal() {
                 ? "模型服务"
                 : tab === "routes"
                 ? "各环节模型分配"
-                : "阅读排版与本地备份"}
+                : "写作规范、阅读排版与本地备份"}
             </h2>
             <button
               type="button"
@@ -1926,12 +1947,72 @@ export function SettingsModal() {
                   <section className="border-t border-border-subtle pt-4">
                     <div className="mb-2.5 flex items-center justify-between">
                       <span className="text-xs font-medium text-ink-secondary">
-                        当前书籍导出与字数设置 · 《{activeBook.title}》
+                        当前书籍写作规范与导出 · 《{activeBook.title}》
                       </span>
                     </div>
 
                     <div className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface/50 p-3.5">
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                        <div>
+                          <label className="mb-1 block text-xs text-ink-secondary">
+                            叙事视角
+                          </label>
+                          <select
+                            value={bookPovMode}
+                            onChange={(e) => setBookPovMode(e.target.value)}
+                            className="w-full rounded-md border border-border-subtle bg-canvas px-3 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                          >
+                            <option value="third_limited">第三人称限知</option>
+                            <option value="first_person">第一人称</option>
+                            <option value="third_omniscient">第三人称全知</option>
+                            <option value="multi_pov">多视角群像</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs text-ink-secondary">
+                            节奏风格
+                          </label>
+                          <input
+                            type="text"
+                            value={bookPacingStyle}
+                            onChange={(e) => setBookPacingStyle(e.target.value)}
+                            placeholder="如：番茄快节奏"
+                            className="w-full rounded-md border border-border-subtle bg-canvas px-3 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs text-ink-secondary">
+                            日更目标（字）
+                          </label>
+                          <input
+                            type="number"
+                            min={100}
+                            max={200000}
+                            step={500}
+                            value={bookDailyGoal}
+                            onChange={(e) => setBookDailyGoal(e.target.value)}
+                            className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-3 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                          />
+                        </div>
+                      </div>
+
                       <div>
+                        <label className="mb-1 block text-xs text-ink-secondary">
+                          固定写作指令（本书每次生成都会注入）
+                        </label>
+                        <textarea
+                          rows={3}
+                          maxLength={4000}
+                          value={bookWritingPrompt}
+                          onChange={(e) => setBookWritingPrompt(e.target.value)}
+                          placeholder="如：每章至少一次信息差反转；主角不降智；对话占比不低于三成。"
+                          className="w-full resize-y rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                        />
+                      </div>
+
+                      <div className="border-t border-border-subtle pt-3">
                         <label className="mb-1 block text-xs text-ink-secondary">
                           本地 Markdown 单向镜像目录
                         </label>

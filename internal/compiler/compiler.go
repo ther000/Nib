@@ -613,6 +613,15 @@ func buildP0Content(book domain.Book, vol domain.Volume, invariants []domain.Ent
 	if strings.TrimSpace(book.GoldenFinger) != "" {
 		fmt.Fprintf(&b, "金手指与规则：%s\n", strings.TrimSpace(book.GoldenFinger))
 	}
+	if povLabel := formatBookPOVMode(book.POVMode); povLabel != "" {
+		fmt.Fprintf(&b, "本书叙事视角规范：%s\n", povLabel)
+	}
+	if strings.TrimSpace(book.PacingStyle) != "" {
+		fmt.Fprintf(&b, "本书节奏与平台风格：%s\n", strings.TrimSpace(book.PacingStyle))
+	}
+	if strings.TrimSpace(book.WritingPrompt) != "" {
+		fmt.Fprintf(&b, "本书固定写作指令：%s\n", strings.TrimSpace(book.WritingPrompt))
+	}
 	if vol.Title != "" || vol.Goal != "" || vol.ClimaxPlan != "" {
 		fmt.Fprintf(&b, "当前卷：第%d卷 %s\n", vol.Seq, vol.Title)
 		if strings.TrimSpace(vol.Goal) != "" {
@@ -635,6 +644,21 @@ func buildP0Content(book domain.Book, vol domain.Volume, invariants []domain.Ent
 	}
 
 	return strings.TrimSpace(b.String())
+}
+
+func formatBookPOVMode(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case "first_person":
+		return "第一人称（全程以“我”视角推进，不泄露主角不知情的他人内心）"
+	case "third_limited":
+		return "第三人称限知（紧贴当前 POV 人物视角与感官）"
+	case "third_omniscient":
+		return "第三人称全知（允许自然切换视角展现群像博弈）"
+	case "multi_pov":
+		return "多视角群像（按节拍 POV 清晰切镜，切镜需有明显场景过渡）"
+	default:
+		return strings.TrimSpace(mode)
+	}
 }
 
 func buildP1Content(

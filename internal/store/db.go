@@ -71,9 +71,10 @@ func (c pragmaConnector) Connect(ctx context.Context) (driver.Conn, error) {
 
 // Store 封装基于纯 Go modernc.org/sqlite 的本地仓储与迁移管理。
 type Store struct {
-	db      *sql.DB
-	path    string
-	writeMu sync.Mutex
+	db            *sql.DB
+	path          string
+	writeMu       sync.Mutex
+	schemaVersion int
 }
 
 // Open 打开 SQLite 数据库（支持磁盘路径或 ":memory:"），启用必备 PRAGMA，
@@ -143,6 +144,12 @@ func openWithMigrations(dbPath string, migs []migration) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	var currentVersion sql.NullInt64
+	if err := db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&currentVersion); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("read schema version: %w", err)
+	}
+	s.schemaVersion = int(currentVersion.Int64)
 	if err := s.seedDefaultModelRoutes(ctx); err != nil {
 		_ = db.Close()
 		return nil, err

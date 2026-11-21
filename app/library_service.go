@@ -85,6 +85,18 @@ func (s *LibraryService) DeleteBook(ctx context.Context, id int64) error {
 	return st.DeleteBook(ctx, id)
 }
 
+// GetWritingStats 汇总单书（bookID > 0）或全部作品（bookID = 0）的近 N 天码字产出与日更进度。
+func (s *LibraryService) GetWritingStats(ctx context.Context, bookID int64, days int) (domain.WritingStatsSummary, error) {
+	if bookID < 0 {
+		return domain.WritingStatsSummary{}, &domain.ValidationError{Field: "bookId", Message: "书籍 ID 不能为负数"}
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return domain.WritingStatsSummary{}, err
+	}
+	return st.GetWritingStats(ctx, bookID, days)
+}
+
 // ListVolumes 返回指定书籍下的全部卷（按 seq 升序）。
 func (s *LibraryService) ListVolumes(ctx context.Context, bookID int64) ([]domain.Volume, error) {
 	if err := validatePositiveID("bookId", bookID); err != nil {

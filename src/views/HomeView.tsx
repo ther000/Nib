@@ -14,7 +14,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { LibraryService, SettingsService, type Book, type UsageSummary } from "../mygo";
+import { LibraryService, SettingsService, type Book, type UsageSummary, type WritingStatsSummary } from "../mygo";
 import { useApp } from "../stores/AppContext";
 import { useContextMenu } from "../components/ContextMenu";
 import {
@@ -65,6 +65,11 @@ export function HomeView() {
     }
   };
 
+  // Writing output stats state
+  const [statsBookId, setStatsBookId] = useState<number>(0);
+  const [writingStats, setWritingStats] = useState<WritingStatsSummary | null>(null);
+  const [writingStatsLoading, setWritingStatsLoading] = useState(false);
+
   // Usage analytics state
   const [usageBookId, setUsageBookId] = useState<number>(0);
   const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
@@ -109,11 +114,36 @@ export function HomeView() {
     [notify]
   );
 
+  const loadWritingStats = useCallback(
+    async (bookId: number) => {
+      setWritingStatsLoading(true);
+      try {
+        const res = await LibraryService.getWritingStats(bookId, 14);
+        setWritingStats(res);
+      } catch (err) {
+        notify({
+          tone: "danger",
+          message: "加载码字统计失败",
+          detail: formatErrorMessage(err),
+        });
+      } finally {
+        setWritingStatsLoading(false);
+      }
+    },
+    [notify]
+  );
+
   useEffect(() => {
     if (usageBookId > 0 && !books.some((b) => b.id === usageBookId)) {
       setUsageBookId(0);
     }
   }, [books, usageBookId]);
+
+  useEffect(() => {
+    if (statsBookId > 0 && !books.some((b) => b.id === statsBookId)) {
+      setStatsBookId(0);
+    }
+  }, [books, statsBookId]);
 
   useEffect(() => {
     void loadUsage(usageBookId);
@@ -129,6 +159,15 @@ export function HomeView() {
     }
     return books[0] ?? null;
   }, [books, activeBook]);
+
+  useEffect(() => {
+    // 首次加载或书单变化时，默认展示最近写作书籍的码字进度。
+    if (statsBookId === 0 && featuredBook) {
+      setStatsBookId(featuredBook.id);
+      return;
+    }
+    void loadWritingStats(statsBookId);
+  }, [statsBookId, featuredBook, loadWritingStats]);
 
   const handleConfirmDelete = async (bookId: number) => {
     setDeletingId(bookId);
@@ -377,13 +416,21 @@ export function HomeView() {
                         </h3>
                       </div>
 
-                      <div className="mb-2.5 flex items-center gap-2.5 text-xs">
+                      <div className="mb-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs">
                         <span className="text-ink-secondary">
                           {getGenreName(book.genre)}
                         </span>
                         <span className="nib-mono text-ink-muted">
-                          {formatNumber(book.targetChapterWords)} 字/章
+                          {formatNumber(book.chapterCount)} 章 ·{" "}
+                          {book.totalWords >= 10000
+                            ? `${(book.totalWords / 10000).toFixed(1)} 万字`
+                            : `${formatNumber(book.totalWords)} 字`}
                         </span>
+                        {book.finalizedCount > 0 && (
+                          <span className="nib-mono text-ink-muted">
+                            定稿 {formatNumber(book.finalizedCount)} 章
+                          </span>
+                        )}
                       </div>
 
                       <p className="line-clamp-2 min-h-[38px] text-[13px] leading-relaxed text-ink-secondary">
@@ -446,6 +493,129 @@ export function HomeView() {
             </div>
           </section>
         )}
+
+        {/* Writing Output Section */}
+        <section className="flex flex-col gap-4 border-t border-border-subtle pt-6">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <PenLine className="h-4 w-4 text-accent" />
+              <h2 className="text-[13px] font-medium text-ink-secondary">
+                码字进度
+              </h2>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <select
+                aria-label="码字统计范围"
+                value={statsBookId}
+                onChange={(e) => setStatsBookId(Number(e.target.value) || 0)}
+                className="rounded-lg border border-border-subtle bg-surface px-2.5 py-1 text-xs text-ink-primary focus:border-accent focus:outline-none"
+              >
+                <option value={0}>全部作品</option>
+                {books.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    《{b.title}》
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                disabled={writingStatsLoading}
+                onClick={() => void loadWritingStats(statsBookId)}
+                className="flex items-center gap-1 rounded-lg border border-border-subtle bg-surface px-2.5 py-1 text-xs text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={`h-3 w-3 ${
+                    writingStatsLoading ? "animate-spin text-accent" : ""
+                  }`}
+                />
+                <span>刷新</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-border-subtle bg-surface p-4">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <div className="text-xs text-ink-muted">今日码字</div>
+                <div className="nib-mono mt-1 text-2xl font-medium text-ink-primary">
+                  {formatNumber(writingStats?.todayWords ?? 0)}
+                  <span className="ml-1 font-ui text-xs font-normal text-ink-muted">
+                    字
+                  </span>
+                </div>
+                <div className="mt-1 text-xs text-ink-secondary">
+                  {writingStats
+                    ? `日更目标 ${formatNumber(writingStats.dailyGoal)} 字 · 连续更新 ${writingStats.streakDays} 天`
+                    : "暂无统计"}
+                </div>
+              </div>
+
+              <div className="flex items-end gap-6 text-right">
+                <div>
+                  <div className="text-xs text-ink-muted">总字数</div>
+                  <div className="nib-mono mt-1 text-sm font-medium text-ink-primary">
+                    {writingStats && writingStats.totalWords >= 10000
+                      ? `${(writingStats.totalWords / 10000).toFixed(1)} 万`
+                      : formatNumber(writingStats?.totalWords ?? 0)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-ink-muted">已定稿</div>
+                  <div className="nib-mono mt-1 text-sm font-medium text-ink-primary">
+                    {formatNumber(writingStats?.finalizedChapters ?? 0)} 章
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-canvas">
+              <div
+                className="h-full rounded-full bg-accent transition-[width]"
+                style={{
+                  width: `${Math.min(
+                    100,
+                    ((writingStats?.todayWords ?? 0) / Math.max(1, writingStats?.dailyGoal ?? 1)) * 100
+                  )}%`,
+                }}
+              />
+            </div>
+
+            <div className="mt-5 flex h-20 items-end gap-1">
+              {(writingStats?.daily ?? []).map((d) => {
+                const max = Math.max(
+                  1,
+                  ...(writingStats?.daily ?? []).map((item) => item.wordsDelta)
+                );
+                const height = Math.max(4, Math.round((d.wordsDelta / max) * 76));
+                return (
+                  <div
+                    key={d.date}
+                    title={`${d.date}：${formatNumber(d.wordsDelta)} 字`}
+                    className="group flex h-full flex-1 flex-col items-center justify-end gap-1"
+                  >
+                    <div
+                      className={`w-full rounded-sm transition-colors ${
+                        d.wordsDelta > 0
+                          ? "bg-accent/70 group-hover:bg-accent"
+                          : "bg-border-subtle"
+                      }`}
+                      style={{ height }}
+                    />
+                    <span className="nib-mono text-[10px] text-ink-muted">
+                      {d.date.slice(8)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-1.5 flex justify-between text-[11px] text-ink-muted">
+              <span>近 14 天</span>
+              <span>单位：字</span>
+            </div>
+          </div>
+        </section>
 
         {/* Usage Analytics Section */}
         <section className="flex flex-col gap-4 border-t border-border-subtle pt-6">

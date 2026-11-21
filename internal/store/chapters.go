@@ -246,6 +246,9 @@ func (s *Store) SaveChapterContent(
 		`, content, newWordCount, string(nextStatus), nextBriefing, chapterID); err != nil {
 			return mapSQLiteError(err)
 		}
+		if err := recordDailyWritingDeltaTx(ctx, tx, existing.BookID, newWordCount-existing.WordCount, s.schemaVersion >= 8); err != nil {
+			return err
+		}
 
 		result, err = getChapterRow(ctx, tx, chapterID)
 		return err
@@ -305,6 +308,9 @@ func (s *Store) SaveChapterDraft(ctx context.Context, in domain.SaveChapterDraft
 			WHERE id = ?
 		`, nextTitle, in.Content, newWordCount, string(nextStatus), in.ChapterID); err != nil {
 			return mapSQLiteError(err)
+		}
+		if err := recordDailyWritingDeltaTx(ctx, tx, existing.BookID, newWordCount-existing.WordCount, s.schemaVersion >= 8); err != nil {
+			return err
 		}
 
 		result, err = getChapterRow(ctx, tx, in.ChapterID)

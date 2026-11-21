@@ -27,10 +27,7 @@ func TestPhase3ToPhase4UpgradeBackupAndBatchCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open v1..v3 failed: %v", err)
 	}
-	book, err := st3.CreateBook(ctx, domain.CreateBookInput{Title: "微批进化录", Genre: domain.GenreXuanhuan})
-	if err != nil {
-		t.Fatalf("CreateBook failed: %v", err)
-	}
+	book := createLegacyBook(t, st3, "微批进化录", domain.GenreXuanhuan)
 	vol, err := st3.UpsertVolume(ctx, domain.UpsertVolumeInput{BookID: book.ID, Title: "第一卷"})
 	if err != nil {
 		t.Fatalf("UpsertVolume failed: %v", err)

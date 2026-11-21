@@ -29,10 +29,7 @@ func TestPhase1ToPhase2UpgradeBackupAndFTSBackfill(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open v1 db: %v", err)
 	}
-	book, err := stV1.CreateBook(ctx, domain.CreateBookInput{Title: "万界剑尊", Genre: domain.GenreXuanhuan})
-	if err != nil {
-		t.Fatalf("CreateBook v1: %v", err)
-	}
+	book := createLegacyBook(t, stV1, "万界剑尊", domain.GenreXuanhuan)
 	vol, err := stV1.UpsertVolume(ctx, domain.UpsertVolumeInput{BookID: book.ID, Title: "天渊初入"})
 	if err != nil {
 		t.Fatalf("UpsertVolume v1: %v", err)
@@ -75,9 +72,9 @@ func TestPhase1ToPhase2UpgradeBackupAndFTSBackfill(t *testing.T) {
 		t.Fatalf("open backup db: %v", err)
 	}
 	defer bakStore.Close()
-	bakBook, err := bakStore.GetBook(ctx, book.ID)
-	if err != nil || bakBook.Title != "万界剑尊" {
-		t.Fatalf("backup DB missing v1 book: %+v err=%v", bakBook, err)
+	var bakTitle string
+	if err := bakStore.db.QueryRowContext(ctx, `SELECT title FROM books WHERE id = ?`, book.ID).Scan(&bakTitle); err != nil || bakTitle != "万界剑尊" {
+		t.Fatalf("backup DB missing v1 book: title=%q err=%v", bakTitle, err)
 	}
 
 	// 验证迁移内的 FTS5 rebuild 已立即回填升级前就存在的章节和实体（3+ 字查询走 trigram FTS5）。

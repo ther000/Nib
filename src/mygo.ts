@@ -203,6 +203,13 @@ export interface Book {
   goldenFinger: string;
   targetChapterWords: number;
   exportDir: string;
+  povMode: string;
+  pacingStyle: string;
+  writingPrompt: string;
+  dailyWordGoal: number;
+  chapterCount: number;
+  finalizedCount: number;
+  totalWords: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -326,6 +333,10 @@ export interface CreateBookInput {
   goldenFinger: string;
   targetChapterWords: number;
   exportDir: string;
+  povMode?: string;
+  pacingStyle?: string;
+  writingPrompt?: string;
+  dailyWordGoal?: number;
 }
 
 export interface CreateChapterInput {
@@ -348,6 +359,12 @@ export interface CriticFinding {
   title: string;
   detail: string;
   suggestion: string;
+}
+
+export interface DailyWordStat {
+  date: string;
+  wordsDelta: number;
+  chaptersTouched: number;
 }
 
 export type DeaiCategory = string;
@@ -873,6 +890,10 @@ export interface UpdateBookInput {
   goldenFinger: string;
   targetChapterWords: number;
   exportDir: string;
+  povMode?: string;
+  pacingStyle?: string;
+  writingPrompt?: string;
+  dailyWordGoal?: number;
 }
 
 export interface UpdateChapterMetaInput {
@@ -1010,6 +1031,17 @@ export interface VolumePacingReport {
   alerts: PacingAlert[];
 }
 
+export interface WritingStatsSummary {
+  bookId: number;
+  todayWords: number;
+  dailyGoal: number;
+  streakDays: number;
+  totalWords: number;
+  totalChapters: number;
+  finalizedChapters: number;
+  daily: DailyWordStat[];
+}
+
 // ---- Services ----
 
 /** LibraryService 提供书、卷、章、节拍卡及单向 Markdown 导出的桌面 RPC 绑定。 */
@@ -1042,6 +1074,8 @@ export const LibraryService = {
   getChapter: bind<[number], Chapter>("LibraryService.GetChapter", (id: number) => [id]),
   /** GetVolumePacing 计算指定卷的情绪极性折线数据，并自动诊断连续蓄压过载、缺高潮爆发与超期未收伏笔。 */
   getVolumePacing: bind<[number], VolumePacingReport>("LibraryService.GetVolumePacing", (volumeID: number) => [volumeID]),
+  /** GetWritingStats 汇总单书（bookID > 0）或全部作品（bookID = 0）的近 N 天码字产出与日更进度。 */
+  getWritingStats: bind<[number, number], WritingStatsSummary>("LibraryService.GetWritingStats", (bookID: number, days: number) => [bookID, days]),
   /** ImportBookFromFile 弹出原生文件选择对话框，读取本地 .txt / .md 旧稿并智能拆章建书；用户取消时返回 nil。 */
   importBookFromFile: bind<[string], ImportBookResult | null>("LibraryService.ImportBookFromFile", (genre: string) => [genre]),
   /** InsertChapter 在指定卷的某章之后（afterChapterId=0 表示卷首）插入新章节并自动重排章序。 */
