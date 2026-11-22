@@ -11,8 +11,6 @@ import {
   Plus,
   Search,
   Settings,
-  ShieldCheck,
-  SlidersHorizontal,
   Sparkles,
   Sun,
 } from "lucide-react";
@@ -24,6 +22,7 @@ const CORE_TABS: Array<{ id: WorkspaceTab; label: string; shortcut: string }> = 
   { id: "architect", label: "大纲", shortcut: "Ctrl+1" },
   { id: "studio", label: "写作", shortcut: "Ctrl+2" },
   { id: "atlas", label: "设定", shortcut: "Ctrl+3" },
+  { id: "book_settings", label: "本书设置", shortcut: "Ctrl+4" },
 ];
 
 export function TopBar() {
@@ -35,7 +34,6 @@ export function TopBar() {
     openBook,
     activeTab,
     setActiveTab,
-    openAtlasSubTab,
     books,
     activeBook,
     activeChapter,
@@ -175,40 +173,6 @@ export function TopBar() {
                     type="button"
                     onClick={() => {
                       setMenuOpen(false);
-                      setActiveTab("book_settings");
-                    }}
-                    className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-xs transition-colors ${
-                      activeTab === "book_settings"
-                        ? "bg-accent-soft font-medium text-accent"
-                        : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
-                    }`}
-                  >
-                    <span className="flex items-center gap-2">
-                      <SlidersHorizontal className="h-3.5 w-3.5" />
-                      <span>本书设置与导出</span>
-                    </span>
-                    <span className="nib-mono text-[10px] opacity-65">Ctrl+4</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      openAtlasSubTab("audit");
-                    }}
-                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary"
-                  >
-                    <ShieldCheck className="h-3.5 w-3.5" />
-                    <span>全书体检</span>
-                  </button>
-                </div>
-
-                <div className="my-1.5 border-t border-border-subtle" />
-
-                <div className="flex flex-col gap-0.5 px-1.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMenuOpen(false);
                       openCreateBook();
                     }}
                     className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary"
@@ -239,7 +203,7 @@ export function TopBar() {
         )}
       </div>
 
-      {/* Center: Clean 3-Segment Native Pill */}
+      {/* Center: Clean 4-Segment Native Pill */}
       {inWorkspace ? (
         <nav
           aria-label="工作区切换"
@@ -263,16 +227,6 @@ export function TopBar() {
               </button>
             );
           })}
-          {activeTab === "book_settings" && (
-            <button
-              type="button"
-              title="本书设置 (Ctrl+4)"
-              onClick={() => setActiveTab("book_settings")}
-              className="rounded-[6px] bg-elevated px-3 py-1 text-xs font-medium text-accent shadow-xs"
-            >
-              本书设置
-            </button>
-          )}
         </nav>
       ) : (
         <div aria-hidden="true" />

@@ -74,11 +74,11 @@ import {
   StudioReferenceSidebar,
   type ReferenceTab,
 } from "../components/studio/StudioReferenceSidebar";
+import { QuickModelPicker } from "../components/studio/QuickModelPicker";
 import { applyLintReplacementInContent } from "../lib/studioHelpers";
 import { formatWebNovelProse } from "../lib/textDiff";
 import {
   countWords,
-  formatCompactTokens,
   formatErrorMessage,
   formatNumber,
   formatSeq,
@@ -119,6 +119,7 @@ export function StudioView() {
     bumpMemoryRevision,
     updateChapterInCache,
     setActiveTab,
+    openAtlasSubTab,
     openSettings,
     notify,
     registerSaveHandler,
@@ -2564,7 +2565,7 @@ export function StudioView() {
 
         {/* Centered Translucent Floating Action Dock */}
         {!focusMode && (
-          <div className="pointer-events-none absolute right-4 bottom-4 left-4 z-10 flex justify-center">
+          <div className="pointer-events-none absolute right-4 bottom-4 left-4 z-20 flex justify-center">
             <footer className="pointer-events-auto nib-floating-dock inline-flex max-w-full flex-wrap items-center gap-1 rounded-full px-2.5 py-1.5 text-xs select-none">
               <span className="nib-mono px-1.5 font-medium text-ink-primary">
                 {formatNumber(liveWordCount)} 字
@@ -2660,26 +2661,24 @@ export function StudioView() {
                 </span>
               </button>
 
-              <span className="hidden h-3.5 w-px bg-border-strong sm:block" aria-hidden="true" />
-
               <button
                 type="button"
-                onClick={() =>
-                  openSettings(draftRouteInfo.configured ? "routes" : "providers")
-                }
-                title={
-                  lastUsage
-                    ? `调整正文写作模型（本次调用：输入 ${formatCompactTokens(lastUsage.promptTokens)} / 输出 ${formatCompactTokens(lastUsage.completionTokens)} Token）`
-                    : "调整正文写作模型"
-                }
-                className={`hidden max-w-[140px] truncate rounded-full px-2 py-0.5 text-[11px] transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary sm:inline-block ${
-                  draftRouteInfo.configured
-                    ? "nib-mono text-ink-muted"
-                    : "text-warn"
-                }`}
+                onClick={() => openAtlasSubTab("audit")}
+                title="全书一致性体检与伏笔排查"
+                className="flex items-center gap-1 rounded-full px-2.5 py-1 text-ink-secondary transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary"
               >
-                {genModelName || draftRouteInfo.label}
+                <ShieldCheck className="h-3 w-3" />
+                <span>全书体检</span>
               </button>
+
+              <span className="hidden h-3.5 w-px bg-border-strong sm:block" aria-hidden="true" />
+
+              <QuickModelPicker
+                generating={generating}
+                genModelName={genModelName}
+                lastUsage={lastUsage}
+                draftRouteInfo={draftRouteInfo}
+              />
 
               <span className="hidden px-1.5 text-[11px] md:inline">
                 {generating ? (
