@@ -82,7 +82,7 @@ export function SelectionRewriteBar({
   const expanded = customOpen || selectionRewriting || selectionPreview !== null;
 
   return (
-    <div className="pointer-events-auto flex w-full max-w-[700px] flex-col gap-2.5 rounded-xl border border-accent/40 bg-elevated px-3.5 py-2.5 text-xs shadow-[var(--shadow-elevated)]">
+    <div className="pointer-events-auto nib-floating-dock flex w-full max-w-[700px] flex-col gap-2.5 rounded-2xl px-3.5 py-2.5 text-xs">
       {/* Preview Panel (renders above action bar when active) */}
       {selectionPreview !== null && (
         <div className="flex flex-col gap-2 rounded-lg border border-border-subtle bg-canvas p-3">

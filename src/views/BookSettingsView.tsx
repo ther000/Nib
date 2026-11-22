@@ -208,7 +208,7 @@ export function BookSettingsView() {
   if (!activeBook) return null;
 
   return (
-    <div className="nib-scroll-stable flex-1 overflow-y-auto bg-canvas px-6 py-6">
+    <div className="nib-paper-sheet nib-scroll-stable m-2 mt-0 flex-1 overflow-y-auto px-8 py-7">
       <div className="mx-auto flex w-full max-w-[820px] flex-col gap-5 pb-12">
         {/* Page Header */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border-subtle pb-4">

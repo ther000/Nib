@@ -1,92 +1,106 @@
 @import "tailwindcss";
 
 /*
- * Nib Design Tokens & Chinese Reading Typography Scale
- * Source of truth: docs/04-ui-ux-design.md
- * Default theme: Eye-care Dark (#141416)
- * Alternate theme: Warm Paper Light (#F6F3EC) via [data-theme="light"]
+ * Nib Design Tokens · Clear Ink (清墨浮纸)
+ * Translucent native desktop shell + floating paper sheet + Indigo Ink accent
+ * Default theme: Eye-care Dark (#121316 shell / #1A1B20 paper)
+ * Alternate theme: Warm Paper Light (#EEECE7 shell / #FDFCF9 paper) via [data-theme="light"]
  */
 
 :root,
 [data-theme="dark"] {
   color-scheme: dark;
 
-  /* Surfaces */
-  --bg-canvas: #141416;
-  --bg-surface: #1c1d21;
-  --bg-elevated: #25262b;
-  --border-subtle: rgba(255, 255, 255, 0.08);
+  /* Layered Surfaces (Shell -> Glass Sidebar -> Floating Paper Sheet -> Elevated) */
+  --bg-shell: #121316;
+  --bg-shell-glow: radial-gradient(900px 420px at 10% 0%, rgba(125, 152, 255, 0.065), transparent 72%);
+  --bg-canvas: #1a1b20;
+  --bg-surface: #16171c;
+  --bg-glass: rgba(24, 25, 31, 0.78);
+  --bg-elevated: #23252c;
+  --bg-popover: rgba(30, 32, 40, 0.9);
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --border-subtle: rgba(255, 255, 255, 0.075);
   --border-strong: rgba(255, 255, 255, 0.14);
 
   /* Ink / Text */
-  --text-primary: #e6e2d8;
-  --text-secondary: #a49f94;
-  --text-muted: #7e7970;
+  --text-primary: #e7e5df;
+  --text-secondary: #9c9fa9;
+  --text-muted: #6c707c;
 
-  /* Semantic Accents */
-  --accent: #d4a95e;
-  --accent-hover: #dfba74;
-  --accent-soft: rgba(212, 169, 94, 0.14);
-  --status-ok: #58a67a;
-  --status-ok-soft: rgba(88, 166, 122, 0.14);
-  --status-warn: #d99b42;
-  --status-warn-soft: rgba(217, 155, 66, 0.15);
-  --status-danger: #d45d5d;
-  --status-danger-soft: rgba(212, 93, 93, 0.15);
+  /* Semantic Accents (Indigo Ink) */
+  --accent: #7d98ff;
+  --accent-hover: #94abff;
+  --accent-soft: rgba(125, 152, 255, 0.14);
+  --status-ok: #55b382;
+  --status-ok-soft: rgba(85, 179, 130, 0.14);
+  --status-warn: #e0a04b;
+  --status-warn-soft: rgba(224, 160, 75, 0.15);
+  --status-danger: #e06b6b;
+  --status-danger-soft: rgba(224, 107, 107, 0.15);
 
   /* Shadows & Focus */
-  --shadow-elevated: 0 12px 32px rgba(0, 0, 0, 0.45);
-  --selection-bg: rgba(212, 169, 94, 0.28);
+  --shadow-sheet: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 10px 30px rgba(0, 0, 0, 0.42);
+  --shadow-dock: 0 10px 32px rgba(0, 0, 0, 0.54), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --shadow-elevated: 0 18px 48px rgba(0, 0, 0, 0.56), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --selection-bg: rgba(125, 152, 255, 0.28);
 
-  /* Typography Stacks */
-  --font-ui: "Inter", "PingFang SC", "Microsoft YaHei UI", sans-serif;
-  --font-prose-serif: "Noto Serif SC", "Source Han Serif SC", "PingFang SC", "Microsoft YaHei", serif;
-  --font-prose-sans: "Inter", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  /* Typography Stacks (Latin first, native CJK fallback) */
+  --font-ui: "Segoe UI Variable Text", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  --font-prose-serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "PingFang SC", "Microsoft YaHei", serif;
+  --font-prose-sans: "Segoe UI Variable Text", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", sans-serif;
   --font-prose: var(--font-prose-serif);
-  --font-mono: "JetBrains Mono", "Cascadia Mono", monospace;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", ui-monospace, monospace;
 
   /* 720px Chinese Reading Typography Scale */
   --prose-max-width: 720px;
   --prose-font-size: 17px;
   --prose-line-height: 1.88;
-  --prose-paragraph-gap: 14px;
+  --prose-paragraph-gap: 15px;
   --prose-indent: 0em;
 
   /* Layout Dimensions */
-  --topbar-height: 44px;
-  --sidebar-tree-width: 256px;
-  --studio-drawer-width: 360px;
+  --topbar-height: 42px;
+  --sidebar-tree-width: 248px;
+  --studio-drawer-width: 348px;
 }
 
 [data-theme="light"] {
   color-scheme: light;
 
-  /* Surfaces */
-  --bg-canvas: #f6f3ec;
-  --bg-surface: #efeae0;
+  /* Layered Surfaces */
+  --bg-shell: #eeece7;
+  --bg-shell-glow: radial-gradient(920px 440px at 8% 0%, rgba(255, 255, 255, 0.78), transparent 70%);
+  --bg-canvas: #fdfcf9;
+  --bg-surface: #f4f2ed;
+  --bg-glass: rgba(247, 245, 240, 0.8);
   --bg-elevated: #ffffff;
-  --border-subtle: rgba(30, 28, 24, 0.1);
-  --border-strong: rgba(30, 28, 24, 0.18);
+  --bg-popover: rgba(255, 255, 255, 0.92);
+  --bg-hover: rgba(28, 31, 38, 0.048);
+  --border-subtle: rgba(28, 31, 38, 0.08);
+  --border-strong: rgba(28, 31, 38, 0.14);
 
   /* Ink / Text */
-  --text-primary: #23201b;
-  --text-secondary: #5c564d;
-  --text-muted: #787166;
+  --text-primary: #1c1f26;
+  --text-secondary: #565d6b;
+  --text-muted: #848b99;
 
-  /* Semantic Accents */
-  --accent: #9c6d24;
-  --accent-hover: #875c1c;
-  --accent-soft: rgba(156, 109, 36, 0.12);
-  --status-ok: #2d7a4e;
-  --status-ok-soft: rgba(45, 122, 78, 0.12);
-  --status-warn: #b87314;
-  --status-warn-soft: rgba(184, 115, 20, 0.13);
-  --status-danger: #b83b3b;
-  --status-danger-soft: rgba(184, 59, 59, 0.12);
+  /* Semantic Accents (Indigo Ink) */
+  --accent: #3451b2;
+  --accent-hover: #2a4399;
+  --accent-soft: rgba(52, 81, 178, 0.095);
+  --status-ok: #267a52;
+  --status-ok-soft: rgba(38, 122, 82, 0.11);
+  --status-warn: #b57018;
+  --status-warn-soft: rgba(181, 112, 24, 0.12);
+  --status-danger: #bd3e3e;
+  --status-danger-soft: rgba(189, 62, 62, 0.11);
 
   /* Shadows & Focus */
-  --shadow-elevated: 0 12px 32px rgba(35, 32, 27, 0.12);
-  --selection-bg: rgba(156, 109, 36, 0.22);
+  --shadow-sheet: 0 1px 2px rgba(20, 22, 28, 0.04), 0 8px 28px rgba(20, 22, 28, 0.055);
+  --shadow-dock: 0 6px 24px rgba(20, 22, 28, 0.11), 0 1px 2px rgba(20, 22, 28, 0.06);
+  --shadow-elevated: 0 16px 40px rgba(20, 22, 28, 0.12), 0 2px 6px rgba(20, 22, 28, 0.05);
+  --selection-bg: rgba(52, 81, 178, 0.18);
 }
 
 /* Optional prose reading overrides toggled from Studio / Settings */
@@ -99,6 +113,7 @@
 }
 
 @theme inline {
+  --color-shell: var(--bg-shell);
   --color-canvas: var(--bg-canvas);
   --color-surface: var(--bg-surface);
   --color-elevated: var(--bg-elevated);
@@ -129,7 +144,7 @@
     height: 100%;
     margin: 0;
     padding: 0;
-    background-color: var(--bg-canvas);
+    background-color: var(--bg-shell);
     color: var(--text-primary);
     font-family: var(--font-ui);
     -webkit-font-smoothing: antialiased;
@@ -162,8 +177,8 @@
 
   /* Quiet low-noise scrollbars */
   ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
   }
 
   ::-webkit-scrollbar-track {
@@ -178,7 +193,36 @@
   }
 }
 
-/* 720px centered Chinese prose reading and editing column */
+/* Clear Ink native desktop surfaces */
+.nib-shell-bg {
+  background-color: var(--bg-shell);
+  background-image: var(--bg-shell-glow);
+}
+
+.nib-paper-sheet {
+  background-color: var(--bg-canvas);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  box-shadow: var(--shadow-sheet);
+}
+
+.nib-glass-panel {
+  background-color: var(--bg-glass);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.nib-floating-dock {
+  background-color: var(--bg-popover);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-dock);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+/* Centered Chinese prose reading and editing column */
 .nib-prose-column {
   width: 100%;
   max-width: var(--prose-max-width);

@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   Check,
   ChevronDown,
-  Command,
   Feather,
   Home,
   Lightbulb,
@@ -13,6 +12,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Sun,
 } from "lucide-react";
@@ -20,11 +20,10 @@ import { useApp } from "../stores/AppContext";
 import { useAutopilotState } from "../stores/AutopilotContext";
 import type { WorkspaceTab } from "../lib/constants";
 
-const WORKSPACE_TABS: Array<{ id: WorkspaceTab; label: string; shortcut: string }> = [
+const CORE_TABS: Array<{ id: WorkspaceTab; label: string; shortcut: string }> = [
   { id: "architect", label: "大纲", shortcut: "Ctrl+1" },
   { id: "studio", label: "写作", shortcut: "Ctrl+2" },
   { id: "atlas", label: "设定", shortcut: "Ctrl+3" },
-  { id: "book_settings", label: "设置", shortcut: "Ctrl+4" },
 ];
 
 export function TopBar() {
@@ -36,7 +35,6 @@ export function TopBar() {
     openBook,
     activeTab,
     setActiveTab,
-    atlasSubTab,
     openAtlasSubTab,
     books,
     activeBook,
@@ -52,7 +50,6 @@ export function TopBar() {
     toggleNotes,
     setFocusMode,
     toggleFocusMode,
-    openCommandPalette,
   } = useApp();
   const { autopilotState } = useAutopilotState();
 
@@ -82,16 +79,25 @@ export function TopBar() {
   const getGenreName = (genreId: string) =>
     genrePresets.find((g) => g.id === genreId)?.name ?? genreId;
 
+  const isAutopilotWaiting =
+    Boolean(activeBook) &&
+    autopilotState?.bookId === activeBook?.id &&
+    autopilotState?.status === "waiting_decision";
+  const isAutopilotRunning =
+    Boolean(activeBook) &&
+    autopilotState?.bookId === activeBook?.id &&
+    autopilotState?.status === "running";
+
   return (
     <header
-      className="nib-drag-region relative z-30 grid shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b border-border-subtle bg-surface select-none"
+      className="nib-drag-region relative z-30 grid shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 select-none"
       style={{
         height: "var(--mygo-titlebar-height, var(--topbar-height))",
-        paddingLeft: "calc(12px + var(--mygo-titlebar-inset-left, 0px))",
-        paddingRight: "calc(12px + var(--mygo-titlebar-inset-right, 0px))",
+        paddingLeft: "calc(10px + var(--mygo-titlebar-inset-left, 0px))",
+        paddingRight: "calc(10px + var(--mygo-titlebar-inset-right, 0px))",
       }}
     >
-      {/* Left: Brand or Home + Book switcher */}
+      {/* Left: Home + Book Switcher */}
       <div ref={menuRef} className="relative flex min-w-0 items-center justify-self-start gap-1">
         {inWorkspace && activeBook ? (
           <>
@@ -103,30 +109,32 @@ export function TopBar() {
               }}
               title="返回首页书架"
               aria-label="返回首页书架"
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ink-secondary transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary"
             >
               <Home className="h-3.5 w-3.5" />
             </button>
 
-            <span className="h-3.5 w-px bg-border-subtle" aria-hidden="true" />
-
             <button
               type="button"
               onClick={() => setMenuOpen((v) => !v)}
-              className="flex h-7 max-w-[240px] items-center gap-1.5 rounded-md px-2 text-[13px] font-medium text-ink-primary transition-colors hover:bg-elevated"
+              className={`flex h-7 max-w-[232px] items-center gap-1.5 rounded-lg px-2 text-[13px] font-medium transition-colors ${
+                menuOpen
+                  ? "bg-elevated text-ink-primary shadow-xs"
+                  : "text-ink-primary hover:bg-[var(--bg-hover)]"
+              }`}
             >
               <Feather className="h-3.5 w-3.5 shrink-0 text-accent" />
               <span className="truncate">《{activeBook.title}》</span>
               <ChevronDown
-                className={`h-3.5 w-3.5 shrink-0 text-ink-muted transition-transform ${
+                className={`h-3.5 w-3.5 shrink-0 text-ink-muted transition-transform duration-150 ${
                   menuOpen ? "rotate-180" : ""
                 }`}
               />
             </button>
 
             {menuOpen && (
-              <div className="nib-no-drag absolute top-[calc(100%+6px)] left-0 z-50 w-64 rounded-lg border border-border-strong bg-elevated py-1.5 shadow-[var(--shadow-elevated)]">
-                <div className="max-h-72 overflow-y-auto px-1">
+              <div className="nib-no-drag nib-floating-dock absolute top-[calc(100%+6px)] left-0 z-50 w-64 rounded-xl py-1.5">
+                <div className="max-h-68 overflow-y-auto px-1.5">
                   {books.map((book) => {
                     const selected = book.id === activeBook.id;
                     return (
@@ -139,10 +147,10 @@ export function TopBar() {
                             void openBook(book.id);
                           }
                         }}
-                        className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-[13px] transition-colors ${
+                        className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors ${
                           selected
                             ? "bg-accent-soft text-accent"
-                            : "text-ink-primary hover:bg-surface"
+                            : "text-ink-primary hover:bg-[var(--bg-hover)]"
                         }`}
                       >
                         <div className="min-w-0 flex-1">
@@ -160,16 +168,50 @@ export function TopBar() {
                   })}
                 </div>
 
-                <div className="my-1 border-t border-border-subtle" />
+                <div className="my-1.5 border-t border-border-subtle" />
 
-                <div className="flex flex-col gap-0.5 px-1">
+                <div className="flex flex-col gap-0.5 px-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setActiveTab("book_settings");
+                    }}
+                    className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-xs transition-colors ${
+                      activeTab === "book_settings"
+                        ? "bg-accent-soft font-medium text-accent"
+                        : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <SlidersHorizontal className="h-3.5 w-3.5" />
+                      <span>本书设置与导出</span>
+                    </span>
+                    <span className="nib-mono text-[10px] opacity-65">Ctrl+4</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      openAtlasSubTab("audit");
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary"
+                  >
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    <span>全书体检</span>
+                  </button>
+                </div>
+
+                <div className="my-1.5 border-t border-border-subtle" />
+
+                <div className="flex flex-col gap-0.5 px-1.5">
                   <button
                     type="button"
                     onClick={() => {
                       setMenuOpen(false);
                       openCreateBook();
                     }}
-                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] text-ink-secondary transition-colors hover:bg-surface hover:text-ink-primary"
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary"
                   >
                     <Plus className="h-3.5 w-3.5 text-accent" />
                     <span>新建书籍</span>
@@ -180,7 +222,7 @@ export function TopBar() {
                       setMenuOpen(false);
                       openHome();
                     }}
-                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] text-ink-secondary transition-colors hover:bg-surface hover:text-ink-primary"
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary"
                   >
                     <Home className="h-3.5 w-3.5 text-ink-muted" />
                     <span>返回首页书架</span>
@@ -190,20 +232,20 @@ export function TopBar() {
             )}
           </>
         ) : (
-          <div className="flex items-center gap-2 px-1 text-[13px] font-medium tracking-wide text-ink-primary">
+          <div className="flex items-center gap-2 px-1.5 text-[13px] font-medium tracking-wide text-ink-primary">
             <Feather className="h-3.5 w-3.5 text-accent" />
             <span>Nib</span>
           </div>
         )}
       </div>
 
-      {/* Center: 3-segment workspace switcher (workspace only) */}
+      {/* Center: Clean 3-Segment Native Pill */}
       {inWorkspace ? (
         <nav
           aria-label="工作区切换"
-          className="nib-no-drag flex shrink-0 items-center justify-self-center gap-0.5 whitespace-nowrap rounded-lg border border-border-subtle bg-canvas/70 p-0.5"
+          className="nib-no-drag flex shrink-0 items-center justify-self-center gap-0.5 whitespace-nowrap rounded-lg bg-[var(--bg-hover)] p-0.5"
         >
-          {WORKSPACE_TABS.map((tab) => {
+          {CORE_TABS.map((tab) => {
             const active = activeTab === tab.id;
             return (
               <button
@@ -213,7 +255,7 @@ export function TopBar() {
                 onClick={() => setActiveTab(tab.id)}
                 className={`rounded-[6px] px-3.5 py-1 text-xs font-medium transition-colors ${
                   active
-                    ? "bg-accent-soft text-accent"
+                    ? "bg-elevated text-ink-primary shadow-xs"
                     : "text-ink-secondary hover:text-ink-primary"
                 }`}
               >
@@ -221,103 +263,86 @@ export function TopBar() {
               </button>
             );
           })}
+          {activeTab === "book_settings" && (
+            <button
+              type="button"
+              title="本书设置 (Ctrl+4)"
+              onClick={() => setActiveTab("book_settings")}
+              className="rounded-[6px] bg-elevated px-3 py-1 text-xs font-medium text-accent shadow-xs"
+            >
+              本书设置
+            </button>
+          )}
         </nav>
       ) : (
         <div aria-hidden="true" />
       )}
 
-      {/* Right: Workspace utilities + System controls */}
+      {/* Right: Calm High-Frequency Utilities */}
       <div className="flex shrink-0 items-center justify-self-end gap-1">
-        {inWorkspace && activeBook && (() => {
-          const isAutopilotWaiting =
-            autopilotState?.bookId === activeBook.id &&
-            autopilotState.status === "waiting_decision";
-          const isAutopilotRunning =
-            autopilotState?.bookId === activeBook.id &&
-            autopilotState.status === "running";
-          const isAuditActive = activeTab === "atlas" && atlasSubTab === "audit";
-          return (
-            <>
-              <button
-                type="button"
-                onClick={() => openAtlasSubTab("audit")}
-                title="全书体检"
-                aria-label="全书体检"
-                className={`flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium transition-colors ${
-                  isAuditActive
+        {inWorkspace && activeBook && (
+          <>
+            <button
+              type="button"
+              onClick={openMemorySearch}
+              title="全书检索 (Ctrl+Shift+F)"
+              aria-label="全书检索"
+              className="flex h-7 items-center gap-1.5 rounded-lg bg-[var(--bg-hover)] px-2.5 text-xs text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+            >
+              <Search className="h-3.5 w-3.5" />
+              <span className="hidden md:inline">检索</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (!directorOpen && isAutopilotWaiting) {
+                  openDirector("autopilot");
+                } else {
+                  toggleDirector();
+                }
+              }}
+              title="AI 导演与自动托管 (Ctrl+K)"
+              className={`flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors ${
+                isAutopilotWaiting
+                  ? "bg-warn-soft text-warn"
+                  : directorOpen || isAutopilotRunning
                     ? "bg-accent-soft text-accent"
-                    : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
-                }`}
-              >
-                <ShieldCheck className="h-3.5 w-3.5" />
-                <span className="hidden lg:inline">体检</span>
-              </button>
-              <button
-                type="button"
-                onClick={toggleNotes}
-                title="灵感便签"
-                aria-label="灵感便签"
-                className={`flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
-                  notesOpen
-                    ? "bg-accent-soft text-accent"
-                    : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
-                }`}
-              >
-                <Lightbulb className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!directorOpen && isAutopilotWaiting) {
-                    openDirector("autopilot");
-                  } else {
-                    toggleDirector();
-                  }
-                }}
-                title="AI 导演与自动托管 (Ctrl+K)"
-                className={`flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors ${
-                  isAutopilotWaiting
-                    ? "border-warn/50 bg-warn-soft text-warn"
-                    : directorOpen || isAutopilotRunning
-                      ? "border-accent/40 bg-accent-soft text-accent"
-                      : "border-border-subtle bg-canvas text-ink-secondary hover:border-border-strong hover:text-ink-primary"
-                }`}
-              >
-                {isAutopilotRunning ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Sparkles className="h-3.5 w-3.5" />
-                )}
-                <span>
-                  {isAutopilotWaiting
-                    ? "托管待确认"
-                    : isAutopilotRunning
-                      ? `托管 ${autopilotState.completedChapters}/${autopilotState.targetChapters}`
-                      : "AI 导演"}
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={openMemorySearch}
-                title="全书检索 (Ctrl+Shift+F)"
-                aria-label="全书检索"
-                className="flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
-              >
-                <Search className="h-3.5 w-3.5" />
-              </button>
-              <span className="mx-0.5 h-3.5 w-px bg-border-subtle" aria-hidden="true" />
-            </>
-          );
-        })()}
-        <button
-          type="button"
-          onClick={openCommandPalette}
-          title="命令面板与快捷键 (Ctrl+Shift+P)"
-          aria-label="命令面板与快捷键"
-          className="flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
-        >
-          <Command className="h-3.5 w-3.5" />
-        </button>
+                    : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
+              }`}
+            >
+              {isAutopilotRunning ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5" />
+              )}
+              <span>
+                {isAutopilotWaiting
+                  ? "托管待确认"
+                  : isAutopilotRunning && autopilotState
+                    ? `托管 ${autopilotState.completedChapters}/${autopilotState.targetChapters}`
+                    : "导演"}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={toggleNotes}
+              title="灵感便签"
+              aria-label="灵感便签"
+              className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
+                notesOpen
+                  ? "bg-accent-soft text-accent"
+                  : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
+              }`}
+            >
+              <Lightbulb className="h-3.5 w-3.5" />
+            </button>
+
+            <span className="mx-0.5 h-3.5 w-px bg-border-subtle" aria-hidden="true" />
+          </>
+        )}
+
         {inWorkspace && activeBook && (
           <button
             type="button"
@@ -333,17 +358,18 @@ export function TopBar() {
             }}
             title={activeChapter ? "专注写作模式 (F11 / Ctrl+Shift+Z)" : "请先选择或新建章节"}
             aria-label="专注写作模式"
-            className="flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary disabled:cursor-not-allowed disabled:opacity-35"
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-secondary transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary disabled:cursor-not-allowed disabled:opacity-35"
           >
             <Maximize2 className="h-3.5 w-3.5" />
           </button>
         )}
+
         <button
           type="button"
           onClick={toggleTheme}
-          title={theme === "dark" ? "切换暖纸浅色" : "切换深色护眼"}
+          title={theme === "dark" ? "切换清墨浅色" : "切换清墨深色"}
           aria-label="切换主题"
-          className="flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-secondary transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary"
         >
           {theme === "dark" ? (
             <Sun className="h-3.5 w-3.5" />
@@ -351,12 +377,13 @@ export function TopBar() {
             <Moon className="h-3.5 w-3.5" />
           )}
         </button>
+
         <button
           type="button"
           onClick={() => openSettings("providers")}
-          title="全局设置"
+          title="全局设置 (命令面板 Ctrl+Shift+P)"
           aria-label="全局设置"
-          className="flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-secondary transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary"
         >
           <Settings className="h-3.5 w-3.5" />
         </button>

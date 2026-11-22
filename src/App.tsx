@@ -32,7 +32,7 @@ const SettingsModal = lazy(() =>
 
 function ViewFallback() {
   return (
-    <div className="flex flex-1 items-center justify-center bg-canvas">
+    <div className="nib-paper-sheet m-2 mt-0 flex flex-1 items-center justify-center">
       <div className="flex items-center gap-2 text-xs text-ink-muted">
         <Loader2 className="h-4 w-4 animate-spin text-accent" />
         <span>正在切换工作区…</span>
@@ -221,7 +221,7 @@ function NibShell() {
   ]);
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-canvas text-ink-primary">
+    <div className="nib-shell-bg flex h-full flex-col overflow-hidden text-ink-primary">
       {!effectiveFocusMode && <TopBar />}
       {!effectiveFocusMode && inWorkspace && <AutopilotStatusBar />}
 

@@ -6,23 +6,26 @@
 
 ---
 
-## 2. Design Tokens（深色护眼默认 + 暖纸浅色）
+## 2. Design Tokens（清墨浮纸 · Clear Ink：深色护眼默认 + 暖白浮纸浅色）
 
-### 2.1 色彩系统
+### 2.1 色彩与面层系统
 
-| Token 名称 | 深色护眼（默认 `#141416`） | 暖纸浅色（`#F6F3EC`） | 用途 |
+| Token 名称 | 清墨深色（默认） | 清墨浅色 | 用途 |
 | --- | --- | --- | --- |
-| `--bg-canvas` | `#141416` | `#F6F3EC` | 主阅读与编辑器画布背景 |
-| `--bg-surface` | `#1C1D21` | `#EFEAE0` | 侧栏、抽屉、卡片底色 |
-| `--bg-elevated` | `#25262B` | `#FFFFFF` | 模态框、浮条、下拉菜单 |
-| `--border-subtle` | `rgba(255,255,255,0.08)` | `rgba(30,28,24,0.10)` | 极细 1px 分割线 |
-| `--text-primary` | `#E6E2D8` | `#23201B` | 正文与标题（暖灰不刺眼） |
-| `--text-secondary` | `#9A958A` | `#6E685E` | 次级元信息、字数、章号 |
-| `--text-muted` | `#635F57` | `#A39C90` | 占位符、禁用态 |
-| `--accent` | `#D4A95E` | `#9C6D24` | 墨金主强调色（激活 Tab、主操作） |
-| `--status-ok` | `#58A67A` | `#2D7A4E` | 已定稿、钩子达标、Diff 新增 |
-| `--status-warn` | `#D99B42` | `#B87314` | `partial`、伏笔临期、普通 AI 味警告 |
-| `--status-danger` | `#D45D5D` | `#B83B3B` | 高危记忆变更、吃书冲突、禁用套话、Diff 删除 |
+| `--bg-shell` | `#121316` | `#EEECE7` | 窗口云母感外层底壳与透明标题栏基底 |
+| `--bg-canvas` | `#1A1B20` | `#FDFCF9` | 主阅读与编辑器悬浮圆角纸页（`.nib-paper-sheet`） |
+| `--bg-surface` | `#16171C` | `#F4F2ED` | 次级浅层区域与卡片底色 |
+| `--bg-glass` | `rgba(24,25,31,0.78)` | `rgba(247,245,240,0.80)` | 右侧通透磨砂抽屉（`.nib-glass-panel`） |
+| `--bg-elevated` | `#23252C` | `#FFFFFF` | 选中章节胶囊、主卡片、模态框 |
+| `--bg-popover` | `rgba(30,32,40,0.90)` | `rgba(255,255,255,0.92)` | 底部居中悬浮操作胶囊、查找浮条、下拉菜单 |
+| `--border-subtle` | `rgba(255,255,255,0.075)` | `rgba(28,31,38,0.08)` | 极细 1px 轮廓与分割线 |
+| `--text-primary` | `#E7E5DF` | `#1C1F26` | 正文与标题（高对比不刺眼） |
+| `--text-secondary` | `#9C9FA9` | `#565D6B` | 次级元信息、字数、章号 |
+| `--text-muted` | `#6C707C` | `#848B99` | 占位符、禁用态 |
+| `--accent` | `#7D98FF` | `#3451B2` | 青黛墨蓝主强调色（激活态、主操作） |
+| `--status-ok` | `#55B382` | `#267A52` | 已定稿、钩子达标、Diff 新增 |
+| `--status-warn` | `#E0A04B` | `#B57018` | `partial`、伏笔临期、普通 AI 味警告 |
+| `--status-danger` | `#E06B6B` | `#BD3E3E` | 高危记忆变更、吃书冲突、禁用套话、Diff 删除 |
 
 ### 2.2 中文阅读排版标尺
 - **UI 字体栈**：`"Inter", "PingFang SC", "Microsoft YaHei UI", sans-serif`

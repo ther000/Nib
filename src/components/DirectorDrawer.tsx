@@ -277,7 +277,7 @@ export function DirectorDrawer() {
   const autopilotWaiting = bookAutopilot?.status === "waiting_decision";
 
   return (
-    <aside className="flex h-full w-[360px] shrink-0 flex-col border-l border-border-subtle bg-surface">
+    <aside className="nib-glass-panel m-2 mt-0 ml-0 flex w-[352px] shrink-0 flex-col overflow-hidden">
       {/* Header */}
       <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border-subtle px-3">
         <div className="flex items-center gap-0.5 rounded-lg border border-border-subtle bg-canvas/80 p-0.5">

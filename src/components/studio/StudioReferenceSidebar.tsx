@@ -268,10 +268,10 @@ export function StudioReferenceSidebar({
   };
 
   return (
-    <aside className="flex w-[320px] shrink-0 flex-col border-r border-border-subtle bg-surface/65">
+    <aside className="flex w-[264px] shrink-0 flex-col bg-transparent px-1.5 pb-2">
       {/* Header Tabs */}
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border-subtle px-2">
-        <div className="flex items-center gap-0.5">
+      <div className="flex h-10 shrink-0 items-center justify-between px-1">
+        <div className="flex items-center gap-0.5 rounded-lg bg-[var(--bg-hover)] p-0.5">
           {(
             [
               { id: "toc", label: "目录", icon: List },
@@ -292,16 +292,16 @@ export function StudioReferenceSidebar({
                 key={tab.id}
                 type="button"
                 onClick={() => onChangeTab(tab.id)}
-                className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                className={`flex items-center gap-1 rounded-md px-1.5 py-1 text-[11.5px] font-medium transition-colors ${
                   active
-                    ? "bg-accent-soft text-accent"
-                    : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                    ? "bg-elevated text-ink-primary shadow-xs"
+                    : "text-ink-secondary hover:text-ink-primary"
                 }`}
               >
                 <Icon className="h-3 w-3 shrink-0" />
                 <span>{tab.label}</span>
                 {typeof tab.count === "number" && tab.count > 0 && (
-                  <span className="nib-mono text-[11px] opacity-75">{tab.count}</span>
+                  <span className="nib-mono text-[10px] opacity-75">{tab.count}</span>
                 )}
               </button>
             );
@@ -313,7 +313,7 @@ export function StudioReferenceSidebar({
           onClick={onClose}
           title="收起左侧对照栏"
           aria-label="收起左侧对照栏"
-          className="rounded p-1 text-ink-muted transition-colors hover:bg-elevated hover:text-ink-primary"
+          className="rounded-lg p-1 text-ink-muted transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary"
         >
           <PanelLeftClose className="h-3.5 w-3.5" />
         </button>
@@ -322,20 +322,20 @@ export function StudioReferenceSidebar({
       {/* Tab 0: 目录速切 */}
       {activeTab === "toc" && (
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="shrink-0 border-b border-border-subtle bg-canvas/45 px-3 py-2">
+          <div className="shrink-0 px-1.5 py-1.5">
             <div className="relative">
               <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-ink-muted" />
               <input
                 type="text"
                 value={tocQuery}
                 onChange={(e) => setTocQuery(e.target.value)}
-                placeholder="搜索章号或标题…"
-                className="w-full rounded-lg border border-border-subtle bg-canvas py-1.5 pr-2.5 pl-8 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent"
+                placeholder="筛选章号或标题…"
+                className="w-full rounded-lg border border-border-subtle bg-canvas/80 py-1.5 pr-2.5 pl-8 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent"
               />
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-2 py-2">
+          <div className="flex-1 overflow-y-auto px-1 py-1">
             {filteredTocChapters.length === 0 ? (
               <div className="py-10 text-center text-xs text-ink-muted">
                 没有匹配的章节
@@ -353,10 +353,10 @@ export function StudioReferenceSidebar({
                       onClick={() => {
                         if (!isCurrent) onSwitchChapter(chap.id);
                       }}
-                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors disabled:opacity-40 ${
+                      className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-xs transition-colors disabled:opacity-40 ${
                         isCurrent
-                          ? "bg-accent-soft font-medium text-accent"
-                          : "text-ink-primary hover:bg-elevated"
+                          ? "bg-elevated font-medium text-ink-primary shadow-xs"
+                          : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
                       }`}
                     >
                       <span

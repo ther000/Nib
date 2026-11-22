@@ -169,7 +169,7 @@ export function ScratchNotesDrawer() {
   if (!notesOpen || !activeBook) return null;
 
   return (
-    <aside className="flex h-full w-[360px] shrink-0 flex-col border-l border-border-subtle bg-surface">
+    <aside className="nib-glass-panel m-2 mt-0 ml-0 flex w-[348px] shrink-0 flex-col overflow-hidden">
       <div className="flex h-11 shrink-0 items-center justify-between border-b border-border-subtle px-4">
         <div className="flex items-center gap-2">
           <Lightbulb className="h-4 w-4 text-accent" />

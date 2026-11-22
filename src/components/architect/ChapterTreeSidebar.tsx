@@ -152,10 +152,10 @@ export function ChapterTreeSidebar({
 
   return (
     <aside
-      className="flex shrink-0 flex-col border-r border-border-subtle bg-surface"
+      className="flex shrink-0 flex-col bg-transparent px-1 pb-2"
       style={{ width: "var(--sidebar-tree-width)" }}
     >
-      <div className="flex items-center justify-between border-b border-border-subtle px-3 py-2.5">
+      <div className="flex items-center justify-between px-2.5 py-2">
         <div className="flex items-center gap-1.5 text-xs font-medium text-ink-secondary">
           <Layers className="h-3.5 w-3.5 text-ink-muted" />
           <span>目录</span>
@@ -533,10 +533,10 @@ export function ChapterTreeSidebar({
                                 e.stopPropagation();
                                 handleDropOnTarget(vol.id, chapIdx + 1, chap.id);
                               }}
-                              className={`group flex w-full items-center gap-1 rounded-md px-2 py-1.5 transition-colors ${
+                              className={`group flex w-full items-center gap-1 rounded-xl px-2.5 py-1.5 transition-colors ${
                                 selected
-                                  ? "bg-accent-soft text-ink-primary"
-                                  : "text-ink-secondary hover:bg-elevated/60 hover:text-ink-primary"
+                                  ? "bg-elevated font-medium text-ink-primary shadow-xs"
+                                  : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
                               } ${isDragTarget ? "ring-1 ring-accent/40 bg-accent-soft/20" : ""}`}
                             >
                               {batchMode && (

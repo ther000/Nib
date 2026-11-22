@@ -812,8 +812,8 @@ export function ArchitectView() {
         notify={notify}
       />
 
-      {/* Center Workspace */}
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-canvas">
+      {/* Center Floating Paper Sheet */}
+      <main className="nib-paper-sheet m-2 mt-0 ml-0 flex min-w-0 flex-1 flex-col overflow-hidden">
         {!activeChapter ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
             {volumes.length === 0 ? (

@@ -672,9 +672,9 @@ export function AtlasView() {
     (latestChapterSeq > 0 && timelineSeq !== latestChapterSeq) || includePending;
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-canvas">
+    <div className="nib-paper-sheet relative m-2 mt-0 flex min-h-0 flex-1 flex-col overflow-hidden">
       {/* Atlas Sub-Navigation Bar */}
-      <div className="shrink-0 border-b border-border-subtle bg-surface px-6">
+      <div className="shrink-0 border-b border-border-subtle bg-surface/55 px-6">
         <div className="mx-auto flex h-10 w-full max-w-[1160px] items-center justify-between gap-4">
           <div className="flex items-center gap-1 overflow-x-auto">
             {subTabs.map(({ id, label, Icon, badge, badgeTone, badgeText }) => {

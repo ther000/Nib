@@ -64,7 +64,7 @@ export function ModalShell({
       data-nib-modal="true"
       role="dialog"
       aria-modal="true"
-      className={`fixed inset-0 z-50 flex bg-black/55 backdrop-blur-[2px] ${alignClass}`}
+      className={`fixed inset-0 z-50 flex bg-black/45 backdrop-blur-xs ${alignClass}`}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget && !closeDisabled) {
           onClose();
@@ -72,7 +72,7 @@ export function ModalShell({
       }}
     >
       <div
-        className={`flex w-full flex-col overflow-hidden rounded-xl border border-border-strong bg-elevated shadow-[var(--shadow-elevated)] ${maxWidthClass} ${maxHeightClass}`}
+        className={`flex w-full flex-col overflow-hidden rounded-2xl border border-border-strong bg-elevated shadow-[var(--shadow-elevated)] ${maxWidthClass} ${maxHeightClass}`}
       >
         {!hideHeader && (
           <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border-subtle px-5 py-3.5">

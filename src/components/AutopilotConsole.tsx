@@ -99,8 +99,8 @@ export function AutopilotStatusBar() {
 
   return (
     <div
-      className={`shrink-0 border-b border-border-subtle px-4 py-2 ${
-        isWaiting ? "bg-warn-soft/50" : "bg-surface"
+      className={`mx-2 mb-2 shrink-0 rounded-xl border border-border-subtle px-4 py-2 ${
+        isWaiting ? "bg-warn-soft/70" : "nib-glass-panel"
       }`}
     >
       <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3">

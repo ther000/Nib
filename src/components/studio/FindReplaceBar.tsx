@@ -59,7 +59,7 @@ export function FindReplaceBar({
   }, [onClose]);
 
   return (
-    <div className="pointer-events-auto w-full max-w-[540px] rounded-xl border border-border-strong bg-elevated p-3 text-xs shadow-[var(--shadow-elevated)]">
+    <div className="pointer-events-auto nib-floating-dock w-full max-w-[540px] rounded-2xl p-3 text-xs">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1 rounded-lg border border-border-subtle bg-canvas p-0.5">
           <button

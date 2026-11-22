@@ -211,7 +211,7 @@ export function HomeView() {
   // Clean 2-step first-run onboarding when shelf is empty
   if (books.length === 0) {
     return (
-      <main className="flex flex-1 items-center justify-center overflow-y-auto px-6 py-12">
+      <main className="nib-paper-sheet m-2 mt-0 flex flex-1 items-center justify-center overflow-y-auto px-6 py-12">
         <div className="w-full max-w-[520px]">
           <h1 className="text-2xl font-medium tracking-tight text-ink-primary">
             开始你的第一部长篇
@@ -298,7 +298,7 @@ export function HomeView() {
   }
 
   return (
-    <main className="flex-1 overflow-y-auto px-8 py-9">
+    <main className="nib-paper-sheet m-2 mt-0 flex-1 overflow-y-auto px-9 py-9">
       <div className="mx-auto flex w-full max-w-[920px] flex-col gap-7">
         {/* Header Row */}
         <header className="flex flex-wrap items-center justify-between gap-4">
@@ -351,7 +351,7 @@ export function HomeView() {
         {featuredBook && (
           <section
             onContextMenu={(e) => openBookContextMenu(e, featuredBook)}
-            className="rounded-xl border border-accent/25 bg-surface p-6 transition-colors hover:border-accent/45"
+            className="rounded-2xl border border-border-subtle bg-elevated p-6 shadow-[var(--shadow-sheet)] transition-colors hover:border-accent/40"
           >
             <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
               <div className="min-w-0 flex-1">
@@ -375,7 +375,7 @@ export function HomeView() {
                   )}
                 </div>
 
-                <h2 className="truncate text-xl font-medium tracking-tight text-ink-primary">
+                <h2 className="truncate font-prose text-2xl font-medium text-ink-primary">
                   《{featuredBook.title}》
                 </h2>
 
@@ -419,7 +419,7 @@ export function HomeView() {
                 <div
                   key={book.id}
                   onContextMenu={(e) => openBookContextMenu(e, book)}
-                  className="group relative flex flex-col justify-between rounded-xl border border-border-subtle bg-surface p-4 transition-colors hover:border-border-strong"
+                  className="group relative flex flex-col justify-between rounded-2xl border border-border-subtle bg-surface/65 p-4 transition-colors hover:border-border-strong hover:bg-elevated"
                 >
                   <button
                     type="button"
@@ -427,7 +427,7 @@ export function HomeView() {
                     className="flex flex-1 flex-col text-left"
                   >
                     <div className="mb-2 pr-6">
-                      <h3 className="line-clamp-1 text-base font-medium text-ink-primary transition-colors group-hover:text-accent">
+                      <h3 className="line-clamp-1 font-prose text-base font-medium text-ink-primary transition-colors group-hover:text-accent">
                         《{book.title}》
                       </h3>
                     </div>

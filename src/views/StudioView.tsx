@@ -184,12 +184,13 @@ export function StudioView() {
   // Drawer state
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("audit");
 
-  // Left reference sidebar + rewrite presets + snapshots state
+  // Left reference sidebar + rewrite presets + snapshots state (default open in Clear Ink)
   const [refSidebarOpen, setRefSidebarOpen] = useState<boolean>(() => {
     try {
-      return window.localStorage.getItem("nib.studio.refSidebarOpen") === "1";
+      const saved = window.localStorage.getItem("nib.studio.refSidebarOpen");
+      return saved === null ? true : saved === "1";
     } catch {
-      return false;
+      return true;
     }
   });
   const [refSidebarTab, setRefSidebarTab] = useState<ReferenceTab>("toc");
@@ -2047,14 +2048,14 @@ export function StudioView() {
 
   if (!activeChapter) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-canvas px-6 text-center">
+      <div className="nib-paper-sheet m-2 mt-0 flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
         <div className="text-sm text-ink-secondary">当前书籍尚无章节</div>
         <button
           type="button"
           onClick={() => setActiveTab("architect")}
-          className="rounded-md bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90"
+          className="rounded-lg bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90"
         >
-          前往编排台新建章节
+          前往大纲台新建章节
         </button>
       </div>
     );
@@ -2063,7 +2064,7 @@ export function StudioView() {
   const statusMeta = getChapterStatusMeta(activeChapter.status);
 
   return (
-    <div className="relative flex min-h-0 flex-1 overflow-hidden bg-canvas">
+    <div className="relative flex min-h-0 flex-1 overflow-hidden">
       {/* 专注写作模式顶部隐形拖拽栏 + 右上角悬浮微弱状态条（避开原生窗口控制按钮） */}
       {focusMode && (
         <div
@@ -2074,7 +2075,7 @@ export function StudioView() {
             paddingRight: "calc(12px + var(--mygo-titlebar-inset-right, 0px))",
           }}
         >
-          <div className="nib-no-drag flex items-center gap-2 rounded-full border border-border-subtle bg-surface/85 px-3 py-1 text-xs text-ink-secondary opacity-70 backdrop-blur-md transition-opacity hover:opacity-100">
+          <div className="nib-no-drag nib-floating-dock flex items-center gap-2 rounded-full px-3 py-1 text-xs text-ink-secondary opacity-75 transition-opacity hover:opacity-100">
             <span className="nib-mono text-ink-primary">{formatNumber(liveWordCount)} 字</span>
             <span className="h-3 w-px bg-border-subtle" />
             <button
@@ -2119,8 +2120,14 @@ export function StudioView() {
         />
       )}
 
-      {/* Main Quiet Prose Canvas + Floating Overlays + Minimal Bottom Bar */}
-      <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+      {/* Main Floating Paper Sheet + Translucent Action Dock */}
+      <div
+        className={`relative flex min-w-0 flex-1 flex-col overflow-hidden ${
+          focusMode
+            ? "bg-canvas"
+            : `nib-paper-sheet m-2 mt-0 ${refSidebarOpen ? "ml-0" : ""}`
+        }`}
+      >
         {/* Floating Find & Replace Bar (zero layout shift) */}
         {findOpen && (
           <div className="pointer-events-none absolute top-3 right-5 left-5 z-20 flex justify-end">
@@ -2156,31 +2163,35 @@ export function StudioView() {
 
         <div
           ref={canvasScrollRef}
-          className={`nib-scroll-stable flex-1 overflow-y-auto px-8 pb-28 ${focusMode ? "pt-14" : "pt-6"}`}
+          className={`nib-scroll-stable flex-1 overflow-y-auto px-10 pb-32 ${focusMode ? "pt-16" : "pt-8"}`}
         >
           <div className="mx-auto w-full max-w-[var(--prose-max-width)]">
-            {/* Calm Single Utility Row */}
+            {/* Calm Borderless Meta & Panel Controls Row */}
             {!focusMode && (
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-ink-muted select-none">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-ink-muted select-none">
                 <div className="flex min-w-0 items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setRefSidebarOpen((v) => !v)}
-                    title={refSidebarOpen ? "收起左侧对照栏" : "展开对照栏（目录 / 前文 / 节拍 / 设定速查）"}
-                    className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
+                    title={refSidebarOpen ? "收起左侧目录与对照栏" : "展开左侧目录与对照栏"}
+                    aria-label="切换左侧目录栏"
+                    className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
                       refSidebarOpen
-                        ? "border-accent/40 bg-accent-soft text-accent"
-                        : "border-border-subtle bg-surface/80 text-ink-secondary hover:border-border-strong hover:text-ink-primary"
+                        ? "bg-accent-soft text-accent"
+                        : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
                     }`}
                   >
                     <PanelLeft className="h-3.5 w-3.5" />
-                    <span>对照</span>
                   </button>
                   {activeVolumeTitle && (
                     <span className="truncate text-ink-muted">{activeVolumeTitle}</span>
                   )}
+                  {activeVolumeTitle && <span aria-hidden="true">·</span>}
+                  <span className="nib-mono shrink-0 text-ink-secondary">
+                    第 {formatSeq(activeChapter.globalSeq)} 章
+                  </span>
                   <span
-                    className={`rounded-full border px-2 py-0.5 text-xs ${statusMeta.badgeClass}`}
+                    className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium ${statusMeta.badgeClass}`}
                   >
                     {statusMeta.label}
                   </span>
@@ -2195,7 +2206,7 @@ export function StudioView() {
                         }}
                         title="上一章"
                         aria-label="上一章"
-                        className="rounded p-1 text-ink-muted transition-colors hover:bg-surface hover:text-ink-primary disabled:opacity-30"
+                        className="rounded-md p-1 text-ink-muted transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary disabled:opacity-30"
                       >
                         <ChevronLeft className="h-3.5 w-3.5" />
                       </button>
@@ -2212,7 +2223,7 @@ export function StudioView() {
                         }}
                         title="下一章"
                         aria-label="下一章"
-                        className="rounded p-1 text-ink-muted transition-colors hover:bg-surface hover:text-ink-primary disabled:opacity-30"
+                        className="rounded-md p-1 text-ink-muted transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary disabled:opacity-30"
                       >
                         <ChevronRight className="h-3.5 w-3.5" />
                       </button>
@@ -2220,15 +2231,15 @@ export function StudioView() {
                   )}
                 </div>
 
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1">
                   {paragraphAuditMaps.flaggedParagraphs.length > 0 && (
-                    <div className="flex items-center gap-0.5 rounded-lg border border-border-subtle bg-surface px-1 py-0.5">
+                    <div className="flex items-center gap-0.5 rounded-lg bg-warn-soft/75 px-1.5 py-0.5">
                       <button
                         type="button"
                         onClick={() => cycleFlaggedParagraph(-1)}
                         title="上一处建议 (Alt+[)"
                         aria-label="上一处建议"
-                        className="rounded px-1.5 py-0.5 text-xs text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                        className="rounded px-1 py-0.5 text-xs text-warn hover:bg-warn-soft"
                       >
                         ‹
                       </button>
@@ -2245,72 +2256,54 @@ export function StudioView() {
                         onClick={() => cycleFlaggedParagraph(1)}
                         title="下一处建议 (Alt+])"
                         aria-label="下一处建议"
-                        className="rounded px-1.5 py-0.5 text-xs text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                        className="rounded px-1 py-0.5 text-xs text-warn hover:bg-warn-soft"
                       >
                         ›
                       </button>
                     </div>
                   )}
 
-                  {/* Unambiguous 2-Segment Mode Switch */}
-                  <div
-                    role="group"
-                    aria-label="视图模式"
-                    className="flex items-center rounded-lg border border-border-subtle bg-surface p-0.5"
-                  >
-                    <button
-                      type="button"
-                      disabled={generating}
-                      onClick={() => setReadingMode(false)}
-                      className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium transition-colors disabled:opacity-40 ${
-                        !readingMode
-                          ? "bg-elevated text-ink-primary shadow-xs"
-                          : "text-ink-muted hover:text-ink-primary"
-                      }`}
-                    >
-                      <Pencil className="h-3 w-3" />
-                      <span>写作</span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled={generating}
-                      onClick={() => setReadingMode(true)}
-                      className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium transition-colors disabled:opacity-40 ${
-                        readingMode
-                          ? "bg-accent-soft text-accent"
-                          : "text-ink-muted hover:text-ink-primary"
-                      }`}
-                    >
-                      <BookOpen className="h-3 w-3" />
-                      <span>校对</span>
-                    </button>
-                  </div>
-
                   {/* Overflow Utility Menu (···) */}
                   <div ref={moreMenuRef} className="relative">
                     <button
                       type="button"
                       onClick={() => setMoreMenuOpen((v) => !v)}
-                      title="更多工具（查找替换 / 排版 / 复制 / 导出）"
+                      title="更多工具（重写 / 查找替换 / 排版 / 复制 / 导出）"
                       aria-label="更多写作工具"
-                      className={`flex h-7 w-7 items-center justify-center rounded-md border transition-colors ${
+                      className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
                         moreMenuOpen || findOpen
-                          ? "border-accent/40 bg-accent-soft text-accent"
-                          : "border-border-subtle bg-surface/80 text-ink-secondary hover:border-border-strong hover:text-ink-primary"
+                          ? "bg-accent-soft text-accent"
+                          : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
                       }`}
                     >
                       <MoreHorizontal className="h-3.5 w-3.5" />
                     </button>
 
                     {moreMenuOpen && (
-                      <div className="absolute top-[calc(100%+6px)] right-0 z-30 w-48 rounded-lg border border-border-strong bg-elevated py-1 shadow-[var(--shadow-elevated)]">
+                      <div className="nib-floating-dock absolute top-[calc(100%+6px)] right-0 z-30 w-52 rounded-xl py-1.5">
+                        {!generating && content.trim().length > 0 && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setMoreMenuOpen(false);
+                                void startGeneration("rewrite");
+                              }}
+                              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-[var(--bg-hover)]"
+                            >
+                              <RefreshCw className="h-3.5 w-3.5 text-ink-secondary" />
+                              <span>存档并按节拍重写本章</span>
+                            </button>
+                            <div className="my-1 border-t border-border-subtle" />
+                          </>
+                        )}
                         <button
                           type="button"
                           onClick={() => {
                             setMoreMenuOpen(false);
                             setFindOpen((v) => !v);
                           }}
-                          className="flex w-full items-center justify-between px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-surface"
+                          className="flex w-full items-center justify-between px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-[var(--bg-hover)]"
                         >
                           <span className="flex items-center gap-2">
                             <Search className="h-3.5 w-3.5 text-ink-secondary" />
@@ -2325,7 +2318,7 @@ export function StudioView() {
                             setMoreMenuOpen(false);
                             handleFormatProse();
                           }}
-                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-surface disabled:opacity-40"
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-[var(--bg-hover)] disabled:opacity-40"
                         >
                           <Wand2 className="h-3.5 w-3.5 text-ink-secondary" />
                           <span>规范标点与段落排版</span>
@@ -2337,7 +2330,7 @@ export function StudioView() {
                             setMoreMenuOpen(false);
                             void handleCopyCleanProse();
                           }}
-                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-surface disabled:opacity-40"
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-[var(--bg-hover)] disabled:opacity-40"
                         >
                           {copiedClean ? (
                             <Check className="h-3.5 w-3.5 text-ok" />
@@ -2354,7 +2347,7 @@ export function StudioView() {
                             setMoreMenuOpen(false);
                             void handleExportBook();
                           }}
-                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-surface disabled:opacity-40"
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-[var(--bg-hover)] disabled:opacity-40"
                         >
                           <Download className="h-3.5 w-3.5 text-ink-secondary" />
                           <span>{exporting ? "导出中…" : "导出全书 Markdown"}</span>
@@ -2368,10 +2361,10 @@ export function StudioView() {
                     onClick={toggleStudioDrawer}
                     title="折叠 / 展开右侧抽屉 (Ctrl+\)"
                     aria-label="切换右侧抽屉"
-                    className={`flex h-7 w-7 items-center justify-center rounded-md border transition-colors ${
+                    className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
                       studioDrawerOpen
-                        ? "border-accent/40 bg-accent-soft text-accent"
-                        : "border-border-subtle bg-surface/80 text-ink-secondary hover:border-border-strong hover:text-ink-primary"
+                        ? "bg-accent-soft text-accent"
+                        : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
                     }`}
                   >
                     <PanelRight className="h-3.5 w-3.5" />
@@ -2380,97 +2373,24 @@ export function StudioView() {
               </div>
             )}
 
-            {/* Chapter Title & Primary Actions */}
-            <div className="mb-6 flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5">
-              <div className="flex min-w-[200px] flex-1 items-baseline gap-2.5">
-                <span className="shrink-0 font-prose text-[19px] font-normal tracking-tight text-ink-muted select-none">
+            {/* Pure Calm Chapter Title (Zero Competing Action Buttons) */}
+            <div className="mb-7">
+              {focusMode && (
+                <div className="nib-mono mb-2 text-xs text-ink-muted select-none">
                   第 {formatSeq(activeChapter.globalSeq)} 章
-                </span>
-                <input
-                  type="text"
-                  value={title}
-                  readOnly={generating}
-                  onChange={(e) => {
-                    setTitle(e.target.value);
-                    setDirty(true);
-                  }}
-                  placeholder="章节标题"
-                  className="min-w-0 flex-1 bg-transparent font-prose text-[26px] leading-snug font-medium tracking-tight text-ink-primary placeholder:text-ink-muted focus:outline-none"
-                />
-              </div>
-
-              {!focusMode && (
-                <div className="flex shrink-0 flex-wrap items-center gap-1.5 text-xs select-none">
-                  {generating ? (
-                    <button
-                      type="button"
-                      onClick={stopGeneration}
-                      title="停止生成 (Ctrl+Enter)"
-                      className="flex items-center gap-1.5 rounded-md border border-danger/40 bg-danger-soft px-3 py-1.5 font-medium text-danger transition-colors hover:border-danger"
-                    >
-                      <Square className="h-3 w-3 fill-current" />
-                      <span>停止生成</span>
-                    </button>
-                  ) : content.trim().length > 0 ? (
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => void startGeneration("continue")}
-                        title="紧接当前正文结尾继续往下写"
-                        className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 font-semibold text-canvas transition-opacity hover:opacity-90"
-                      >
-                        <FastForward className="h-3 w-3" />
-                        <span>续写</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void startGeneration("rewrite")}
-                        title="存档当前正文后按节拍重新生成整章"
-                        className="flex items-center gap-1 rounded-md border border-border-subtle bg-elevated px-2.5 py-1.5 text-ink-primary transition-colors hover:border-border-strong"
-                      >
-                        <RefreshCw className="h-3 w-3 text-ink-secondary" />
-                        <span>重写</span>
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => void startGeneration("rewrite")}
-                      title="生成本章 (Ctrl+Enter)"
-                      className="flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-1.5 font-semibold text-canvas transition-opacity hover:opacity-90"
-                    >
-                      <Play className="h-3 w-3 fill-current" />
-                      <span>生成本章</span>
-                    </button>
-                  )}
-
-                  <button
-                    type="button"
-                    disabled={generating || saving}
-                    onClick={() => void handleSave()}
-                    title="保存正文并归档快照 (Ctrl+S)"
-                    className="flex items-center gap-1 rounded-md border border-border-subtle bg-elevated px-2.5 py-1.5 text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
-                  >
-                    <Save className="h-3.5 w-3.5 text-ink-secondary" />
-                    <span>保存</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={generating || finalizing}
-                    onClick={() => void handleFinalize()}
-                    title="标记本章定稿并同步 Markdown"
-                    className={`flex items-center gap-1 rounded-md border px-2.5 py-1.5 transition-colors disabled:opacity-40 ${
-                      activeChapter.status === "finalized"
-                        ? "border-ok/35 bg-ok-soft text-ok"
-                        : "border-border-subtle bg-elevated text-ink-primary hover:border-ok/50 hover:text-ok"
-                    }`}
-                  >
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    <span>{finalizing ? "定稿中…" : "定稿"}</span>
-                  </button>
                 </div>
               )}
+              <input
+                type="text"
+                value={title}
+                readOnly={generating}
+                onChange={(e) => {
+                  setTitle(e.target.value);
+                  setDirty(true);
+                }}
+                placeholder="输入章节标题"
+                className="w-full bg-transparent font-prose text-[28px] leading-snug font-medium text-ink-primary placeholder:text-ink-muted/60 focus:outline-none"
+              />
             </div>
 
             {/* Contextual inline banners (deduplicated actions) */}
@@ -2610,9 +2530,9 @@ export function StudioView() {
           </div>
         </div>
 
-        {/* Floating Selection Rewrite Bar (bottom-center, zero layout shift) */}
+        {/* Floating Selection Rewrite Bar (sits cleanly above the floating dock) */}
         {!generating && !readingMode && selectionRange && (
-          <div className="pointer-events-none absolute right-6 bottom-13 left-6 z-20 flex justify-center">
+          <div className="pointer-events-none absolute right-6 bottom-16 left-6 z-20 flex justify-center">
             <SelectionRewriteBar
               selectedText={selectionRange.text}
               selectionStage={selectionStage}
@@ -2642,15 +2562,105 @@ export function StudioView() {
           </div>
         )}
 
-        {/* Minimal Studio Bottom Bar */}
+        {/* Centered Translucent Floating Action Dock */}
         {!focusMode && (
-          <footer className="flex h-10 shrink-0 items-center justify-between border-t border-border-subtle bg-surface/90 px-4 text-xs select-none">
-            <div className="flex min-w-0 items-center gap-3 text-ink-secondary">
-              <span className="nib-mono font-medium text-ink-primary">
+          <div className="pointer-events-none absolute right-4 bottom-4 left-4 z-10 flex justify-center">
+            <footer className="pointer-events-auto nib-floating-dock inline-flex max-w-full flex-wrap items-center gap-1 rounded-full px-2.5 py-1.5 text-xs select-none">
+              <span className="nib-mono px-1.5 font-medium text-ink-primary">
                 {formatNumber(liveWordCount)} 字
               </span>
 
-              <span className="h-3 w-px bg-border-subtle" aria-hidden="true" />
+              <span className="h-3.5 w-px bg-border-strong" aria-hidden="true" />
+
+              <button
+                type="button"
+                disabled={generating}
+                onClick={() => setReadingMode((v) => !v)}
+                title={readingMode ? "切回写作编辑模式" : "切换到校对与 AI 味标亮视图"}
+                className={`flex items-center gap-1 rounded-full px-2.5 py-1 font-medium transition-colors disabled:opacity-40 ${
+                  readingMode
+                    ? "bg-accent-soft text-accent"
+                    : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
+                }`}
+              >
+                {readingMode ? (
+                  <>
+                    <BookOpen className="h-3 w-3" />
+                    <span>校对态</span>
+                  </>
+                ) : (
+                  <>
+                    <Pencil className="h-3 w-3" />
+                    <span>写作态</span>
+                  </>
+                )}
+              </button>
+
+              {generating ? (
+                <button
+                  type="button"
+                  onClick={stopGeneration}
+                  title="停止生成 (Ctrl+Enter)"
+                  className="flex items-center gap-1.5 rounded-full bg-danger-soft px-3 py-1 font-medium text-danger transition-opacity hover:opacity-90"
+                >
+                  <Square className="h-3 w-3 fill-current" />
+                  <span>停止</span>
+                </button>
+              ) : content.trim().length > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => void startGeneration("continue")}
+                  title="紧接当前正文结尾继续往下写"
+                  className="flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 font-semibold text-canvas transition-opacity hover:opacity-90"
+                >
+                  <FastForward className="h-3 w-3" />
+                  <span>续写</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void startGeneration("rewrite")}
+                  title="按节拍生成本章 (Ctrl+Enter)"
+                  className="flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 font-semibold text-canvas transition-opacity hover:opacity-90"
+                >
+                  <Play className="h-3 w-3 fill-current" />
+                  <span>生成本章</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                disabled={generating || saving}
+                onClick={() => void handleSave()}
+                title="保存正文并归档快照 (Ctrl+S)"
+                className="flex items-center gap-1 rounded-full px-2.5 py-1 text-ink-secondary transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary disabled:opacity-40"
+              >
+                <Save className="h-3 w-3" />
+                <span>保存</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={generating || finalizing}
+                onClick={() => void handleFinalize()}
+                title="标记本章定稿并同步 Markdown"
+                className={`flex items-center gap-1 rounded-full px-2.5 py-1 transition-colors disabled:opacity-40 ${
+                  activeChapter.status === "finalized"
+                    ? "bg-ok-soft font-medium text-ok"
+                    : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ok"
+                }`}
+              >
+                <CheckCircle2 className="h-3 w-3" />
+                <span>
+                  {finalizing
+                    ? "定稿中…"
+                    : activeChapter.status === "finalized"
+                      ? "已定稿"
+                      : "定稿"}
+                </span>
+              </button>
+
+              <span className="hidden h-3.5 w-px bg-border-strong sm:block" aria-hidden="true" />
 
               <button
                 type="button"
@@ -2662,56 +2672,56 @@ export function StudioView() {
                     ? `调整正文写作模型（本次调用：输入 ${formatCompactTokens(lastUsage.promptTokens)} / 输出 ${formatCompactTokens(lastUsage.completionTokens)} Token）`
                     : "调整正文写作模型"
                 }
-                className={`truncate transition-colors hover:text-ink-primary ${
+                className={`hidden max-w-[140px] truncate rounded-full px-2 py-0.5 text-[11px] transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary sm:inline-block ${
                   draftRouteInfo.configured
-                    ? "nib-mono text-ink-secondary"
+                    ? "nib-mono text-ink-muted"
                     : "text-warn"
                 }`}
               >
                 {genModelName || draftRouteInfo.label}
               </button>
 
-              <span className="h-3 w-px bg-border-subtle" aria-hidden="true" />
-
-              {generating ? (
-                <span className="text-accent">写作中</span>
-              ) : saving ? (
-                <span className="text-ink-muted">保存中…</span>
-              ) : dirty ? (
-                <span className="text-warn">未保存</span>
-              ) : activeChapter.status === "partial" ? (
-                <span className="text-warn">未写完</span>
-              ) : lastAutoSavedAt ? (
-                <span className="text-ink-muted">已自动保存 {lastAutoSavedAt}</span>
-              ) : (
-                <span className="text-ink-muted">已保存</span>
-              )}
-            </div>
-          </footer>
+              <span className="hidden px-1.5 text-[11px] md:inline">
+                {generating ? (
+                  <span className="text-accent">写作中</span>
+                ) : saving ? (
+                  <span className="text-ink-muted">保存中…</span>
+                ) : dirty ? (
+                  <span className="text-warn">未保存</span>
+                ) : activeChapter.status === "partial" ? (
+                  <span className="text-warn">未写完</span>
+                ) : lastAutoSavedAt ? (
+                  <span className="text-ink-muted">已存 {lastAutoSavedAt}</span>
+                ) : (
+                  <span className="text-ink-muted">已保存</span>
+                )}
+              </span>
+            </footer>
+          </div>
         )}
       </div>
 
-      {/* Collapsible Right Drawer (360px) */}
+      {/* Collapsible Floating Glass Right Drawer */}
       {!focusMode && studioDrawerOpen && (
         <aside
-          className="flex shrink-0 flex-col border-l border-border-subtle bg-surface"
+          className="nib-glass-panel m-2 mt-0 ml-0 flex shrink-0 flex-col overflow-hidden"
           style={{ width: "var(--studio-drawer-width)" }}
         >
-          <div className="flex items-center justify-between border-b border-border-subtle px-2 py-2">
+          <div className="flex items-center justify-between border-b border-border-subtle px-2.5 py-2">
             <div className="flex items-center gap-0.5">
               <button
                 type="button"
                 onClick={() => setDrawerTab("audit")}
-                className={`flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                className={`flex items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1 text-xs font-medium transition-colors ${
                   drawerTab === "audit"
                     ? "bg-accent-soft text-accent"
-                    : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                    : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
                 }`}
               >
                 <ShieldCheck className="h-3.5 w-3.5" />
                 <span>检查</span>
                 {paragraphAuditMaps.totalFlags > 0 && (
-                  <span className="nib-mono rounded-full bg-warn-soft px-1.5 text-xs font-medium text-warn">
+                  <span className="nib-mono rounded-full bg-warn-soft px-1.5 text-[11px] font-medium text-warn">
                     {paragraphAuditMaps.totalFlags}
                   </span>
                 )}
@@ -2719,10 +2729,10 @@ export function StudioView() {
               <button
                 type="button"
                 onClick={() => setDrawerTab("delta")}
-                className={`flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                className={`flex items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1 text-xs font-medium transition-colors ${
                   drawerTab === "delta"
                     ? "bg-accent-soft text-accent"
-                    : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                    : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
                 }`}
               >
                 <FileDiff className="h-3.5 w-3.5" />
@@ -2738,16 +2748,16 @@ export function StudioView() {
               <button
                 type="button"
                 onClick={() => setDrawerTab("versions")}
-                className={`flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                className={`flex items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1 text-xs font-medium transition-colors ${
                   drawerTab === "versions"
                     ? "bg-accent-soft text-accent"
-                    : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                    : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
                 }`}
               >
                 <History className="h-3.5 w-3.5" />
                 <span>历史</span>
                 {versions.length > 0 && (
-                  <span className="nib-mono text-xs opacity-80">
+                  <span className="nib-mono text-[11px] opacity-80">
                     {versions.length}
                   </span>
                 )}
@@ -2755,10 +2765,10 @@ export function StudioView() {
               <button
                 type="button"
                 onClick={() => setDrawerTab("briefing")}
-                className={`flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                className={`flex items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1 text-xs font-medium transition-colors ${
                   drawerTab === "briefing"
                     ? "bg-accent-soft text-accent"
-                    : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                    : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
                 }`}
               >
                 <FileText className="h-3.5 w-3.5" />
@@ -2778,7 +2788,7 @@ export function StudioView() {
               }}
               title="刷新当前面板"
               aria-label="刷新当前面板"
-              className="rounded p-1 text-ink-muted transition-colors hover:bg-elevated hover:text-ink-primary"
+              className="rounded-lg p-1 text-ink-muted transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary"
             >
               <RefreshCw
                 className={`h-3.5 w-3.5 ${
