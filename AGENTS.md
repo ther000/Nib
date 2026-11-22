@@ -60,8 +60,20 @@ $env:CGO_ENABLED="0"; go test -v ./...
 # 2. 绑定生成检查（确认 src/mygo.ts 与 Go 绑定同步）
 bunx mygo generate
 
-# 3. 前端类型检查与生产构建
-bun run typecheck && bun run build:web
+# 3. 前端单元测试、类型检查与生产构建
+bun test && bun run typecheck && bun run build:web
 ```
+
+## 6. 每次改动交付闭环
+
+每次完成代码或文档改动并通过第 5 节验证后，必须按顺序完成以下三步交付动作，不留未提交或未同步状态：
+
+1. **Git 提交**：只暂存本次改动的文件，按「做了什么 / 怎么验证的 / 回滚方式」写清提交信息并提交到本地 `main` 分支（严禁把 `build/`、`dist/`、`*.db`、`*.exe` 或任何密钥文件纳入提交）。
+2. **打包最新 `.exe`**：执行纯 Go 生产打包，产出最新 `build/windows-amd64/Nib.exe` 并确认产物时间戳与体积：
+   ```powershell
+   $env:CGO_ENABLED="0"; $env:GOFLAGS="-buildvcs=false"; bunx mygo build -skip-installer
+   ```
+   （若需要额外生成 NSIS 安装包，再运行 `bun run build`。）
+3. **同步到 GitHub 仓库**：将最新提交推送到远端 `origin main`（`git push origin main`），并在汇报中给出 commit hash、`.exe` 路径与同步结果。
 
 > 详细架构与 DDL 见 [02-architecture-and-schema.md](./docs/02-architecture-and-schema.md)，阶段施工清单见 [05-roadmap-and-verification.md](./docs/05-roadmap-and-verification.md)。
