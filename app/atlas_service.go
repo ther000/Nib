@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"nib/internal/domain"
+	"nib/internal/memory"
 )
 
 // AtlasService 提供设定实体与世界铁律档案的桌面 RPC 绑定。
@@ -193,4 +194,28 @@ func (s *AtlasService) ExecuteBookRename(ctx context.Context, in domain.BookRena
 		return domain.BookRenameResult{}, err
 	}
 	return st.ExecuteBookRename(ctx, in)
+}
+
+// GetEntityPresence 统计指定书籍截至 upToSeq（<0 表示全书最新章，0 表示初始态）的实体出场频次与掉线雷达数据。
+func (s *AtlasService) GetEntityPresence(ctx context.Context, bookID int64, upToSeq int) (domain.EntityPresenceReport, error) {
+	if err := validatePositiveID("bookId", bookID); err != nil {
+		return domain.EntityPresenceReport{}, err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return domain.EntityPresenceReport{}, err
+	}
+	entities, err := st.ListEntities(ctx, bookID, domain.EntityFilter{})
+	if err != nil {
+		return domain.EntityPresenceReport{}, err
+	}
+	chapters, err := st.ListBookChapters(ctx, bookID)
+	if err != nil {
+		return domain.EntityPresenceReport{}, err
+	}
+	beatsByChapter, err := st.ListBookBeats(ctx, bookID)
+	if err != nil {
+		return domain.EntityPresenceReport{}, err
+	}
+	return memory.ComputeEntityPresence(bookID, entities, chapters, beatsByChapter, upToSeq), nil
 }

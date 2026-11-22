@@ -57,6 +57,7 @@ type Store interface {
 	SaveChapterDraft(ctx context.Context, in domain.SaveChapterDraftInput) (domain.Chapter, error)
 	FinalizeChapter(ctx context.Context, chapterID int64) (domain.Chapter, error)
 	ListBeats(ctx context.Context, chapterID int64) ([]domain.Beat, error)
+	ListBookBeats(ctx context.Context, bookID int64) (map[int64][]domain.Beat, error)
 	ReplaceBeats(ctx context.Context, chapterID int64, beats []domain.Beat) ([]domain.Beat, error)
 
 	// Chapter Versions

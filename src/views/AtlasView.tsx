@@ -11,6 +11,7 @@ import {
   Merge,
   Pencil,
   Plus,
+  Radio,
   Search,
   Shield,
   ShieldAlert,
@@ -24,6 +25,8 @@ import {
   MemoryService,
   type Entity,
   type EntityKind,
+  type EntityPresenceReport,
+  type EntityPresenceStat,
   type EntitySnapshot,
   type EntityStateEvent,
   type GenreFieldSpec,
@@ -40,6 +43,8 @@ import {
   isIMEComposing,
   type AtlasSubTab,
 } from "../lib/constants";
+import { isEntityAbsentAlert } from "../lib/relationGraph";
+import { AtlasTimelineBar } from "../components/atlas/AtlasTimelineBar";
 import { ForeshadowingBoard } from "../components/atlas/ForeshadowingBoard";
 import { ArcSummaryBoard } from "../components/atlas/ArcSummaryBoard";
 import { StyleRulesBoard } from "../components/atlas/StyleRulesBoard";
@@ -85,6 +90,7 @@ export function AtlasView() {
     refreshEntities,
     refreshBookData,
     refreshActiveChapter,
+    jumpToChapter,
     notify,
   } = useApp();
   const { openContextMenu } = useContextMenu();
@@ -123,13 +129,23 @@ export function AtlasView() {
     }
   }, [activeBook?.id, latestChapterSeq, timelineSeq]);
 
-  // Entity list & snapshot state
+  // Entity list, snapshot & presence radar state
   const [kindFilter, setKindFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [snapshots, setSnapshots] = useState<EntitySnapshot[]>([]);
   const [searchMatchedIds, setSearchMatchedIds] = useState<Set<number> | null>(null);
   const [loading, setLoading] = useState(false);
   const snapReqRef = useRef(0);
+
+  const [presenceReport, setPresenceReport] = useState<EntityPresenceReport | null>(null);
+  const [absentThreshold, setAbsentThreshold] = useState<number>(15);
+  const [absentOnly, setAbsentOnly] = useState<boolean>(false);
+  const presenceReqRef = useRef(0);
+
+  const handleTimelineSeqChange = useCallback((seq: number, isManual: boolean) => {
+    userAdjustedTimelineRef.current = isManual;
+    setTimelineSeq(seq);
+  }, []);
 
   // Slide-over editor state
   const [editor, setEditor] = useState<EntityEditorState | null>(null);
@@ -198,6 +214,58 @@ export function AtlasView() {
     return () => window.clearTimeout(timer);
   }, [atlasSubTab, fetchSnapshots, memoryRevision]);
 
+  // Fetch entity presence & absence radar when entities or relations sub-tab is active
+  const fetchPresence = useCallback(async () => {
+    if (!activeBook) {
+      setPresenceReport(null);
+      return;
+    }
+    if (latestChapterSeq === 0) {
+      setPresenceReport({
+        bookId: activeBook.id,
+        referenceSeq: 0,
+        latestChapterSeq: 0,
+        stats: [],
+      });
+      return;
+    }
+    const reqId = ++presenceReqRef.current;
+    try {
+      const rep = await AtlasService.getEntityPresence(activeBook.id, timelineSeq);
+      if (presenceReqRef.current !== reqId) return;
+      setPresenceReport(rep);
+    } catch {
+      if (presenceReqRef.current !== reqId) return;
+      setPresenceReport(null);
+    }
+  }, [activeBook, latestChapterSeq, timelineSeq]);
+
+  useEffect(() => {
+    if (atlasSubTab !== "entities" && atlasSubTab !== "relations") return;
+    const timer = window.setTimeout(() => {
+      void fetchPresence();
+    }, 100);
+    return () => window.clearTimeout(timer);
+  }, [atlasSubTab, fetchPresence, memoryRevision]);
+
+  const presenceByEntityId = useMemo(() => {
+    const map = new Map<number, EntityPresenceStat>();
+    for (const stat of presenceReport?.stats ?? []) {
+      map.set(stat.entityId, stat);
+    }
+    return map;
+  }, [presenceReport]);
+
+  const absentAlertCount = useMemo(() => {
+    let count = 0;
+    for (const ent of allEntities) {
+      if (isEntityAbsentAlert(ent, presenceByEntityId.get(ent.id), absentThreshold)) {
+        count++;
+      }
+    }
+    return count;
+  }, [allEntities, presenceByEntityId, absentThreshold]);
+
   // Backend search filter when searchQuery is non-empty
   useEffect(() => {
     if (atlasSubTab !== "entities" || !activeBook) return;
@@ -240,9 +308,26 @@ export function AtlasView() {
       if (searchMatchedIds !== null && !searchMatchedIds.has(snap.entity.id)) {
         return false;
       }
+      if (
+        absentOnly &&
+        !isEntityAbsentAlert(
+          snap.entity,
+          presenceByEntityId.get(snap.entity.id),
+          absentThreshold
+        )
+      ) {
+        return false;
+      }
       return true;
     });
-  }, [snapshots, kindFilter, searchMatchedIds]);
+  }, [
+    snapshots,
+    kindFilter,
+    searchMatchedIds,
+    absentOnly,
+    presenceByEntityId,
+    absentThreshold,
+  ]);
 
   const getSpecsForKind = useCallback(
     (kind: EntityKind): GenreFieldSpec[] =>
@@ -602,7 +687,7 @@ export function AtlasView() {
             })}
           </div>
 
-          {atlasSubTab === "entities" && (
+          {(atlasSubTab === "entities" || atlasSubTab === "relations") && (
             <div className="hidden items-center gap-2 text-[11px] text-ink-muted sm:flex">
               <Clock className="h-3.5 w-3.5 text-accent" />
               <span>
@@ -658,79 +743,65 @@ export function AtlasView() {
           {/* Main Content */}
           <div className="flex-1 overflow-y-auto px-6 py-5">
             <div className="mx-auto flex w-full max-w-[1160px] flex-col gap-4">
-              {/* Chapter Timeline Slider Strip */}
-              <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border-subtle bg-surface px-4 py-3">
-                <div className="flex min-w-[240px] flex-1 items-center gap-3">
-                  <div className="flex shrink-0 items-center gap-1.5 text-xs">
-                    <History className="h-3.5 w-3.5 text-accent" />
-                    <span className="font-medium text-ink-primary">
-                      {timelineSeq === 0
-                        ? "截至第 0 章（初始设定）"
-                        : `截至第 ${formatSeq(timelineSeq)} 章世界状态`}
+              {/* Shared Chapter Timeline Slider Strip */}
+              <AtlasTimelineBar
+                timelineSeq={timelineSeq}
+                latestChapterSeq={latestChapterSeq}
+                chapters={chapters}
+                includePending={includePending}
+                onChangeTimelineSeq={handleTimelineSeqChange}
+                onChangeIncludePending={setIncludePending}
+              />
+
+              {/* Compact Presence & Absence Radar Strip */}
+              {latestChapterSeq > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border-subtle bg-surface/75 px-3.5 py-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Radio className="h-3.5 w-3.5 text-accent" />
+                    <span className="font-medium text-ink-primary">出场与掉线雷达</span>
+                    <span className="text-ink-muted">
+                      （统计截至第 {formatSeq(timelineSeq)} 章的正文提及与节拍出场）
                     </span>
+                    {absentAlertCount > 0 ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-danger-soft px-2 py-0.5 text-[11px] font-medium text-danger">
+                        <AlertTriangle className="h-3 w-3" />
+                        {absentAlertCount} 个非铁律实体已掉线 ≥ {absentThreshold} 章
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-ok-soft px-2 py-0.5 text-[11px] text-ok">
+                        当前无掉线超过 {absentThreshold} 章的已出场实体
+                      </span>
+                    )}
                   </div>
 
-                  <input
-                    type="range"
-                    min={0}
-                    max={latestChapterSeq}
-                    value={timelineSeq}
-                    disabled={latestChapterSeq === 0}
-                    onChange={(e) => {
-                      userAdjustedTimelineRef.current = true;
-                      setTimelineSeq(Number(e.target.value));
-                    }}
-                    className="h-1.5 flex-1 cursor-pointer accent-[var(--accent)] disabled:opacity-35"
-                  />
-
-                  <span className="nib-mono shrink-0 text-[11px] text-ink-muted">
-                    {formatSeq(timelineSeq)} / {formatSeq(latestChapterSeq)}
-                  </span>
-
-                  {latestChapterSeq > 0 && (
-                    <div className="flex shrink-0 items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          userAdjustedTimelineRef.current = true;
-                          setTimelineSeq(0);
-                        }}
-                        className={`rounded px-1.5 py-0.5 text-[10.5px] transition-colors ${
-                          timelineSeq === 0
-                            ? "bg-accent-soft text-accent"
-                            : "text-ink-muted hover:bg-elevated hover:text-ink-primary"
-                        }`}
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="flex items-center gap-1.5 text-ink-secondary">
+                      <span>掉线阈值</span>
+                      <select
+                        value={absentThreshold}
+                        onChange={(e) => setAbsentThreshold(Number(e.target.value))}
+                        className="nib-mono rounded border border-border-subtle bg-canvas px-1.5 py-0.5 text-[11px] text-ink-primary focus:border-accent focus:outline-none"
                       >
-                        初始
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          userAdjustedTimelineRef.current = false;
-                          setTimelineSeq(latestChapterSeq);
-                        }}
-                        className={`rounded px-1.5 py-0.5 text-[10.5px] transition-colors ${
-                          timelineSeq === latestChapterSeq
-                            ? "bg-accent-soft text-accent"
-                            : "text-ink-muted hover:bg-elevated hover:text-ink-primary"
-                        }`}
-                      >
-                        最新
-                      </button>
-                    </div>
-                  )}
+                        {[10, 15, 20, 30].map((n) => (
+                          <option key={n} value={n}>
+                            {n} 章
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="flex cursor-pointer items-center gap-1.5 text-ink-secondary select-none">
+                      <input
+                        type="checkbox"
+                        checked={absentOnly}
+                        onChange={(e) => setAbsentOnly(e.target.checked)}
+                        className="h-3.5 w-3.5 accent-[var(--accent)]"
+                      />
+                      <span>仅看掉线实体</span>
+                    </label>
+                  </div>
                 </div>
-
-                <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-ink-secondary select-none">
-                  <input
-                    type="checkbox"
-                    checked={includePending}
-                    onChange={(e) => setIncludePending(e.target.checked)}
-                    className="h-3.5 w-3.5 accent-[var(--accent)]"
-                  />
-                  <span>含待审状态</span>
-                </label>
-              </div>
+              )}
 
               {/* Filter Toolbar */}
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -843,13 +914,21 @@ export function AtlasView() {
                     const ent = snap.entity;
                     const effectiveAttrs = snap.effectiveAttributes ?? ent.attributes ?? {};
                     const attrEntries = Object.entries(effectiveAttrs).slice(0, 4);
+                    const presence = presenceByEntityId.get(ent.id);
+                    const absentAlert = isEntityAbsentAlert(
+                      ent,
+                      presence,
+                      absentThreshold
+                    );
                     return (
                       <button
                         key={ent.id}
                         type="button"
                         onClick={() => openEditEntity(ent)}
                         onContextMenu={(e) => openEntityContextMenu(e, ent)}
-                        className="group flex flex-col rounded-xl border border-border-subtle bg-surface p-4 text-left transition-colors hover:border-border-strong hover:bg-elevated/60"
+                        className={`group flex flex-col rounded-xl border bg-surface p-4 text-left transition-colors hover:border-border-strong hover:bg-elevated/60 ${
+                          absentAlert ? "border-danger/45" : "border-border-subtle"
+                        }`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0 flex-1">
@@ -915,6 +994,26 @@ export function AtlasView() {
                             })}
                           </div>
                         )}
+
+                        {presence && latestChapterSeq > 0 && timelineSeq > 0 && (
+                          <div className="mt-2.5 flex flex-wrap items-center justify-between gap-1.5 border-t border-border-subtle/70 pt-2 text-[11px]">
+                            {presence.neverAppeared ? (
+                              <span className="text-ink-muted">截至此刻尚未出场</span>
+                            ) : (
+                              <>
+                                <span className="nib-mono text-ink-secondary">
+                                  出场 {presence.appearanceChapters} 章 · 末见第{" "}
+                                  {formatSeq(presence.lastSeenSeq)} 章
+                                </span>
+                                {absentAlert && (
+                                  <span className="nib-mono inline-flex items-center gap-1 rounded bg-danger-soft px-1.5 py-0.5 text-[10px] font-medium text-danger">
+                                    已掉线 {presence.absentChapters} 章
+                                  </span>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        )}
                       </button>
                     );
                   })}
@@ -926,7 +1025,18 @@ export function AtlasView() {
       )}
 
       {/* Sub-tab 1.5: 角色/势力关系网 */}
-      {atlasSubTab === "relations" && <RelationsBoard />}
+      {atlasSubTab === "relations" && (
+        <RelationsBoard
+          timelineSeq={timelineSeq}
+          latestChapterSeq={latestChapterSeq}
+          includePending={includePending}
+          onChangeTimelineSeq={handleTimelineSeqChange}
+          onChangeIncludePending={setIncludePending}
+          presenceReport={presenceReport}
+          absentThreshold={absentThreshold}
+          onChangeAbsentThreshold={setAbsentThreshold}
+        />
+      )}
 
       {/* Sub-tab 2: 伏笔看板 */}
       {atlasSubTab === "foreshadowings" && (
@@ -1195,6 +1305,56 @@ export function AtlasView() {
                   </div>
                 ))}
               </div>
+
+              {/* Presence Radar Summary (for existing entities) */}
+              {editor.id > 0 && latestChapterSeq > 0 && (() => {
+                const ep = presenceByEntityId.get(editor.id);
+                if (!ep) return null;
+                const isAlert = isEntityAbsentAlert(
+                  { isInvariant: editor.isInvariant },
+                  ep,
+                  absentThreshold
+                );
+                return (
+                  <div className="flex flex-col gap-2 rounded-lg border border-border-subtle bg-canvas/70 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 text-xs font-medium text-ink-primary">
+                        <Radio className="h-3.5 w-3.5 text-accent" />
+                        <span>出场雷达（截至第 {formatSeq(timelineSeq)} 章）</span>
+                      </div>
+                      {isAlert && (
+                        <span className="nib-mono rounded bg-danger-soft px-1.5 py-0.5 text-[10px] font-medium text-danger">
+                          已掉线 {ep.absentChapters} 章
+                        </span>
+                      )}
+                    </div>
+                    {ep.neverAppeared ? (
+                      <div className="text-[11px] text-ink-muted">
+                        截至当前时间点尚无正文或节拍出场记录
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-ink-secondary">
+                        <span className="nib-mono">
+                          出场 {ep.appearanceChapters} 章 · 正文 {ep.mentionCount} 次 · 节拍{" "}
+                          {ep.beatAppearances} 次 · 末见第 {formatSeq(ep.lastSeenSeq)} 章
+                        </span>
+                        {ep.lastSeenChapterId > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditor(null);
+                              void jumpToChapter(ep.lastSeenChapterId);
+                            }}
+                            className="text-accent hover:opacity-80"
+                          >
+                            跳转末见章
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Chronological State Events Ledger (for existing entities) */}
               {editor.id > 0 && (

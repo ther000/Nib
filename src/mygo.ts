@@ -617,6 +617,30 @@ export interface EntityMergeResult {
   snapshotId: number;
 }
 
+export interface EntityPresenceReport {
+  bookId: number;
+  referenceSeq: number;
+  latestChapterSeq: number;
+  stats: EntityPresenceStat[];
+}
+
+export interface EntityPresenceStat {
+  entityId: number;
+  entityName: string;
+  entityKind: EntityKind;
+  isInvariant: boolean;
+  appearanceChapters: number;
+  mentionCount: number;
+  beatAppearances: number;
+  firstSeenSeq: number;
+  lastSeenSeq: number;
+  lastSeenChapterId: number;
+  lastSeenChapterTitle: string;
+  absentChapters: number;
+  neverAppeared: boolean;
+  appearedChapterSeqs: number[];
+}
+
 export interface EntityRelation {
   id: number;
   bookId: number;
@@ -1423,6 +1447,8 @@ export const AtlasService = {
   executeBookRename: bind<[BookRenameExecuteInput], BookRenameResult>("AtlasService.ExecuteBookRename", (in_: BookRenameExecuteInput) => [in_]),
   /** ExecuteEntityMerge 在单事务内合并重复实体并保存安全撤销点与正文快照。 */
   executeEntityMerge: bind<[EntityMergeExecuteInput], EntityMergeResult>("AtlasService.ExecuteEntityMerge", (in_: EntityMergeExecuteInput) => [in_]),
+  /** GetEntityPresence 统计指定书籍截至 upToSeq（<0 表示全书最新章，0 表示初始态）的实体出场频次与掉线雷达数据。 */
+  getEntityPresence: bind<[number, number], EntityPresenceReport>("AtlasService.GetEntityPresence", (bookID: number, upToSeq: number) => [bookID, upToSeq]),
   /** ListEntities 按书籍与筛选条件列出设定实体（含世界铁律）。 */
   listEntities: bind<[number, EntityFilter], Entity[]>("AtlasService.ListEntities", (bookID: number, filter: EntityFilter) => [bookID, filter]),
   /** ListEntityRelations 返回指定书籍的全部角色/势力关系。 */

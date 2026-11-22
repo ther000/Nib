@@ -339,6 +339,16 @@ func (f *fakeStore) ListBeats(_ context.Context, chapterID int64) ([]domain.Beat
 	return f.beats[chapterID], nil
 }
 
+func (f *fakeStore) ListBookBeats(_ context.Context, bookID int64) (map[int64][]domain.Beat, error) {
+	out := make(map[int64][]domain.Beat)
+	for cid, chap := range f.chapters {
+		if chap.BookID == bookID && len(f.beats[cid]) > 0 {
+			out[cid] = f.beats[cid]
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeStore) ReplaceBeats(_ context.Context, chapterID int64, beats []domain.Beat) ([]domain.Beat, error) {
 	f.beats[chapterID] = beats
 	return beats, nil
@@ -961,5 +971,48 @@ func TestSettingsServiceFetchProviderModels(t *testing.T) {
 	// 无窗口上下文下 SetWindowTheme 应安全返回 nil
 	if err := settings.SetWindowTheme(ctx, "light"); err != nil {
 		t.Fatalf("SetWindowTheme failed: %v", err)
+	}
+}
+
+func TestAtlasServiceGetEntityPresence(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeStore()
+	rt := NewRuntime()
+	rt.Init(RuntimeDeps{Store: st})
+
+	atlas := NewAtlasService(rt)
+
+	if _, err := atlas.GetEntityPresence(ctx, 0, -1); err == nil {
+		t.Fatalf("expected validation error for bookId=0")
+	}
+
+	book, err := st.CreateBook(ctx, domain.CreateBookInput{Title: "出场雷达服务测试", Genre: domain.GenreXianxia})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	vol, err := st.UpsertVolume(ctx, domain.UpsertVolumeInput{BookID: book.ID, Title: "第一卷"})
+	if err != nil {
+		t.Fatalf("UpsertVolume: %v", err)
+	}
+	e1, err := atlas.UpsertEntity(ctx, domain.UpsertEntityInput{
+		BookID: book.ID, Kind: domain.EntityKindCharacter, Name: "陈平安",
+	})
+	if err != nil {
+		t.Fatalf("UpsertEntity: %v", err)
+	}
+	ch1, _ := st.CreateChapter(ctx, domain.CreateChapterInput{BookID: book.ID, VolumeID: vol.ID, Title: "第一章"})
+	_, _ = st.SaveChapterDraft(ctx, domain.SaveChapterDraftInput{ChapterID: ch1.ID, Title: ch1.Title, Content: "陈平安推开院门。"})
+	ch2, _ := st.CreateChapter(ctx, domain.CreateChapterInput{BookID: book.ID, VolumeID: vol.ID, Title: "第二章"})
+	_, _ = st.SaveChapterDraft(ctx, domain.SaveChapterDraftInput{ChapterID: ch2.ID, Title: ch2.Title, Content: "小镇风雪未停。"})
+
+	rep, err := atlas.GetEntityPresence(ctx, book.ID, -1)
+	if err != nil {
+		t.Fatalf("GetEntityPresence: %v", err)
+	}
+	if rep.LatestChapterSeq != 2 || rep.ReferenceSeq != 2 || len(rep.Stats) != 1 {
+		t.Fatalf("unexpected report: %+v", rep)
+	}
+	if rep.Stats[0].EntityID != e1.ID || rep.Stats[0].LastSeenSeq != 1 || rep.Stats[0].AbsentChapters != 1 {
+		t.Fatalf("unexpected stat: %+v", rep.Stats[0])
 	}
 }

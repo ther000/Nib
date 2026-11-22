@@ -109,3 +109,29 @@ func (in UpsertEntityRelationInput) Validate() error {
 	}
 	return nil
 }
+
+// EntityPresenceStat 记录单个实体在指定章节范围内的出场频次与掉线统计。
+type EntityPresenceStat struct {
+	EntityID             int64      `json:"entityId"`
+	EntityName           string     `json:"entityName"`
+	EntityKind           EntityKind `json:"entityKind"`
+	IsInvariant          bool       `json:"isInvariant"`
+	AppearanceChapters   int        `json:"appearanceChapters"`
+	MentionCount         int        `json:"mentionCount"`
+	BeatAppearances      int        `json:"beatAppearances"`
+	FirstSeenSeq         int        `json:"firstSeenSeq"`
+	LastSeenSeq          int        `json:"lastSeenSeq"`
+	LastSeenChapterID    int64      `json:"lastSeenChapterId"`
+	LastSeenChapterTitle string     `json:"lastSeenChapterTitle"`
+	AbsentChapters       int        `json:"absentChapters"`
+	NeverAppeared        bool       `json:"neverAppeared"`
+	AppearedChapterSeqs  []int      `json:"appearedChapterSeqs"`
+}
+
+// EntityPresenceReport 汇总全书实体的出场频次与掉线预警雷达结果。
+type EntityPresenceReport struct {
+	BookID           int64                `json:"bookId"`
+	ReferenceSeq     int                  `json:"referenceSeq"`
+	LatestChapterSeq int                  `json:"latestChapterSeq"`
+	Stats            []EntityPresenceStat `json:"stats"`
+}

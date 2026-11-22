@@ -848,6 +848,38 @@ func (s *Store) ListBeats(ctx context.Context, chapterID int64) ([]domain.Beat, 
 	return listBeatsQuery(ctx, s.db, chapterID)
 }
 
+// ListBookBeats 一次性按 chapter_id 分组返回整本书的全部节拍卡（按全局章序与节拍序号升序）。
+func (s *Store) ListBookBeats(ctx context.Context, bookID int64) (map[int64][]domain.Beat, error) {
+	if bookID <= 0 {
+		return nil, &domain.ValidationError{Field: "bookId", Message: "书籍 ID 必须大于 0"}
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT b.id, b.chapter_id, b.seq, b.stage, b.summary, b.conflict_note,
+		       b.pov_entity_id, b.entity_ids_json, b.target_words
+		FROM chapter_beats b
+		JOIN chapters c ON c.id = b.chapter_id
+		WHERE c.book_id = ?
+		ORDER BY c.global_seq ASC, b.seq ASC, b.id ASC
+	`, bookID)
+	if err != nil {
+		return nil, mapSQLiteError(err)
+	}
+	defer rows.Close()
+
+	grouped := make(map[int64][]domain.Beat)
+	for rows.Next() {
+		b, err := scanBeat(rows)
+		if err != nil {
+			return nil, err
+		}
+		grouped[b.ChapterID] = append(grouped[b.ChapterID], b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return grouped, nil
+}
+
 // ReplaceBeats 在单个事务内清空并按 1..N 顺序重写章节的全部节拍卡。
 func (s *Store) ReplaceBeats(ctx context.Context, chapterID int64, beats []domain.Beat) ([]domain.Beat, error) {
 	if chapterID <= 0 {
@@ -1065,27 +1097,35 @@ func listBeatsQuery(ctx context.Context, q querier, chapterID int64) ([]domain.B
 
 	out := make([]domain.Beat, 0)
 	for rows.Next() {
-		var (
-			b             domain.Beat
-			stage         string
-			pov           sql.NullInt64
-			entityIDsJSON string
-		)
-		if err := rows.Scan(&b.ID, &b.ChapterID, &b.Seq, &stage, &b.Summary, &b.ConflictNote, &pov, &entityIDsJSON, &b.TargetWords); err != nil {
-			return nil, mapSQLiteError(err)
+		b, err := scanBeat(rows)
+		if err != nil {
+			return nil, err
 		}
-		b.Stage = domain.BeatStage(stage)
-		if pov.Valid {
-			id := pov.Int64
-			b.POVEntityID = &id
-		}
-		b.EntityIDs = unmarshalInt64Slice(entityIDsJSON)
 		out = append(out, b)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+func scanBeat(sc rowScanner) (domain.Beat, error) {
+	var (
+		b             domain.Beat
+		stage         string
+		pov           sql.NullInt64
+		entityIDsJSON string
+	)
+	if err := sc.Scan(&b.ID, &b.ChapterID, &b.Seq, &stage, &b.Summary, &b.ConflictNote, &pov, &entityIDsJSON, &b.TargetWords); err != nil {
+		return domain.Beat{}, mapSQLiteError(err)
+	}
+	b.Stage = domain.BeatStage(stage)
+	if pov.Valid {
+		id := pov.Int64
+		b.POVEntityID = &id
+	}
+	b.EntityIDs = unmarshalInt64Slice(entityIDsJSON)
+	return b, nil
 }
 
 func scanChapterVersion(sc rowScanner) (domain.ChapterVersion, error) {
