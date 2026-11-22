@@ -2131,7 +2131,11 @@ export function StudioView() {
       >
         {/* Floating Find & Replace Bar (zero layout shift) */}
         {findOpen && (
-          <div className="pointer-events-none absolute top-3 right-5 left-5 z-20 flex justify-end">
+          <div
+            className={`pointer-events-none absolute right-5 left-5 z-20 flex justify-end ${
+              focusMode ? "top-3" : "top-13"
+            }`}
+          >
             <FindReplaceBar
               findScope={findScope}
               findQuery={findQuery}
@@ -2162,218 +2166,244 @@ export function StudioView() {
           </div>
         )}
 
-        <div
-          ref={canvasScrollRef}
-          className={`nib-scroll-stable flex-1 overflow-y-auto px-10 pb-32 ${focusMode ? "pt-16" : "pt-8"}`}
-        >
-          <div className="mx-auto w-full max-w-[var(--prose-max-width)]">
-            {/* Calm Borderless Meta & Panel Controls Row */}
-            {!focusMode && (
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-ink-muted select-none">
-                <div className="flex min-w-0 items-center gap-2">
+        {/* Fixed Top Chapter Meta, Status & Panel Controls Bar */}
+        {!focusMode && (
+          <div className="relative z-10 flex shrink-0 items-center justify-between gap-2 border-b border-border-subtle/70 px-4 py-2 text-xs text-ink-muted select-none">
+            <div className="flex min-w-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setRefSidebarOpen((v) => !v)}
+                title={refSidebarOpen ? "收起左侧目录与对照栏" : "展开左侧目录与对照栏"}
+                aria-label="切换左侧目录栏"
+                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors ${
+                  refSidebarOpen
+                    ? "bg-accent-soft text-accent"
+                    : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
+                }`}
+              >
+                <PanelLeft className="h-3.5 w-3.5" />
+              </button>
+              {activeVolumeTitle && (
+                <span className="truncate text-ink-muted">{activeVolumeTitle}</span>
+              )}
+              {activeVolumeTitle && <span aria-hidden="true">·</span>}
+              <span className="nib-mono shrink-0 text-ink-secondary">
+                第 {formatSeq(activeChapter.globalSeq)} 章
+              </span>
+              <span
+                className={`shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium ${statusMeta.badgeClass}`}
+              >
+                {statusMeta.label}
+              </span>
+              {chapters.length > 1 && (
+                <div className="ml-0.5 flex shrink-0 items-center gap-0.5">
                   <button
                     type="button"
-                    onClick={() => setRefSidebarOpen((v) => !v)}
-                    title={refSidebarOpen ? "收起左侧目录与对照栏" : "展开左侧目录与对照栏"}
-                    aria-label="切换左侧目录栏"
-                    className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
-                      refSidebarOpen
-                        ? "bg-accent-soft text-accent"
-                        : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
-                    }`}
+                    disabled={generating || currentChapterIndex <= 0}
+                    onClick={() => {
+                      const prevChap = chapters[currentChapterIndex - 1];
+                      if (prevChap) void selectChapter(prevChap.id);
+                    }}
+                    title="上一章"
+                    aria-label="上一章"
+                    className="rounded-md p-1 text-ink-muted transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary disabled:opacity-30"
                   >
-                    <PanelLeft className="h-3.5 w-3.5" />
+                    <ChevronLeft className="h-3.5 w-3.5" />
                   </button>
-                  {activeVolumeTitle && (
-                    <span className="truncate text-ink-muted">{activeVolumeTitle}</span>
-                  )}
-                  {activeVolumeTitle && <span aria-hidden="true">·</span>}
-                  <span className="nib-mono shrink-0 text-ink-secondary">
-                    第 {formatSeq(activeChapter.globalSeq)} 章
-                  </span>
-                  <span
-                    className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium ${statusMeta.badgeClass}`}
+                  <button
+                    type="button"
+                    disabled={
+                      generating ||
+                      currentChapterIndex < 0 ||
+                      currentChapterIndex >= chapters.length - 1
+                    }
+                    onClick={() => {
+                      const nextChap = chapters[currentChapterIndex + 1];
+                      if (nextChap) void selectChapter(nextChap.id);
+                    }}
+                    title="下一章"
+                    aria-label="下一章"
+                    className="rounded-md p-1 text-ink-muted transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary disabled:opacity-30"
                   >
-                    {statusMeta.label}
-                  </span>
-                  {chapters.length > 1 && (
-                    <div className="ml-0.5 flex items-center gap-0.5">
-                      <button
-                        type="button"
-                        disabled={generating || currentChapterIndex <= 0}
-                        onClick={() => {
-                          const prevChap = chapters[currentChapterIndex - 1];
-                          if (prevChap) void selectChapter(prevChap.id);
-                        }}
-                        title="上一章"
-                        aria-label="上一章"
-                        className="rounded-md p-1 text-ink-muted transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary disabled:opacity-30"
-                      >
-                        <ChevronLeft className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={
-                          generating ||
-                          currentChapterIndex < 0 ||
-                          currentChapterIndex >= chapters.length - 1
-                        }
-                        onClick={() => {
-                          const nextChap = chapters[currentChapterIndex + 1];
-                          if (nextChap) void selectChapter(nextChap.id);
-                        }}
-                        title="下一章"
-                        aria-label="下一章"
-                        className="rounded-md p-1 text-ink-muted transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary disabled:opacity-30"
-                      >
-                        <ChevronRight className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  )}
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
                 </div>
+              )}
+            </div>
 
-                <div className="flex items-center gap-1">
-                  {paragraphAuditMaps.flaggedParagraphs.length > 0 && (
-                    <div className="flex items-center gap-0.5 rounded-lg bg-warn-soft/75 px-1.5 py-0.5">
-                      <button
-                        type="button"
-                        onClick={() => cycleFlaggedParagraph(-1)}
-                        title="上一处建议 (Alt+[)"
-                        aria-label="上一处建议"
-                        className="rounded px-1 py-0.5 text-xs text-warn hover:bg-warn-soft"
-                      >
-                        ‹
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => cycleFlaggedParagraph(1)}
-                        title="查看问题段落 (Alt+])"
-                        className="nib-mono px-1 text-xs font-medium text-warn"
-                      >
-                        {paragraphAuditMaps.flaggedParagraphs.length} 段待改
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => cycleFlaggedParagraph(1)}
-                        title="下一处建议 (Alt+])"
-                        aria-label="下一处建议"
-                        className="rounded px-1 py-0.5 text-xs text-warn hover:bg-warn-soft"
-                      >
-                        ›
-                      </button>
-                    </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {paragraphAuditMaps.flaggedParagraphs.length > 0 && (
+                <div className="flex items-center gap-0.5 rounded-lg bg-warn-soft/75 px-1.5 py-0.5">
+                  <button
+                    type="button"
+                    onClick={() => cycleFlaggedParagraph(-1)}
+                    title="上一处建议 (Alt+[)"
+                    aria-label="上一处建议"
+                    className="rounded px-1 py-0.5 text-xs text-warn hover:bg-warn-soft"
+                  >
+                    ‹
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => cycleFlaggedParagraph(1)}
+                    title="查看问题段落 (Alt+])"
+                    className="nib-mono px-1 text-xs font-medium text-warn"
+                  >
+                    {paragraphAuditMaps.flaggedParagraphs.length} 段待改
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => cycleFlaggedParagraph(1)}
+                    title="下一处建议 (Alt+])"
+                    aria-label="下一处建议"
+                    className="rounded px-1 py-0.5 text-xs text-warn hover:bg-warn-soft"
+                  >
+                    ›
+                  </button>
+                </div>
+              )}
+
+              <div className="flex items-center gap-1.5 px-1 text-[11px]">
+                <span className="nib-mono font-medium text-ink-secondary">
+                  {formatNumber(liveWordCount)} 字
+                </span>
+                <span className="text-border-strong" aria-hidden="true">
+                  ·
+                </span>
+                <span>
+                  {generating ? (
+                    <span className="text-accent">写作中</span>
+                  ) : saving ? (
+                    <span className="text-ink-muted">保存中…</span>
+                  ) : dirty ? (
+                    <span className="text-warn">未保存</span>
+                  ) : activeChapter.status === "partial" ? (
+                    <span className="text-warn">未写完</span>
+                  ) : lastAutoSavedAt ? (
+                    <span className="text-ink-muted">已存 {lastAutoSavedAt}</span>
+                  ) : (
+                    <span className="text-ink-muted">已保存</span>
                   )}
+                </span>
+              </div>
 
-                  {/* Overflow Utility Menu (···) */}
-                  <div ref={moreMenuRef} className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setMoreMenuOpen((v) => !v)}
-                      title="更多工具（重写 / 查找替换 / 排版 / 复制 / 导出）"
-                      aria-label="更多写作工具"
-                      className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
-                        moreMenuOpen || findOpen
-                          ? "bg-accent-soft text-accent"
-                          : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
-                      }`}
-                    >
-                      <MoreHorizontal className="h-3.5 w-3.5" />
-                    </button>
+              <span className="h-3.5 w-px bg-border-subtle" aria-hidden="true" />
 
-                    {moreMenuOpen && (
-                      <div className="nib-floating-dock absolute top-[calc(100%+6px)] right-0 z-30 w-52 rounded-xl py-1.5">
-                        {!generating && content.trim().length > 0 && (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setMoreMenuOpen(false);
-                                void startGeneration("rewrite");
-                              }}
-                              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-[var(--bg-hover)]"
-                            >
-                              <RefreshCw className="h-3.5 w-3.5 text-ink-secondary" />
-                              <span>存档并按节拍重写本章</span>
-                            </button>
-                            <div className="my-1 border-t border-border-subtle" />
-                          </>
-                        )}
+              {/* Overflow Utility Menu (···) */}
+              <div ref={moreMenuRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setMoreMenuOpen((v) => !v)}
+                  title="更多工具（重写 / 查找替换 / 排版 / 复制 / 导出）"
+                  aria-label="更多写作工具"
+                  className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
+                    moreMenuOpen || findOpen
+                      ? "bg-accent-soft text-accent"
+                      : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
+                  }`}
+                >
+                  <MoreHorizontal className="h-3.5 w-3.5" />
+                </button>
+
+                {moreMenuOpen && (
+                  <div className="nib-floating-dock absolute top-[calc(100%+6px)] right-0 z-30 w-52 rounded-xl py-1.5">
+                    {!generating && content.trim().length > 0 && (
+                      <>
                         <button
                           type="button"
                           onClick={() => {
                             setMoreMenuOpen(false);
-                            setFindOpen((v) => !v);
+                            void startGeneration("rewrite");
                           }}
-                          className="flex w-full items-center justify-between px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-[var(--bg-hover)]"
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-[var(--bg-hover)]"
                         >
-                          <span className="flex items-center gap-2">
-                            <Search className="h-3.5 w-3.5 text-ink-secondary" />
-                            <span>查找与替换</span>
-                          </span>
-                          <span className="nib-mono text-[11px] text-ink-muted">Ctrl+H</span>
-                        </button>
-                        <button
-                          type="button"
-                          disabled={generating || !content.trim()}
-                          onClick={() => {
-                            setMoreMenuOpen(false);
-                            handleFormatProse();
-                          }}
-                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-[var(--bg-hover)] disabled:opacity-40"
-                        >
-                          <Wand2 className="h-3.5 w-3.5 text-ink-secondary" />
-                          <span>规范标点与段落排版</span>
-                        </button>
-                        <button
-                          type="button"
-                          disabled={generating || !content.trim()}
-                          onClick={() => {
-                            setMoreMenuOpen(false);
-                            void handleCopyCleanProse();
-                          }}
-                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-[var(--bg-hover)] disabled:opacity-40"
-                        >
-                          {copiedClean ? (
-                            <Check className="h-3.5 w-3.5 text-ok" />
-                          ) : (
-                            <Copy className="h-3.5 w-3.5 text-ink-secondary" />
-                          )}
-                          <span>{copiedClean ? "已复制纯净正文" : "复制纯净正文"}</span>
+                          <RefreshCw className="h-3.5 w-3.5 text-ink-secondary" />
+                          <span>存档并按节拍重写本章</span>
                         </button>
                         <div className="my-1 border-t border-border-subtle" />
-                        <button
-                          type="button"
-                          disabled={exporting}
-                          onClick={() => {
-                            setMoreMenuOpen(false);
-                            void handleExportBook();
-                          }}
-                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-[var(--bg-hover)] disabled:opacity-40"
-                        >
-                          <Download className="h-3.5 w-3.5 text-ink-secondary" />
-                          <span>{exporting ? "导出中…" : "导出全书 Markdown"}</span>
-                        </button>
-                      </div>
+                      </>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMoreMenuOpen(false);
+                        setFindOpen((v) => !v);
+                      }}
+                      className="flex w-full items-center justify-between px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-[var(--bg-hover)]"
+                    >
+                      <span className="flex items-center gap-2">
+                        <Search className="h-3.5 w-3.5 text-ink-secondary" />
+                        <span>查找与替换</span>
+                      </span>
+                      <span className="nib-mono text-[11px] text-ink-muted">Ctrl+H</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={generating || !content.trim()}
+                      onClick={() => {
+                        setMoreMenuOpen(false);
+                        handleFormatProse();
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-[var(--bg-hover)] disabled:opacity-40"
+                    >
+                      <Wand2 className="h-3.5 w-3.5 text-ink-secondary" />
+                      <span>规范标点与段落排版</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={generating || !content.trim()}
+                      onClick={() => {
+                        setMoreMenuOpen(false);
+                        void handleCopyCleanProse();
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-[var(--bg-hover)] disabled:opacity-40"
+                    >
+                      {copiedClean ? (
+                        <Check className="h-3.5 w-3.5 text-ok" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5 text-ink-secondary" />
+                      )}
+                      <span>{copiedClean ? "已复制纯净正文" : "复制纯净正文"}</span>
+                    </button>
+                    <div className="my-1 border-t border-border-subtle" />
+                    <button
+                      type="button"
+                      disabled={exporting}
+                      onClick={() => {
+                        setMoreMenuOpen(false);
+                        void handleExportBook();
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-[var(--bg-hover)] disabled:opacity-40"
+                    >
+                      <Download className="h-3.5 w-3.5 text-ink-secondary" />
+                      <span>{exporting ? "导出中…" : "导出全书 Markdown"}</span>
+                    </button>
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={toggleStudioDrawer}
-                    title="折叠 / 展开右侧抽屉 (Ctrl+\)"
-                    aria-label="切换右侧抽屉"
-                    className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
-                      studioDrawerOpen
-                        ? "bg-accent-soft text-accent"
-                        : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
-                    }`}
-                  >
-                    <PanelRight className="h-3.5 w-3.5" />
-                  </button>
-                </div>
+                )}
               </div>
-            )}
 
+              <button
+                type="button"
+                onClick={toggleStudioDrawer}
+                title="折叠 / 展开右侧抽屉 (Ctrl+\)"
+                aria-label="切换右侧抽屉"
+                className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
+                  studioDrawerOpen
+                    ? "bg-accent-soft text-accent"
+                    : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
+                }`}
+              >
+                <PanelRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div
+          ref={canvasScrollRef}
+          className={`nib-scroll-stable flex-1 overflow-y-auto px-10 pb-32 ${focusMode ? "pt-16" : "pt-7"}`}
+        >
+          <div className="mx-auto w-full max-w-[var(--prose-max-width)]">
             {/* Pure Calm Chapter Title (Zero Competing Action Buttons) */}
             <div className="mb-7">
               {focusMode && (
@@ -2567,12 +2597,6 @@ export function StudioView() {
         {!focusMode && (
           <div className="pointer-events-none absolute right-4 bottom-4 left-4 z-20 flex justify-center">
             <footer className="pointer-events-auto nib-floating-dock inline-flex max-w-full flex-wrap items-center gap-1 rounded-full px-2.5 py-1.5 text-xs select-none">
-              <span className="nib-mono px-1.5 font-medium text-ink-primary">
-                {formatNumber(liveWordCount)} 字
-              </span>
-
-              <span className="h-3.5 w-px bg-border-strong" aria-hidden="true" />
-
               <button
                 type="button"
                 disabled={generating}
@@ -2679,22 +2703,6 @@ export function StudioView() {
                 lastUsage={lastUsage}
                 draftRouteInfo={draftRouteInfo}
               />
-
-              <span className="hidden px-1.5 text-[11px] md:inline">
-                {generating ? (
-                  <span className="text-accent">写作中</span>
-                ) : saving ? (
-                  <span className="text-ink-muted">保存中…</span>
-                ) : dirty ? (
-                  <span className="text-warn">未保存</span>
-                ) : activeChapter.status === "partial" ? (
-                  <span className="text-warn">未写完</span>
-                ) : lastAutoSavedAt ? (
-                  <span className="text-ink-muted">已存 {lastAutoSavedAt}</span>
-                ) : (
-                  <span className="text-ink-muted">已保存</span>
-                )}
-              </span>
             </footer>
           </div>
         )}
