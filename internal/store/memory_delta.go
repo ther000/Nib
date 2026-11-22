@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -886,4 +887,187 @@ func scanChapterDelta(sc rowScanner) (domain.ChapterDelta, error) {
 	d.RelationChanges = unmarshalJSONSlice[domain.DeltaRelationChange](relChangesJSON)
 	d.DeadlineChanges = unmarshalJSONSlice[domain.DeltaDeadlineChange](dlChangesJSON)
 	return d, nil
+}
+
+// ListPendingDeltas 返回指定书籍全部尚未审定（review_status='pending'）的记忆变更单，按章序升序排列。
+func (s *Store) ListPendingDeltas(ctx context.Context, bookID int64) ([]domain.ChapterDelta, error) {
+	if bookID <= 0 {
+		return nil, &domain.ValidationError{Field: "bookId", Message: "书籍 ID 必须大于 0"}
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT d.id, d.chapter_id, d.causal_summary, d.story_time_label, d.story_day,
+		       d.new_entities_json, d.state_patch_json, d.foreshadow_json,
+		       d.relation_changes_json, d.deadline_changes_json,
+		       d.high_risk_flags, d.review_status, d.created_at, d.reviewed_at
+		FROM chapter_deltas d
+		JOIN chapters c ON c.id = d.chapter_id
+		WHERE c.book_id = ? AND d.review_status = 'pending'
+		ORDER BY c.global_seq ASC, d.id ASC
+	`, bookID)
+	if err != nil {
+		return nil, mapSQLiteError(err)
+	}
+	defer rows.Close()
+	return scanAll(rows, scanChapterDelta)
+}
+
+// ListDirtyChapters 查询指定书籍全部标记为 upstream_dirty 的章节及关联修复信息，按章序升序返回。
+func (s *Store) ListDirtyChapters(ctx context.Context, bookID int64) ([]domain.DirtyChapterItem, error) {
+	if bookID <= 0 {
+		return nil, &domain.ValidationError{Field: "bookId", Message: "书籍 ID 必须大于 0"}
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.id, c.volume_id, c.global_seq, c.title, c.word_count,
+		       c.content, c.updated_at,
+		       EXISTS(
+		           SELECT 1 FROM chapter_deltas pd
+		           WHERE pd.chapter_id = c.id AND pd.review_status = 'pending'
+		       ) AS has_pending_delta,
+		       COALESCE((
+		           SELECT ca.critic_json FROM chapter_audits ca
+		           WHERE ca.chapter_id = c.id
+		       ), '[]') AS critic_json
+		FROM chapters c
+		WHERE c.book_id = ? AND c.status = 'upstream_dirty'
+		ORDER BY c.global_seq ASC, c.id ASC
+	`, bookID)
+	if err != nil {
+		return nil, mapSQLiteError(err)
+	}
+	defer rows.Close()
+
+	out := make([]domain.DirtyChapterItem, 0)
+	for rows.Next() {
+		var (
+			item       domain.DirtyChapterItem
+			content    string
+			hasPending int
+			criticJSON string
+		)
+		if err := rows.Scan(
+			&item.ChapterID, &item.VolumeID, &item.GlobalSeq, &item.Title,
+			&item.WordCount, &content, &item.UpdatedAt, &hasPending, &criticJSON,
+		); err != nil {
+			return nil, mapSQLiteError(err)
+		}
+		item.HasContent = strings.TrimSpace(content) != ""
+		item.HasPendingDelta = hasPending != 0
+		var rawFindings []json.RawMessage
+		if err := json.Unmarshal([]byte(criticJSON), &rawFindings); err == nil {
+			item.LastAuditFindings = len(rawFindings)
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 为每条脏标章附带早于它的最近一条已入库变更单来源，帮助作者定位上游变动原因。
+	for i := range out {
+		var (
+			srcSeq        int
+			causalSummary string
+		)
+		err := s.db.QueryRowContext(ctx, `
+			SELECT uc.global_seq, ud.causal_summary
+			FROM chapter_deltas ud
+			JOIN chapters uc ON uc.id = ud.chapter_id
+			WHERE uc.book_id = ? AND uc.global_seq < ? AND ud.review_status = 'applied'
+			ORDER BY ud.reviewed_at DESC, uc.global_seq DESC
+			LIMIT 1
+		`, bookID, out[i].GlobalSeq).Scan(&srcSeq, &causalSummary)
+		if err == nil {
+			out[i].UpstreamSourceSeq = srcSeq
+			summaryTrimmed := strings.TrimSpace(causalSummary)
+			if summaryTrimmed != "" {
+				out[i].UpstreamSummary = fmt.Sprintf("第 %d 章记忆已变更：%s", srcSeq, summaryTrimmed)
+			} else {
+				out[i].UpstreamSummary = fmt.Sprintf("第 %d 章已提交记忆变更单", srcSeq)
+			}
+		} else {
+			out[i].UpstreamSummary = "上游章节记忆或关键设定发生更新，建议复核本章衔接"
+		}
+	}
+	return out, nil
+}
+
+// ClearDirtyChapters 在单事务内清除指定章节（chapterIDs 为空则清除全书所有 upstream_dirty 章）的脏标：
+// 有正文恢复为 reviewing，无正文但有大纲或节拍恢复为 outlined，否则恢复为 planned。
+func (s *Store) ClearDirtyChapters(ctx context.Context, bookID int64, chapterIDs []int64) (domain.ClearDirtyChaptersResult, error) {
+	if bookID <= 0 {
+		return domain.ClearDirtyChaptersResult{}, &domain.ValidationError{Field: "bookId", Message: "书籍 ID 必须大于 0"}
+	}
+
+	cleanIDs := uniquePositiveIDs(chapterIDs)
+	res := domain.ClearDirtyChaptersResult{ClearedChapterIDs: make([]int64, 0)}
+
+	err := s.withWriteTx(ctx, func(tx *sql.Tx) error {
+		conds := []string{"book_id = ?", "status = 'upstream_dirty'"}
+		args := []any{bookID}
+		if len(cleanIDs) > 0 {
+			placeholders := make([]string, len(cleanIDs))
+			for i, id := range cleanIDs {
+				placeholders[i] = "?"
+				args = append(args, id)
+			}
+			conds = append(conds, "id IN ("+strings.Join(placeholders, ",")+")")
+		}
+
+		rows, err := tx.QueryContext(ctx, `
+			SELECT id, content, outline_summary,
+			       EXISTS(SELECT 1 FROM chapter_beats WHERE chapter_id = chapters.id)
+			FROM chapters
+			WHERE `+strings.Join(conds, " AND ")+`
+			ORDER BY global_seq ASC, id ASC
+		`, args...)
+		if err != nil {
+			return mapSQLiteError(err)
+		}
+		type targetRow struct {
+			id         int64
+			nextStatus domain.ChapterStatus
+		}
+		targets := make([]targetRow, 0)
+		for rows.Next() {
+			var (
+				id       int64
+				content  string
+				outline  string
+				hasBeats int
+			)
+			if err := rows.Scan(&id, &content, &outline, &hasBeats); err != nil {
+				_ = rows.Close()
+				return mapSQLiteError(err)
+			}
+			nextStatus := domain.ChapterStatusPlanned
+			if strings.TrimSpace(content) != "" {
+				nextStatus = domain.ChapterStatusReviewing
+			} else if strings.TrimSpace(outline) != "" || hasBeats != 0 {
+				nextStatus = domain.ChapterStatusOutlined
+			}
+			targets = append(targets, targetRow{id: id, nextStatus: nextStatus})
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		_ = rows.Close()
+
+		for _, t := range targets {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE chapters
+				SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				WHERE id = ?
+			`, string(t.nextStatus), t.id); err != nil {
+				return mapSQLiteError(err)
+			}
+			res.ClearedChapterIDs = append(res.ClearedChapterIDs, t.id)
+		}
+		res.ClearedCount = len(res.ClearedChapterIDs)
+		return nil
+	})
+	if err != nil {
+		return domain.ClearDirtyChaptersResult{}, err
+	}
+	return res, nil
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/egoist/mygo"
 
 	"nib/internal/domain"
+	"nib/internal/memory"
 )
 
 // MemoryService 提供 Phase 2 防吃书记忆账本、伏笔追踪、摘要金字塔、变更单审阅与混合检索的桌面 RPC 绑定。
@@ -385,4 +386,177 @@ func normalizeChapterDelta(d *domain.ChapterDelta) {
 	if d.DeadlineChanges == nil {
 		d.DeadlineChanges = []domain.DeltaDeadlineChange{}
 	}
+}
+
+// RunLocalConsistencyAudit 执行第一层 0 成本本地全书秒扫，零模型消耗检出六类逻辑与流程隐患。
+func (s *MemoryService) RunLocalConsistencyAudit(ctx context.Context, bookID int64, opts domain.LocalAuditOptions) (domain.LocalAuditReport, error) {
+	if err := validatePositiveID("bookId", bookID); err != nil {
+		return domain.LocalAuditReport{}, err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return domain.LocalAuditReport{}, err
+	}
+	ms, err := s.rt.memoryStore()
+	if err != nil {
+		return domain.LocalAuditReport{}, err
+	}
+
+	entities, err := st.ListEntities(ctx, bookID, domain.EntityFilter{})
+	if err != nil {
+		return domain.LocalAuditReport{}, err
+	}
+	chapters, err := st.ListBookChapters(ctx, bookID)
+	if err != nil {
+		return domain.LocalAuditReport{}, err
+	}
+	beatsByChapter, err := st.ListBookBeats(ctx, bookID)
+	if err != nil {
+		return domain.LocalAuditReport{}, err
+	}
+	events, err := ms.ListStateEvents(ctx, bookID, 0, 0, false)
+	if err != nil {
+		return domain.LocalAuditReport{}, err
+	}
+	foreshadows, err := ms.ListForeshadowings(ctx, bookID, "")
+	if err != nil {
+		return domain.LocalAuditReport{}, err
+	}
+	deadlines, err := ms.ListStoryDeadlines(ctx, bookID, "")
+	if err != nil {
+		return domain.LocalAuditReport{}, err
+	}
+	pendingDeltas, err := ms.ListPendingDeltas(ctx, bookID)
+	if err != nil {
+		return domain.LocalAuditReport{}, err
+	}
+
+	return memory.RunLocalConsistencyAudit(memory.LocalAuditInput{
+		BookID:         bookID,
+		Entities:       entities,
+		Chapters:       chapters,
+		BeatsByChapter: beatsByChapter,
+		StateEvents:    events,
+		Foreshadowings: foreshadows,
+		Deadlines:      deadlines,
+		PendingDeltas:  pendingDeltas,
+		Options:        opts,
+	}), nil
+}
+
+// RunAIConsistencyAudit 对指定分卷 / 章节区间 / 全书执行第二层 AI 深度语义审计并持久化报告。
+func (s *MemoryService) RunAIConsistencyAudit(ctx context.Context, req domain.RunAIConsistencyAuditRequest) (domain.BookConsistencyReport, error) {
+	if err := req.Validate(); err != nil {
+		return domain.BookConsistencyReport{}, err
+	}
+	eng, auditCtx, _, release, err := s.rt.trackConsistencyAuditEngine(ctx)
+	if err != nil {
+		return domain.BookConsistencyReport{}, err
+	}
+	defer release()
+
+	rep, err := eng.RunAIConsistencyAudit(auditCtx, req)
+	if err != nil {
+		return domain.BookConsistencyReport{}, err
+	}
+	rep.Normalize()
+	return rep, nil
+}
+
+// ListConsistencyReports 返回指定书籍的 AI 深度语义审计历史报告列表。
+func (s *MemoryService) ListConsistencyReports(ctx context.Context, bookID int64) ([]domain.BookConsistencyReport, error) {
+	if err := validatePositiveID("bookId", bookID); err != nil {
+		return nil, err
+	}
+	ms, err := s.rt.memoryStore()
+	if err != nil {
+		return nil, err
+	}
+	list, err := ms.ListConsistencyReports(ctx, bookID)
+	if err != nil {
+		return nil, err
+	}
+	if list == nil {
+		return []domain.BookConsistencyReport{}, nil
+	}
+	for i := range list {
+		list[i].Normalize()
+	}
+	return list, nil
+}
+
+// UpdateConsistencyFindingStatus 标记单条 AI 深度审计问题的处理状态（open / resolved / ignored）。
+func (s *MemoryService) UpdateConsistencyFindingStatus(
+	ctx context.Context,
+	reportID int64,
+	findingID string,
+	status string,
+) (domain.BookConsistencyReport, error) {
+	if err := validatePositiveID("reportId", reportID); err != nil {
+		return domain.BookConsistencyReport{}, err
+	}
+	st := domain.ConsistencyFindingStatus(strings.TrimSpace(status))
+	if !st.Valid() {
+		return domain.BookConsistencyReport{}, &domain.ValidationError{Field: "status", Message: "无效的问题处理状态"}
+	}
+	ms, err := s.rt.memoryStore()
+	if err != nil {
+		return domain.BookConsistencyReport{}, err
+	}
+	rep, err := ms.UpdateConsistencyFindingStatus(ctx, reportID, findingID, st)
+	if err != nil {
+		return domain.BookConsistencyReport{}, err
+	}
+	rep.Normalize()
+	return rep, nil
+}
+
+// DeleteConsistencyReport 删除指定 AI 深度语义审计报告。
+func (s *MemoryService) DeleteConsistencyReport(ctx context.Context, reportID int64) error {
+	if err := validatePositiveID("reportId", reportID); err != nil {
+		return err
+	}
+	ms, err := s.rt.memoryStore()
+	if err != nil {
+		return err
+	}
+	return ms.DeleteConsistencyReport(ctx, reportID)
+}
+
+// ListDirtyChapters 查询全书处于 upstream_dirty 状态的章节队列及上游改动摘要。
+func (s *MemoryService) ListDirtyChapters(ctx context.Context, bookID int64) ([]domain.DirtyChapterItem, error) {
+	if err := validatePositiveID("bookId", bookID); err != nil {
+		return nil, err
+	}
+	ms, err := s.rt.memoryStore()
+	if err != nil {
+		return nil, err
+	}
+	items, err := ms.ListDirtyChapters(ctx, bookID)
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		return []domain.DirtyChapterItem{}, nil
+	}
+	return items, nil
+}
+
+// ClearDirtyChapters 清除指定章节（chapterIDs 为空表示全书）的 upstream_dirty 标记。
+func (s *MemoryService) ClearDirtyChapters(ctx context.Context, bookID int64, chapterIDs []int64) (domain.ClearDirtyChaptersResult, error) {
+	if err := validatePositiveID("bookId", bookID); err != nil {
+		return domain.ClearDirtyChaptersResult{}, err
+	}
+	ms, err := s.rt.memoryStore()
+	if err != nil {
+		return domain.ClearDirtyChaptersResult{}, err
+	}
+	res, err := ms.ClearDirtyChapters(ctx, bookID, chapterIDs)
+	if err != nil {
+		return domain.ClearDirtyChaptersResult{}, err
+	}
+	if res.ClearedChapterIDs == nil {
+		res.ClearedChapterIDs = []int64{}
+	}
+	return res, nil
 }

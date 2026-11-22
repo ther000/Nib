@@ -20,7 +20,7 @@ import type {
 } from "../mygo";
 
 export type WorkspaceTab = "architect" | "studio" | "atlas";
-export type AtlasSubTab = "entities" | "relations" | "foreshadowings" | "summaries" | "style";
+export type AtlasSubTab = "entities" | "relations" | "foreshadowings" | "summaries" | "style" | "audit";
 
 export interface OptionMeta<T extends string = string> {
   value: T;
@@ -558,4 +558,43 @@ export function formatErrorMessage(err: unknown): string {
     return raw.replace(validationPrefix, "");
   }
   return raw;
+}
+
+export const LOCAL_AUDIT_CATEGORIES: Array<{
+  value: string;
+  label: string;
+  shortLabel: string;
+}> = [
+  { value: "dead_reappear", label: "已死/已毁复现", shortLabel: "已死复现" },
+  { value: "absent_entity", label: "核心角色掉线", shortLabel: "长期掉线" },
+  { value: "overdue_foreshadow", label: "超期未收伏笔", shortLabel: "超期伏笔" },
+  { value: "timeline_anomaly", label: "时间线/期限异常", shortLabel: "时间异常" },
+  { value: "pending_delta", label: "积压待审变更单", shortLabel: "待审变更" },
+  { value: "upstream_dirty", label: "下游脏标章", shortLabel: "脏标章节" },
+];
+
+export const AI_AUDIT_CATEGORIES: Array<{
+  value: string;
+  label: string;
+  badgeClass: string;
+}> = [
+  { value: "power_collapse", label: "战力体系崩坏", badgeClass: "bg-danger-soft text-danger border-danger/35" },
+  { value: "motivation_conflict", label: "行为动机矛盾", badgeClass: "bg-warn-soft text-warn border-warn/35" },
+  { value: "rule_contradiction", label: "金手指/铁律暗冲突", badgeClass: "bg-danger-soft text-danger border-danger/35" },
+  { value: "timeline_logic", label: "跨章因果漏洞", badgeClass: "bg-accent-soft text-accent border-accent/35" },
+  { value: "other", label: "其他深层隐患", badgeClass: "bg-elevated text-ink-secondary border-border-subtle" },
+];
+
+export function getLocalAuditCategoryLabel(cat: string): string {
+  return LOCAL_AUDIT_CATEGORIES.find((c) => c.value === cat)?.label ?? cat;
+}
+
+export function getAIAuditCategoryMeta(cat: string) {
+  return (
+    AI_AUDIT_CATEGORIES.find((c) => c.value === cat) ?? {
+      value: cat,
+      label: "深层逻辑",
+      badgeClass: "bg-elevated text-ink-secondary border-border-subtle",
+    }
+  );
 }

@@ -4,6 +4,19 @@ import { bind, event, type Channel } from "mygo-runtime";
 
 // ---- Types ----
 
+export interface AIConsistencyFinding {
+  id: string;
+  category: string;
+  severity: LocalAuditSeverity;
+  title: string;
+  description: string;
+  evidence: string;
+  suggestion: string;
+  chapterSeqs: number[];
+  entityNames: string[];
+  status: ConsistencyFindingStatus;
+}
+
 export interface ApplyDeltaInput {
   deltaId: number;
   applyCausalSummary: boolean;
@@ -239,6 +252,19 @@ export interface Book {
   updatedAt: string;
 }
 
+export interface BookConsistencyReport {
+  id: number;
+  bookId: number;
+  scopeType: ConsistencyAuditScopeType;
+  scopeRefId: number;
+  startSeq: number;
+  endSeq: number;
+  modelName: string;
+  summary: string;
+  findings: AIConsistencyFinding[];
+  createdAt: string;
+}
+
 export interface BookGenesisPlan {
   title: string;
   genre: GenreID;
@@ -387,6 +413,15 @@ export interface ChapterVersion {
   wordCount: number;
   createdAt: string;
 }
+
+export interface ClearDirtyChaptersResult {
+  clearedCount: number;
+  clearedChapterIds: number[];
+}
+
+export type ConsistencyAuditScopeType = string;
+
+export type ConsistencyFindingStatus = string;
 
 export interface CreateBookInput {
   title: string;
@@ -559,6 +594,20 @@ export interface DirectorToolCall {
   resultSummary?: string;
   undoChapterId?: number;
   undoVersionId?: number;
+}
+
+export interface DirtyChapterItem {
+  chapterId: number;
+  volumeId: number;
+  globalSeq: number;
+  title: string;
+  wordCount: number;
+  hasContent: boolean;
+  hasPendingDelta: boolean;
+  lastAuditFindings: number;
+  upstreamSummary: string;
+  upstreamSourceSeq: number;
+  updatedAt: string;
 }
 
 export type EmotionTag = string;
@@ -835,6 +884,55 @@ export interface LintIssue {
 
 export type LintSeverity = string;
 
+export interface LocalAuditFinding {
+  id: string;
+  category: LocalAuditFindingCategory;
+  severity: LocalAuditSeverity;
+  title: string;
+  detail: string;
+  suggestion: string;
+  chapterId: number;
+  chapterSeq: number;
+  chapterTitle: string;
+  entityId: number;
+  entityName: string;
+  foreshadowingId: number;
+  deadlineId: number;
+  jumpTarget: string;
+}
+
+export type LocalAuditFindingCategory = string;
+
+export interface LocalAuditOptions {
+  absentThresholdChapters: number;
+  maxStoryDayJump: number;
+}
+
+export interface LocalAuditReport {
+  bookId: number;
+  latestChapterSeq: number;
+  scannedChapters: number;
+  scannedEntities: number;
+  elapsedMs: number;
+  summary: LocalAuditSummary;
+  findings: LocalAuditFinding[];
+}
+
+export type LocalAuditSeverity = string;
+
+export interface LocalAuditSummary {
+  totalFindings: number;
+  errorCount: number;
+  warnCount: number;
+  infoCount: number;
+  deadReappearCount: number;
+  absentEntityCount: number;
+  overdueForeshadowCount: number;
+  timelineAnomalyCount: number;
+  pendingDeltaCount: number;
+  upstreamDirtyCount: number;
+}
+
 export interface MemorySearchHit {
   source: string;
   chapterId: number;
@@ -1033,6 +1131,14 @@ export interface RewriteSelectionResult {
   modelName: string;
   providerName: string;
   usage?: TokenUsage;
+}
+
+export interface RunAIConsistencyAuditRequest {
+  bookId: number;
+  scopeType: ConsistencyAuditScopeType;
+  volumeId: number;
+  startSeq: number;
+  endSeq: number;
 }
 
 export interface SafetySnapshot {
@@ -1547,6 +1653,10 @@ export const MemoryService = {
   applyDeltaDecisions: bind<[ApplyDeltaInput], ApplyDeltaResult>("MemoryService.ApplyDeltaDecisions", (in_: ApplyDeltaInput) => [in_]),
   /** ApplyReverseExtract 将作者勾选后的旧稿反推结果写入设定账本。 */
   applyReverseExtract: bind<[ApplyReverseExtractInput], ApplyReverseExtractResult>("MemoryService.ApplyReverseExtract", (in_: ApplyReverseExtractInput) => [in_]),
+  /** ClearDirtyChapters 清除指定章节（chapterIDs 为空表示全书）的 upstream_dirty 标记。 */
+  clearDirtyChapters: bind<[number, number[]], ClearDirtyChaptersResult>("MemoryService.ClearDirtyChapters", (bookID: number, chapterIDs: number[]) => [bookID, chapterIDs]),
+  /** DeleteConsistencyReport 删除指定 AI 深度语义审计报告。 */
+  deleteConsistencyReport: bind<[number], void>("MemoryService.DeleteConsistencyReport", (reportID: number) => [reportID]),
   /** DeleteForeshadowing 删除指定伏笔记录。 */
   deleteForeshadowing: bind<[number], void>("MemoryService.DeleteForeshadowing", (id: number) => [id]),
   /** DeleteStoryDeadline 删除指定故事内期限倒计时记录。 */
@@ -1559,6 +1669,10 @@ export const MemoryService = {
   getPendingDelta: bind<[number], ChapterDelta | null>("MemoryService.GetPendingDelta", (chapterID: number) => [chapterID]),
   /** ListArcSummaries 查询分层摘要金字塔（level 可为 "" / "arc_10" / "volume"）。 */
   listArcSummaries: bind<[number, string], ArcSummary[]>("MemoryService.ListArcSummaries", (bookID: number, level: string) => [bookID, level]),
+  /** ListConsistencyReports 返回指定书籍的 AI 深度语义审计历史报告列表。 */
+  listConsistencyReports: bind<[number], BookConsistencyReport[]>("MemoryService.ListConsistencyReports", (bookID: number) => [bookID]),
+  /** ListDirtyChapters 查询全书处于 upstream_dirty 状态的章节队列及上游改动摘要。 */
+  listDirtyChapters: bind<[number], DirtyChapterItem[]>("MemoryService.ListDirtyChapters", (bookID: number) => [bookID]),
   /** ListForeshadowings 按书籍与可选状态筛选伏笔列表（status 留空返回全部状态）。 */
   listForeshadowings: bind<[number, string], Foreshadowing[]>("MemoryService.ListForeshadowings", (bookID: number, status: string) => [bookID, status]),
   /** ListStateEvents 查询实体状态变更事件流水；entityID=0 表示查询全书，upToSeq=0 表示不限截止章号。 */
@@ -1567,10 +1681,16 @@ export const MemoryService = {
   listStoryDeadlines: bind<[number, string], StoryDeadline[]>("MemoryService.ListStoryDeadlines", (bookID: number, status: string) => [bookID, status]),
   /** ReverseExtractBook 从旧稿采样章节流式反推设定、关系、伏笔与摘要，仅返回审阅清单。 */
   reverseExtractBook: bind<[ReverseExtractRequest, Channel<ReverseExtractChunk>], ReverseExtractPreview>("MemoryService.ReverseExtractBook", (req: ReverseExtractRequest, ch: Channel<ReverseExtractChunk>) => [req, ch]),
+  /** RunAIConsistencyAudit 对指定分卷 / 章节区间 / 全书执行第二层 AI 深度语义审计并持久化报告。 */
+  runAIConsistencyAudit: bind<[RunAIConsistencyAuditRequest], BookConsistencyReport>("MemoryService.RunAIConsistencyAudit", (req: RunAIConsistencyAuditRequest) => [req]),
+  /** RunLocalConsistencyAudit 执行第一层 0 成本本地全书秒扫，零模型消耗检出六类逻辑与流程隐患。 */
+  runLocalConsistencyAudit: bind<[number, LocalAuditOptions], LocalAuditReport>("MemoryService.RunLocalConsistencyAudit", (bookID: number, opts: LocalAuditOptions) => [bookID, opts]),
   /** SearchMemory 执行 FTS5 trigram + 双字 LIKE 回退混合记忆检索（maxChapterSeq=0 表示不限章号上限）。 */
   searchMemory: bind<[number, string, number], MemorySearchHit[]>("MemoryService.SearchMemory", (bookID: number, query: string, maxChapterSeq: number) => [bookID, query, maxChapterSeq]),
   /** SnapshotAt 按时间轴折算截至 chapterSeq（含）时的全书实体状态快照（严禁透漏未来章节事件）。 */
   snapshotAt: bind<[number, number, boolean], EntitySnapshot[]>("MemoryService.SnapshotAt", (bookID: number, chapterSeq: number, includePending: boolean) => [bookID, chapterSeq, includePending]),
+  /** UpdateConsistencyFindingStatus 标记单条 AI 深度审计问题的处理状态（open / resolved / ignored）。 */
+  updateConsistencyFindingStatus: bind<[number, string, string], BookConsistencyReport>("MemoryService.UpdateConsistencyFindingStatus", (reportID: number, findingID: string, status: string) => [reportID, findingID, status]),
   /** UpsertArcSummary 新增或更新 10 章弧线摘要或卷摘要。 */
   upsertArcSummary: bind<[UpsertArcSummaryInput], ArcSummary>("MemoryService.UpsertArcSummary", (in_: UpsertArcSummaryInput) => [in_]),
   /** UpsertForeshadowing 创建或更新单条伏笔记录。 */

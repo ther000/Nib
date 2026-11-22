@@ -19,6 +19,7 @@ import {
   VolumeFormModal,
   type VolumeDialogState,
 } from "../components/architect/VolumeFormModal";
+import { DirtyRepairQueue } from "../components/architect/DirtyRepairQueue";
 import { ConfirmDialog, type ConfirmDialogState } from "../components/ui/ConfirmDialog";
 import { formatErrorMessage, formatSeq } from "../lib/constants";
 
@@ -851,6 +852,14 @@ export function ArchitectView() {
         ) : (
           <div className="flex-1 overflow-y-auto px-8 py-6">
             <div className="mx-auto flex w-full max-w-[880px] flex-col gap-6">
+              {activeBook && (
+                <DirtyRepairQueue
+                  compact
+                  bookId={activeBook.id}
+                  onOpenFullAudit={() => openAtlasSubTab("audit")}
+                  onChanged={() => setPacingRefreshKey((k) => k + 1)}
+                />
+              )}
               {activeVolume && (
                 <VolumePacingChart
                   volume={activeVolume}

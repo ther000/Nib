@@ -15,6 +15,7 @@ import {
   Search,
   Shield,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Trash2,
   Users,
@@ -49,6 +50,7 @@ import { ForeshadowingBoard } from "../components/atlas/ForeshadowingBoard";
 import { ArcSummaryBoard } from "../components/atlas/ArcSummaryBoard";
 import { StyleRulesBoard } from "../components/atlas/StyleRulesBoard";
 import { RelationsBoard } from "../components/atlas/RelationsBoard";
+import { ConsistencyAuditBoard } from "../components/atlas/ConsistencyAuditBoard";
 import { EntitySafetyToolsModal } from "../components/atlas/EntitySafetyToolsModal";
 
 interface CustomAttrRow {
@@ -105,6 +107,11 @@ export function AtlasView() {
       foreshadowings.filter((fs) => isForeshadowingOverdue(fs, latestChapterSeq))
         .length,
     [foreshadowings, latestChapterSeq]
+  );
+
+  const dirtyChapterCount = useMemo(
+    () => chapters.filter((c) => c.status === "upstream_dirty").length,
+    [chapters]
   );
 
   // Timeline state for 实体档案
@@ -632,6 +639,7 @@ export function AtlasView() {
     Icon: typeof Users;
     badge?: number;
     badgeTone?: "danger" | "muted";
+    badgeText?: string;
   }> = [
     { id: "entities", label: "实体档案", Icon: Users, badge: allEntities.length, badgeTone: "muted" },
     {
@@ -645,9 +653,18 @@ export function AtlasView() {
       Icon: Flag,
       badge: overdueForeshadowCount > 0 ? overdueForeshadowCount : foreshadowings.length,
       badgeTone: overdueForeshadowCount > 0 ? "danger" : "muted",
+      badgeText: overdueForeshadowCount > 0 ? `${overdueForeshadowCount} 超期` : undefined,
     },
     { id: "summaries", label: "弧线摘要", Icon: BookMarked },
     { id: "style", label: "文风与去AI味规则", Icon: Sparkles },
+    {
+      id: "audit",
+      label: "全书体检",
+      Icon: ShieldCheck,
+      badge: dirtyChapterCount,
+      badgeTone: dirtyChapterCount > 0 ? "danger" : "muted",
+      badgeText: dirtyChapterCount > 0 ? `${dirtyChapterCount} 脏标` : undefined,
+    },
   ];
 
   return (
@@ -656,7 +673,7 @@ export function AtlasView() {
       <div className="shrink-0 border-b border-border-subtle bg-surface px-6">
         <div className="mx-auto flex h-10 w-full max-w-[1160px] items-center justify-between gap-4">
           <div className="flex items-center gap-1">
-            {subTabs.map(({ id, label, Icon, badge, badgeTone }) => {
+            {subTabs.map(({ id, label, Icon, badge, badgeTone, badgeText }) => {
               const active = atlasSubTab === id;
               return (
                 <button
@@ -679,7 +696,7 @@ export function AtlasView() {
                           : "bg-canvas/70 text-ink-muted"
                       }`}
                     >
-                      {badgeTone === "danger" ? `${badge} 超期` : badge}
+                      {badgeText ?? badge}
                     </span>
                   )}
                 </button>
@@ -1050,6 +1067,9 @@ export function AtlasView() {
 
       {/* Sub-tab 4: 文风与去AI味规则 */}
       {atlasSubTab === "style" && <StyleRulesBoard />}
+
+      {/* Sub-tab 5: 全书双层一致性体检与脏标修复队列 */}
+      {atlasSubTab === "audit" && <ConsistencyAuditBoard />}
 
       {/* Slide-Over Detail Editor for Entities (with Chronological State Events History) */}
       {editor && (

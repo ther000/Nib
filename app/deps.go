@@ -148,8 +148,19 @@ type MemoryStore interface {
 	ListArcSummaries(ctx context.Context, bookID int64, level domain.ArcSummaryLevel) ([]domain.ArcSummary, error)
 	UpsertArcSummary(ctx context.Context, in domain.UpsertArcSummaryInput) (domain.ArcSummary, error)
 	GetPendingDelta(ctx context.Context, chapterID int64) (*domain.ChapterDelta, error)
+	ListPendingDeltas(ctx context.Context, bookID int64) ([]domain.ChapterDelta, error)
+	ListDirtyChapters(ctx context.Context, bookID int64) ([]domain.DirtyChapterItem, error)
+	ClearDirtyChapters(ctx context.Context, bookID int64, chapterIDs []int64) (domain.ClearDirtyChaptersResult, error)
+	ListConsistencyReports(ctx context.Context, bookID int64) ([]domain.BookConsistencyReport, error)
+	UpdateConsistencyFindingStatus(ctx context.Context, reportID int64, findingID string, status domain.ConsistencyFindingStatus) (domain.BookConsistencyReport, error)
+	DeleteConsistencyReport(ctx context.Context, reportID int64) error
 	ApplyDeltaDecisions(ctx context.Context, in domain.ApplyDeltaInput) (domain.ApplyDeltaResult, error)
 	SearchMemory(ctx context.Context, bookID int64, query string, maxChapterSeq int) ([]domain.MemorySearchHit, error)
+}
+
+// ConsistencyAuditEngine 定义第二层 AI 深度语义一致性审计接口（由 *pipeline.Runner 实现）。
+type ConsistencyAuditEngine interface {
+	RunAIConsistencyAudit(ctx context.Context, req domain.RunAIConsistencyAuditRequest) (domain.BookConsistencyReport, error)
 }
 
 // DeltaExtractor 定义完章记忆增量抽取接口（由 internal/memory 实现，零 MyGo 依赖）。
@@ -618,6 +629,18 @@ func (r *Runtime) trackDirectorEngine(callCtx context.Context) (DirectorEngine, 
 		}
 		if de, ok := d.Pipeline.(DirectorEngine); ok {
 			return de, true
+		}
+		return nil, false
+	})
+}
+
+func (r *Runtime) trackConsistencyAuditEngine(callCtx context.Context) (ConsistencyAuditEngine, context.Context, context.CancelFunc, func(), error) {
+	return trackDep(r, callCtx, func(d *RuntimeDeps) (ConsistencyAuditEngine, bool) {
+		if ce, ok := d.Pipeline.(ConsistencyAuditEngine); ok {
+			return ce, true
+		}
+		if ce, ok := d.AutopilotEngine.(ConsistencyAuditEngine); ok {
+			return ce, true
 		}
 		return nil, false
 	})

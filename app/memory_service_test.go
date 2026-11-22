@@ -15,6 +15,10 @@ type fakeMemoryStore struct {
 	foreshadowings    []domain.Foreshadowing
 	arcSummaries      []domain.ArcSummary
 	pendingDelta      *domain.ChapterDelta
+	pendingDeltas     []domain.ChapterDelta
+	dirtyChapters     []domain.DirtyChapterItem
+	clearDirtyRes     domain.ClearDirtyChaptersResult
+	reports           []domain.BookConsistencyReport
 	applyResult       domain.ApplyDeltaResult
 	searchHits        []domain.MemorySearchHit
 	lastSearchQuery   string
@@ -85,6 +89,40 @@ func (f *fakeMemoryStore) UpsertArcSummary(_ context.Context, in domain.UpsertAr
 
 func (f *fakeMemoryStore) GetPendingDelta(_ context.Context, _ int64) (*domain.ChapterDelta, error) {
 	return f.pendingDelta, nil
+}
+
+func (f *fakeMemoryStore) ListPendingDeltas(_ context.Context, _ int64) ([]domain.ChapterDelta, error) {
+	return f.pendingDeltas, nil
+}
+
+func (f *fakeMemoryStore) ListDirtyChapters(_ context.Context, _ int64) ([]domain.DirtyChapterItem, error) {
+	return f.dirtyChapters, nil
+}
+
+func (f *fakeMemoryStore) ClearDirtyChapters(_ context.Context, _ int64, _ []int64) (domain.ClearDirtyChaptersResult, error) {
+	return f.clearDirtyRes, nil
+}
+
+func (f *fakeMemoryStore) ListConsistencyReports(_ context.Context, _ int64) ([]domain.BookConsistencyReport, error) {
+	return f.reports, nil
+}
+
+func (f *fakeMemoryStore) UpdateConsistencyFindingStatus(_ context.Context, reportID int64, findingID string, status domain.ConsistencyFindingStatus) (domain.BookConsistencyReport, error) {
+	for i := range f.reports {
+		if f.reports[i].ID == reportID {
+			for j := range f.reports[i].Findings {
+				if f.reports[i].Findings[j].ID == findingID {
+					f.reports[i].Findings[j].Status = status
+					return f.reports[i], nil
+				}
+			}
+		}
+	}
+	return domain.BookConsistencyReport{}, domain.ErrNotFound
+}
+
+func (f *fakeMemoryStore) DeleteConsistencyReport(_ context.Context, _ int64) error {
+	return nil
 }
 
 func (f *fakeMemoryStore) ApplyDeltaDecisions(_ context.Context, _ domain.ApplyDeltaInput) (domain.ApplyDeltaResult, error) {
@@ -297,5 +335,57 @@ func TestRuntimeCloseCancelsInFlightDeltaExtraction(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("ExtractChapterDelta did not exit after rt.Close()")
+	}
+}
+
+func TestMemoryServiceConsistencyAndDirtyRPCs(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeStore()
+	book, _ := st.CreateBook(ctx, domain.CreateBookInput{Title: "体检测试", Genre: domain.GenreXianxia})
+	vol, _ := st.UpsertVolume(ctx, domain.UpsertVolumeInput{BookID: book.ID, Title: "第一卷"})
+	ch, _ := st.CreateChapter(ctx, domain.CreateChapterInput{BookID: book.ID, VolumeID: vol.ID, Title: "第一章"})
+	ch.Status = domain.ChapterStatusUpstreamDirty
+	st.chapters[ch.ID] = ch
+
+	ms := &fakeMemoryStore{
+		dirtyChapters: []domain.DirtyChapterItem{{ChapterID: ch.ID, GlobalSeq: 1, Title: "第一章"}},
+		clearDirtyRes: domain.ClearDirtyChaptersResult{ClearedCount: 1, ClearedChapterIDs: []int64{ch.ID}},
+		reports: []domain.BookConsistencyReport{{
+			ID:        7,
+			BookID:    book.ID,
+			ScopeType: domain.ConsistencyScopeBook,
+			Findings:  []domain.AIConsistencyFinding{{ID: "ai-1", Title: "战力冲突", Status: domain.ConsistencyFindingOpen}},
+		}},
+	}
+	rt := NewRuntime()
+	rt.Init(RuntimeDeps{Store: st, MemoryStore: ms})
+	svc := NewMemoryService(rt)
+
+	if _, err := svc.RunLocalConsistencyAudit(ctx, 0, domain.LocalAuditOptions{}); err == nil {
+		t.Fatalf("expected validation error for bookId=0")
+	}
+	localRep, err := svc.RunLocalConsistencyAudit(ctx, book.ID, domain.LocalAuditOptions{})
+	if err != nil {
+		t.Fatalf("RunLocalConsistencyAudit: %v", err)
+	}
+	if localRep.Summary.UpstreamDirtyCount != 1 || len(localRep.Findings) != 1 {
+		t.Fatalf("expected 1 upstream_dirty finding, got %+v", localRep)
+	}
+
+	dirtyList, err := svc.ListDirtyChapters(ctx, book.ID)
+	if err != nil || len(dirtyList) != 1 {
+		t.Fatalf("ListDirtyChapters = (%+v, %v)", dirtyList, err)
+	}
+	cleared, err := svc.ClearDirtyChapters(ctx, book.ID, []int64{ch.ID})
+	if err != nil || cleared.ClearedCount != 1 {
+		t.Fatalf("ClearDirtyChapters = (%+v, %v)", cleared, err)
+	}
+
+	if _, err := svc.UpdateConsistencyFindingStatus(ctx, 7, "ai-1", "invalid"); err == nil {
+		t.Fatalf("expected validation error for invalid finding status")
+	}
+	updatedRep, err := svc.UpdateConsistencyFindingStatus(ctx, 7, "ai-1", "resolved")
+	if err != nil || updatedRep.Findings[0].Status != domain.ConsistencyFindingResolved {
+		t.Fatalf("UpdateConsistencyFindingStatus = (%+v, %v)", updatedRep, err)
 	}
 }
