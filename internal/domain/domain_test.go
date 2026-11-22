@@ -228,4 +228,14 @@ func TestEmotionWeightsAndCountWords(t *testing.T) {
 	if got := CountWords(text); got != 31 {
 		t.Fatalf("CountWords = %d, want 31", got)
 	}
+
+	// 8000 个汉字 = 24000 UTF-8 bytes，按字数校验不应超过 20000 字上限
+	note8k := UpsertScratchNoteInput{BookID: 1, Content: strings.Repeat("字", 8000)}
+	if err := note8k.Validate(); err != nil {
+		t.Fatalf("8000 CJK runes should pass validation, got %v", err)
+	}
+	noteOver := UpsertScratchNoteInput{BookID: 1, Content: strings.Repeat("字", 20001)}
+	if !errors.Is(noteOver.Validate(), ErrValidation) {
+		t.Fatalf("20001 CJK runes should fail validation")
+	}
 }

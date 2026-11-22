@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   Check,
@@ -111,7 +111,7 @@ function resolveLintSpans(runes: string[], issues: LintIssue[]): {
   return { inlineSpans, paragraphLevelIssues };
 }
 
-export function AuditProseParagraph({
+export const AuditProseParagraph = memo(function AuditProseParagraph({
   paragraphIndex,
   text,
   isStreamingLast,
@@ -161,6 +161,7 @@ export function AuditProseParagraph({
           trimmed && trimmed !== pendingDiff.replacement ? trimmed : undefined;
         onApplyDiff(pendingDiff.id, true, override);
       } else if (e.key === "Escape") {
+        if (document.querySelector('[data-nib-modal="true"]')) return;
         e.preventDefault();
         onApplyDiff(pendingDiff.id, false);
       }
@@ -262,7 +263,7 @@ export function AuditProseParagraph({
                 onFocus(paragraphIndex);
                 setSelectedIssue((prev) => (prev === iss ? null : iss));
               }}
-              className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.2 text-[10px] ${
+              className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] ${
                 getLintSeverityMeta(iss.severity).badgeClass
               }`}
             >
@@ -276,7 +277,7 @@ export function AuditProseParagraph({
             return (
               <span
                 key={cf.id}
-                className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.2 text-[10px] font-medium ${dimMeta.badgeClass}`}
+                className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium ${dimMeta.badgeClass}`}
               >
                 <span>{dimMeta.shortLabel ?? dimMeta.label}</span>
               </span>
@@ -318,7 +319,7 @@ export function AuditProseParagraph({
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-1.5">
               <span
-                className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.2 text-[10px] font-medium ${
+                className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium ${
                   getLintSeverityMeta(activeIssue.severity).badgeClass
                 }`}
               >
@@ -326,7 +327,7 @@ export function AuditProseParagraph({
                 {getDeaiCategoryLabel(activeIssue.category)}
               </span>
               {activeIssue.matchedText && (
-                <span className="rounded bg-danger-soft px-1.5 py-0.2 text-[11px] font-medium text-danger">
+                <span className="rounded bg-danger-soft px-1.5 py-0.5 text-[11px] font-medium text-danger">
                   「{activeIssue.matchedText}」
                 </span>
               )}
@@ -371,7 +372,7 @@ export function AuditProseParagraph({
               <div key={cf.id} className="flex flex-col gap-0.5">
                 <div className="flex items-center gap-1.5 font-medium text-ink-primary">
                   <span
-                    className={`rounded border px-1.5 py-0.2 text-[10px] ${dimMeta.badgeClass}`}
+                    className={`rounded border px-1.5 py-0.5 text-[10px] ${dimMeta.badgeClass}`}
                   >
                     {dimMeta.label}
                   </span>
@@ -470,4 +471,4 @@ export function AuditProseParagraph({
       )}
     </div>
   );
-}
+});

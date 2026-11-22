@@ -8,15 +8,11 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { isMyGo } from "mygo-runtime";
 import {
   AtlasService,
-  AutopilotService,
-  events,
   LibraryService,
   MemoryService,
   SettingsService,
-  type AutopilotState,
   type Book,
   type Chapter,
   type Entity,
@@ -40,17 +36,16 @@ import {
   type ProseFontMode,
   type ThemeMode,
 } from "../lib/preferences";
+import {
+  ToastProvider,
+  useToastActions,
+  type NotifyInput,
+  type ToastItem,
+  type ToastTone,
+} from "./ToastContext";
+import { AutopilotProvider } from "./AutopilotContext";
 
-export type ToastTone = "info" | "ok" | "warn" | "danger";
-
-export interface ToastItem {
-  id: number;
-  tone: ToastTone;
-  message: string;
-  detail?: string;
-  actionLabel?: string;
-  onAction?: () => void;
-}
+export type { ToastItem, ToastTone };
 
 export type SettingsTab = "providers" | "routes" | "workspace";
 export type AppViewMode = "home" | "workspace";
@@ -107,19 +102,13 @@ interface AppContextValue {
   openMemorySearch: () => void;
   closeMemorySearch: () => void;
   toggleMemorySearch: () => void;
-  autopilotOpen: boolean;
-  openAutopilot: () => void;
-  closeAutopilot: () => void;
-  autopilotState: AutopilotState | null;
-  setAutopilotState: (state: AutopilotState | null) => void;
   directorOpen: boolean;
   openDirector: () => void;
   closeDirector: () => void;
   toggleDirector: () => void;
 
-  // Toasts
-  toasts: ToastItem[];
-  notify: (input: Omit<ToastItem, "id"> & { durationMs?: number }) => void;
+  // Toasts (stable actions only; state lives in ToastContext to prevent full-tree re-renders)
+  notify: (input: NotifyInput) => void;
   dismissToast: (id: number) => void;
 
   // Loading & Runtime state
@@ -174,6 +163,16 @@ async function safeListForeshadowings(bookId: number): Promise<Foreshadowing[]> 
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
+  return (
+    <ToastProvider>
+      <AppProviderInner>{children}</AppProviderInner>
+    </ToastProvider>
+  );
+}
+
+function AppProviderInner({ children }: { children: ReactNode }) {
+  const { notify, dismissToast } = useToastActions();
+
   const [prefs, setPrefs] = useState<NibPreferences>(() => {
     const initial = loadPreferences();
     applyDocumentPreferences(initial);
@@ -188,15 +187,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("providers");
   const [createBookOpen, setCreateBookOpen] = useState(false);
   const [memorySearchOpen, setMemorySearchOpen] = useState(false);
-  const [autopilotOpen, setAutopilotOpen] = useState(false);
-  const [autopilotState, setAutopilotState] = useState<AutopilotState | null>(null);
   const [directorOpen, setDirectorOpen] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
-
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const toastSeqRef = useRef(1);
-  const toastTimersRef = useRef<Map<number, number>>(new Map());
 
   const [bootstrapping, setBootstrapping] = useState(true);
   const [bookLoading, setBookLoading] = useState(false);
@@ -229,49 +222,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       applyDocumentPreferences(next);
       return next;
     });
-  }, []);
-
-  const dismissToast = useCallback((id: number) => {
-    const timer = toastTimersRef.current.get(id);
-    if (timer !== undefined) {
-      window.clearTimeout(timer);
-      toastTimersRef.current.delete(id);
-    }
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
-
-  const notify = useCallback(
-    (input: Omit<ToastItem, "id"> & { durationMs?: number }) => {
-      const id = toastSeqRef.current++;
-      const duration = input.durationMs ?? (input.tone === "danger" ? 6500 : 3800);
-      const item: ToastItem = {
-        id,
-        tone: input.tone,
-        message: input.message,
-        detail: input.detail,
-        actionLabel: input.actionLabel,
-        onAction: input.onAction,
-      };
-      setToasts((prev) => [...prev.slice(-3), item]);
-      if (duration > 0) {
-        const timer = window.setTimeout(() => {
-          toastTimersRef.current.delete(id);
-          setToasts((prev) => prev.filter((t) => t.id !== id));
-        }, duration);
-        toastTimersRef.current.set(id, timer);
-      }
-    },
-    []
-  );
-
-  useEffect(() => {
-    const timers = toastTimersRef.current;
-    return () => {
-      for (const timer of timers.values()) {
-        window.clearTimeout(timer);
-      }
-      timers.clear();
-    };
   }, []);
 
   const loadChapterDetail = useCallback(
@@ -721,64 +671,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const openAutopilot = useCallback(() => setAutopilotOpen(true), []);
-  const closeAutopilot = useCallback(() => setAutopilotOpen(false), []);
   const openDirector = useCallback(() => setDirectorOpen(true), []);
   const closeDirector = useCallback(() => setDirectorOpen(false), []);
   const toggleDirector = useCallback(() => setDirectorOpen((v) => !v), []);
 
-  // 订阅后端全自动托管实时进度事件，章节推进或结束时自动刷新书籍数据
-  useEffect(() => {
-    if (!activeBookId) {
-      setAutopilotState(null);
-      return;
-    }
-    let cancelled = false;
-    void AutopilotService.getAutopilotState(activeBookId)
-      .then((state) => {
-        if (!cancelled) setAutopilotState(state);
-      })
-      .catch(() => {
-        if (!cancelled) setAutopilotState(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeBookId]);
-
   const refreshBookDataRef = useRef(refreshBookData);
   refreshBookDataRef.current = refreshBookData;
-
-  useEffect(() => {
-    if (!isMyGo()) return;
-    let lastCompleted = -1;
-    let lastStatus = "";
-    let unsub: (() => void) | null = null;
-    try {
-      unsub = events.autopilotProgress.on((prog) => {
-        const curBookId = activeBookIdRef.current;
-        if (curBookId && prog.bookId !== curBookId) return;
-        setAutopilotState(prog);
-        const progressed = prog.completedChapters !== lastCompleted;
-        const finished =
-          (prog.status === "completed" ||
-            prog.status === "stopped" ||
-            prog.status === "failed") &&
-          prog.status !== lastStatus;
-        lastCompleted = prog.completedChapters;
-        lastStatus = prog.status;
-        if (progressed || finished) {
-          void refreshBookDataRef.current(prog.bookId);
-          bumpMemoryRevision();
-        }
-      });
-    } catch {
-      // ignore outside mygo runtime
-    }
-    return () => {
-      unsub?.();
-    };
-  }, [bumpMemoryRevision]);
+  const handleAutopilotProgressRefresh = useCallback(
+    (bookId: number) => {
+      void refreshBookDataRef.current(bookId);
+      bumpMemoryRevision();
+    },
+    [bumpMemoryRevision]
+  );
 
   const value = useMemo<AppContextValue>(
     () => ({
@@ -830,16 +735,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       openMemorySearch,
       closeMemorySearch,
       toggleMemorySearch,
-      autopilotOpen,
-      openAutopilot,
-      closeAutopilot,
-      autopilotState,
-      setAutopilotState,
       directorOpen,
       openDirector,
       closeDirector,
       toggleDirector,
-      toasts,
       notify,
       dismissToast,
       bootstrapping,
@@ -923,16 +822,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       openMemorySearch,
       closeMemorySearch,
       toggleMemorySearch,
-      autopilotOpen,
-      openAutopilot,
-      closeAutopilot,
-      autopilotState,
-      setAutopilotState,
       directorOpen,
       openDirector,
       closeDirector,
       toggleDirector,
-      toasts,
       notify,
       dismissToast,
       bootstrapping,
@@ -970,7 +863,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ]
   );
 
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+  return (
+    <AutopilotProvider
+      activeBookId={activeBookId}
+      onProgressRefresh={handleAutopilotProgressRefresh}
+    >
+      <AppContext.Provider value={value}>{children}</AppContext.Provider>
+    </AutopilotProvider>
+  );
 }
 
 export function useApp(): AppContextValue {

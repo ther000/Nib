@@ -279,3 +279,28 @@ func TestExtractQuantitativeDNAAndSceneExcerpts(t *testing.T) {
 		}
 	}
 }
+
+func TestLintPreservesBothOverlappingParagraphRules(t *testing.T) {
+	// 构造第 3 段同时超长（> 80 字）且连续 3 段纯心理活动，两条整段规则必须同时报出。
+	p1 := "他心中暗自思忖着整件事的来龙去脉，脑海中不断浮现出昔日在外门受辱的种种苦涩回忆与迷茫念头。"
+	p2 := "那些复杂的情绪在内心深处反复交织盘算，他觉得命运似乎总是让人在犹豫与彷徨中难以看清未来的意义。"
+	p3 := strings.Repeat("他继续在脑海中复盘着每一个纠结的念头，暗道自己如今的处境实在充满着难以言说的滋味与沉思。", 3)
+	content := JoinParagraphs([]string{p1, p2, p3})
+
+	profile := domain.DefaultStyleProfile(1)
+	profile.MaxParagraphChars = 80
+	issues, _ := Lint(content, DefaultRules(), profile)
+
+	var gotWall, gotPsych bool
+	for _, iss := range issues {
+		if iss.ParagraphIndex == 2 && iss.RuleID == "formatting-wall-of-text" {
+			gotWall = true
+		}
+		if iss.ParagraphIndex == 2 && iss.RuleID == "formatting-psych-monologue-run" {
+			gotPsych = true
+		}
+	}
+	if !gotWall || !gotPsych {
+		t.Fatalf("expected both wall-of-text and psych-monologue-run on paragraph 2, got %+v", issues)
+	}
+}

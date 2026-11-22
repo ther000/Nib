@@ -14,6 +14,7 @@ import {
   type AutopilotState,
 } from "../mygo";
 import { useApp } from "../stores/AppContext";
+import { useAutopilotActions, useAutopilotState } from "../stores/AutopilotContext";
 import { formatCompactTokens, formatErrorMessage } from "../lib/constants";
 
 const STEP_LABELS: Record<string, string> = {
@@ -32,12 +33,11 @@ const STEP_LABELS: Record<string, string> = {
 export function AutopilotStatusBar() {
   const {
     activeBook,
-    autopilotState,
-    openAutopilot,
-    setAutopilotState,
     jumpToChapter,
     notify,
   } = useApp();
+  const { autopilotState } = useAutopilotState();
+  const { openAutopilot, setAutopilotState } = useAutopilotActions();
 
   const [dismissedAt, setDismissedAt] = useState<string>("");
   const [resolving, setResolving] = useState(false);
@@ -55,10 +55,11 @@ export function AutopilotStatusBar() {
   const canResume =
     (autopilotState.status === "stopped" || autopilotState.status === "failed") &&
     autopilotState.completedChapters < autopilotState.targetChapters;
+  const statusKey =
+    autopilotState.updatedAt || `${autopilotState.status}:${autopilotState.completedChapters}`;
 
   if (autopilotState.status === "idle") return null;
-  if (isTerminal && !canResume && dismissedAt === (autopilotState.updatedAt ?? "")) return null;
-  if (isTerminal && dismissedAt === (autopilotState.updatedAt ?? "")) return null;
+  if (isTerminal && dismissedAt === statusKey) return null;
 
   const handleResume = async () => {
     setResolving(true);
@@ -143,7 +144,7 @@ export function AutopilotStatusBar() {
                   onClick={() => void handleResolve(opt.action)}
                   className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
                     opt.action === "retry_chapter" || opt.action === "continue"
-                      ? "bg-accent text-white hover:bg-accent-hover"
+                      ? "bg-accent text-canvas hover:bg-accent-hover"
                       : "border border-border-strong bg-elevated text-ink-primary hover:bg-canvas"
                   }`}
                 >
@@ -193,7 +194,7 @@ export function AutopilotStatusBar() {
                   )}
                   <button
                     type="button"
-                    onClick={() => setDismissedAt(autopilotState.updatedAt ?? "dismissed")}
+                    onClick={() => setDismissedAt(statusKey)}
                     aria-label="关闭状态条"
                     className="rounded-md p-1 text-ink-muted transition-colors hover:bg-elevated hover:text-ink-primary"
                   >
@@ -217,17 +218,15 @@ export function AutopilotStatusBar() {
 
 export function AutopilotModal() {
   const {
-    autopilotOpen,
-    closeAutopilot,
     activeBook,
     volumes,
     providers,
     modelRoutes,
-    autopilotState,
-    setAutopilotState,
     openSettings,
     notify,
   } = useApp();
+  const { autopilotOpen, autopilotState } = useAutopilotState();
+  const { closeAutopilot, setAutopilotState } = useAutopilotActions();
 
   const [targetChapters, setTargetChapters] = useState(3);
   const [volumeId, setVolumeId] = useState<number>(0);
@@ -336,6 +335,7 @@ export function AutopilotModal() {
 
   return (
     <div
+      data-nib-modal="true"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) closeAutopilot();
@@ -569,7 +569,7 @@ export function AutopilotModal() {
                 type="button"
                 disabled={starting}
                 onClick={() => void handleStart()}
-                className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
+                className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-1.5 text-[13px] font-medium text-canvas transition-colors hover:bg-accent-hover disabled:opacity-50"
               >
                 {starting ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />

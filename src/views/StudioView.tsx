@@ -70,6 +70,7 @@ import {
   getChapterStatusMeta,
   getEntityKindLabel,
   getVersionSourceLabel,
+  isIMEComposing,
   parseKeywordList,
   splitParagraphs,
 } from "../lib/constants";
@@ -304,10 +305,11 @@ export function StudioView() {
     const handleInsertText = (event: Event) => {
       const text = (event as CustomEvent<{ text?: string }>).detail?.text;
       if (!text) return;
+      const current = contentRef.current;
       const el = textareaRef.current;
-      const start = el?.selectionStart ?? content.length;
-      const end = el?.selectionEnd ?? content.length;
-      const next = content.slice(0, start) + text + content.slice(end);
+      const start = el?.selectionStart ?? current.length;
+      const end = el?.selectionEnd ?? current.length;
+      const next = current.slice(0, start) + text + current.slice(end);
       setContent(next);
       setDirty(true);
       requestAnimationFrame(() => {
@@ -320,21 +322,27 @@ export function StudioView() {
     };
     window.addEventListener("nib:insert-text", handleInsertText);
     return () => window.removeEventListener("nib:insert-text", handleInsertText);
-  }, [content]);
+  }, []);
+
+  const syncTextareaHeight = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.max(el.scrollHeight, 480)}px`;
+  }, []);
+
+  // ResizeObserver 仅随编辑区挂载创建一次，避免每次击键重建观察器
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => syncTextareaHeight());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [activeChapter?.id, generating, readingMode, syncTextareaHeight]);
 
   // Auto-resize textarea height cleanly after content/mode/layout/typography changes
   useLayoutEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    const resize = () => {
-      el.style.height = "auto";
-      el.style.height = `${Math.max(el.scrollHeight, 480)}px`;
-    };
-    resize();
-    if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => resize());
-    ro.observe(el);
-    return () => ro.disconnect();
+    syncTextareaHeight();
   }, [
     content,
     activeChapter?.id,
@@ -347,6 +355,7 @@ export function StudioView() {
     proseFontSize,
     proseLineHeight,
     proseMaxWidth,
+    syncTextareaHeight,
   ]);
 
   // Abort active generation & flush dirty draft if unmounting StudioView
@@ -993,10 +1002,25 @@ export function StudioView() {
 
   const applySelectionRewrite = useCallback(() => {
     if (!selectionRange || selectionPreview === null) return;
+    let start = selectionRange.start;
+    let end = selectionRange.end;
+    if (content.slice(start, end) !== selectionRange.text) {
+      const firstIdx = content.indexOf(selectionRange.text);
+      const secondIdx =
+        firstIdx >= 0 ? content.indexOf(selectionRange.text, firstIdx + 1) : -1;
+      if (firstIdx >= 0 && secondIdx < 0) {
+        start = firstIdx;
+        end = firstIdx + selectionRange.text.length;
+      } else {
+        notify({
+          tone: "warn",
+          message: "正文内容已发生变动，请重新划选片段后再替换",
+        });
+        return;
+      }
+    }
     const nextContent =
-      content.slice(0, selectionRange.start) +
-      selectionPreview +
-      content.slice(selectionRange.end);
+      content.slice(0, start) + selectionPreview + content.slice(end);
     setContent(nextContent);
     setDirty(true);
     setSelectionRange(null);
@@ -1520,8 +1544,8 @@ export function StudioView() {
 
   const liveWordCount = useMemo(() => countWords(content), [content]);
   const streamingParagraphs = useMemo(
-    () => splitParagraphs(content),
-    [content]
+    () => (generating || readingMode ? splitParagraphs(content) : []),
+    [content, generating, readingMode]
   );
 
   // Per-paragraph maps for inline underlines, critic callouts, and pending surgical diffs
@@ -2280,7 +2304,7 @@ export function StudioView() {
                     disabled={selectionRewriting}
                     onChange={(e) => setSelectionCustomPrompt(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" && selectionCustomPrompt.trim()) {
+                      if (e.key === "Enter" && !isIMEComposing(e) && selectionCustomPrompt.trim()) {
                         e.preventDefault();
                         void runSelectionRewrite("custom");
                       }
@@ -3043,6 +3067,7 @@ export function StudioView() {
               chapterHasContent={content.trim().length > 0}
               delta={pendingDelta}
               loading={deltaLoading}
+              onEnsureSavedBeforeExtract={ensureSavedBeforeAudit}
               onDeltaLoaded={setPendingDelta}
               onDeltaApplied={handleDeltaApplied}
               onNotify={notify}

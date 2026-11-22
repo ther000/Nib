@@ -66,11 +66,13 @@ func main() {
 		dataDir, err := mygo.App.Path(mygo.PathUserData)
 		if err != nil {
 			log.Printf("nib: resolve user data dir failed: %v", err)
+			rt.SetInitError(err)
 		} else {
 			dbPath := filepath.Join(dataDir, "nib.db")
 			closer, initErr := initRuntime(rt, dbPath)
 			if initErr != nil {
 				log.Printf("nib: init runtime (%s) failed: %v", dbPath, initErr)
+				rt.SetInitError(initErr)
 			} else {
 				closerMu.Lock()
 				batchCloser = closer
@@ -91,7 +93,7 @@ func main() {
 			TitleBarHeight:  44,
 			BackgroundColor: "light-dark(#F6F3EC, #141416)",
 		})
-		mainWin.SetWindowButtonsTheme(mygo.ThemeDark)
+		mainWin.SetWindowButtonsTheme(mygo.ThemeSystem)
 		mainWin.OnReadyToShow(mainWin.Show)
 	})
 
@@ -117,12 +119,6 @@ func initRuntime(rt *app.Runtime, dbPath string) (func(), error) {
 	}
 	if err := st.RecoverInterruptedAutopilotRuns(context.Background()); err != nil {
 		log.Printf("nib: recover interrupted autopilot runs warning: %v", err)
-	}
-	if _, err := st.CreateAutoBackup(context.Background(), filepath.Join(filepath.Dir(dbPath), "backups"), 7); err != nil {
-		log.Printf("nib: daily auto backup warning: %v", err)
-	}
-	if _, err := st.CleanupExpiredTrash(context.Background()); err != nil {
-		log.Printf("nib: cleanup expired trash warning: %v", err)
 	}
 
 	storeExp := exporter.NewStoreExporter(st)
@@ -158,5 +154,17 @@ func initRuntime(rt *app.Runtime, dbPath string) (func(), error) {
 		AutopilotEngine: runner,
 		DirectorEngine:  runner,
 	})
+
+	// 每日滚动备份与过期回收站清理改为异步后台执行，避免大库阻塞首屏窗口弹出。
+	backupDir := filepath.Join(filepath.Dir(dbPath), "backups")
+	rt.RunBackground(func(bgCtx context.Context) {
+		if _, err := st.CreateAutoBackup(bgCtx, backupDir, 7); err != nil && bgCtx.Err() == nil {
+			log.Printf("nib: daily auto backup warning: %v", err)
+		}
+		if _, err := st.CleanupExpiredTrash(bgCtx); err != nil && bgCtx.Err() == nil {
+			log.Printf("nib: cleanup expired trash warning: %v", err)
+		}
+	})
+
 	return runner.Close, nil
 }

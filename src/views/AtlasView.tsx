@@ -36,6 +36,7 @@ import {
   formatSeq,
   getEntityKindLabel,
   isForeshadowingOverdue,
+  isIMEComposing,
   type AtlasSubTab,
 } from "../lib/constants";
 import { ForeshadowingBoard } from "../components/atlas/ForeshadowingBoard";
@@ -580,7 +581,7 @@ export function AtlasView() {
                   <span>{label}</span>
                   {badge !== undefined && badge > 0 && (
                     <span
-                      className={`nib-mono rounded-full px-1.5 py-0.2 text-[10px] ${
+                      className={`nib-mono rounded-full px-1.5 py-0.5 text-[10px] ${
                         badgeTone === "danger"
                           ? "bg-danger-soft text-danger font-semibold"
                           : "bg-canvas/70 text-ink-muted"
@@ -1030,7 +1031,7 @@ export function AtlasView() {
                     value={aliasDraft}
                     onChange={(e) => setAliasDraft(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === ",") {
+                      if ((e.key === "Enter" || e.key === ",") && !isIMEComposing(e)) {
                         e.preventDefault();
                         addAlias();
                       }
@@ -1239,7 +1240,7 @@ export function AtlasView() {
                                 )}
                               </div>
                               <span
-                                className={`rounded px-1.5 py-0.2 text-[10px] ${
+                                className={`rounded px-1.5 py-0.5 text-[10px] ${
                                   ev.status === "pending"
                                     ? "bg-warn-soft text-warn"
                                     : "bg-surface text-ink-muted"

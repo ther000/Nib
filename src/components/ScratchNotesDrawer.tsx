@@ -44,6 +44,18 @@ export function ScratchNotesDrawer() {
     setQuery("");
   }, [open, loadNotes]);
 
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
   const filtered = useMemo(() => {
     const keyword = query.trim().toLowerCase();
     if (!keyword) return notes;
@@ -127,7 +139,7 @@ export function ScratchNotesDrawer() {
   if (!open || !activeBook) return null;
 
   return (
-    <aside className="fixed top-[var(--topbar-height)] right-0 bottom-0 z-40 flex w-[360px] flex-col border-l border-border-subtle bg-elevated shadow-[var(--shadow-elevated)]">
+    <aside className="fixed top-[var(--mygo-titlebar-height,var(--topbar-height))] right-0 bottom-0 z-40 flex w-[360px] flex-col border-l border-border-subtle bg-elevated shadow-[var(--shadow-elevated)]">
       <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
         <div className="flex items-center gap-2">
           <Lightbulb className="h-4 w-4 text-accent" />

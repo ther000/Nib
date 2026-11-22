@@ -1,7 +1,9 @@
 import { useEffect } from "react";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { AppProvider, useApp } from "./stores/AppContext";
+import { useAutopilotState } from "./stores/AutopilotContext";
 import { ContextMenuProvider } from "./components/ContextMenu";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { TopBar } from "./components/TopBar";
 import { AutopilotModal, AutopilotStatusBar } from "./components/AutopilotConsole";
 import { DirectorDrawer } from "./components/DirectorDrawer";
@@ -39,6 +41,7 @@ function NibShell() {
     commandPaletteOpen,
     toggleCommandPalette,
   } = useApp();
+  const { autopilotOpen } = useAutopilotState();
 
   const inWorkspace = viewMode === "workspace" && Boolean(activeBook);
   const effectiveFocusMode = focusMode && inWorkspace && activeTab === "studio";
@@ -60,7 +63,9 @@ function NibShell() {
   // Ctrl+Shift+F   -> toggle Global Memory Search modal
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const blockingModalOpen = settingsOpen || createBookOpen;
+      const domModalOpen = Boolean(document.querySelector('[data-nib-modal="true"]'));
+      const blockingModalOpen =
+        settingsOpen || createBookOpen || autopilotOpen || domModalOpen;
 
       if (e.key === "F11" && !blockingModalOpen && inWorkspace && activeTab === "studio") {
         e.preventDefault();
@@ -82,7 +87,7 @@ function NibShell() {
       const mod = e.ctrlKey || e.metaKey;
       if (!mod) return;
 
-      if ((e.key.toLowerCase() === "p" || e.code === "KeyP") && e.shiftKey && !blockingModalOpen) {
+      if ((e.key.toLowerCase() === "p" || e.code === "KeyP") && e.shiftKey && !settingsOpen && !createBookOpen && !autopilotOpen) {
         e.preventDefault();
         toggleCommandPalette();
         return;
@@ -103,7 +108,9 @@ function NibShell() {
       if (
         (e.key.toLowerCase() === "f" || e.code === "KeyF") &&
         e.shiftKey &&
-        !blockingModalOpen &&
+        !settingsOpen &&
+        !createBookOpen &&
+        !autopilotOpen &&
         inWorkspace
       ) {
         e.preventDefault();
@@ -122,7 +129,7 @@ function NibShell() {
         return;
       }
 
-      const modalOpen = blockingModalOpen || memorySearchOpen;
+      const modalOpen = blockingModalOpen || memorySearchOpen || commandPaletteOpen;
 
       if ((e.key === "1" || e.code === "Digit1") && !modalOpen && inWorkspace) {
         e.preventDefault();
@@ -238,10 +245,12 @@ function NibShell() {
 
 export function App() {
   return (
-    <AppProvider>
-      <ContextMenuProvider>
-        <NibShell />
-      </ContextMenuProvider>
-    </AppProvider>
+    <ErrorBoundary>
+      <AppProvider>
+        <ContextMenuProvider>
+          <NibShell />
+        </ContextMenuProvider>
+      </AppProvider>
+    </ErrorBoundary>
   );
 }

@@ -1,5 +1,5 @@
 import { AlertCircle, CheckCircle2, Info, AlertTriangle, X } from "lucide-react";
-import { useApp, type ToastTone } from "../stores/AppContext";
+import { useToastActions, useToastState, type ToastTone } from "../stores/ToastContext";
 
 const TONE_STYLES: Record<ToastTone, { border: string; iconClass: string; Icon: typeof Info }> = {
   info: { border: "border-l-accent", iconClass: "text-accent", Icon: Info },
@@ -9,7 +9,8 @@ const TONE_STYLES: Record<ToastTone, { border: string; iconClass: string; Icon: 
 };
 
 export function ToastHost() {
-  const { toasts, dismissToast } = useApp();
+  const toasts = useToastState();
+  const { dismissToast } = useToastActions();
 
   if (toasts.length === 0) return null;
 

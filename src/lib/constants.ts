@@ -436,10 +436,45 @@ export function getBeatAccentClass(stage: BeatStage): string {
   }
 }
 
+export function isIMEComposing(e: {
+  isComposing?: boolean;
+  keyCode?: number;
+  nativeEvent?: { isComposing?: boolean; keyCode?: number };
+}): boolean {
+  if (e.isComposing || e.keyCode === 229) return true;
+  if (e.nativeEvent && (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229)) {
+    return true;
+  }
+  return false;
+}
+
 export function countWords(text: string): number {
   if (!text) return 0;
-  const compact = text.replace(/\s+/g, "");
-  return Array.from(compact).length;
+  let count = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    // 跳过常见空白符（空格/制表/换行/全角空格）
+    if (
+      code === 0x20 ||
+      code === 0x09 ||
+      code === 0x0a ||
+      code === 0x0d ||
+      code === 0x3000 ||
+      (code >= 0x0b && code <= 0x0c) ||
+      code === 0xa0
+    ) {
+      continue;
+    }
+    // UTF-16 代理对仅计为 1 个字符（兼容 emoji / 生僻汉字扩展 B~G 区）
+    if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        i++;
+      }
+    }
+    count++;
+  }
+  return count;
 }
 
 export function formatNumber(n: number): string {

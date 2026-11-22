@@ -592,3 +592,46 @@ func TestArcSummariesAndForeshadowingCRUD(t *testing.T) {
 		t.Fatalf("allSums mismatch: %+v", allSums)
 	}
 }
+
+func TestSearchMemoryMatchesAttributesForLongQueriesAndV10Indexes(t *testing.T) {
+	ctx := context.Background()
+	st := openMemoryStore(t)
+
+	book, _ := st.CreateBook(ctx, domain.CreateBookInput{Title: "属性检索测试", Genre: domain.GenreXuanhuan})
+	_, _ = st.UpsertEntity(ctx, domain.UpsertEntityInput{
+		BookID:  book.ID,
+		Kind:    domain.EntityKindCharacter,
+		Name:    "林渊",
+		Summary: "主角",
+		Attributes: map[string]string{
+			"境界": "元婴大圆满",
+			"功法": "九霄御雷诀",
+		},
+	})
+
+	// >= 3 字关键词仅出现在 attributes_json 中，FTS5+LIKE 并集必须召回
+	hits, err := st.SearchMemory(ctx, book.ID, "九霄御雷诀", 0)
+	if err != nil {
+		t.Fatalf("SearchMemory: %v", err)
+	}
+	if len(hits) == 0 || hits[0].Source != domain.MemorySearchSourceEntity || hits[0].Title != "林渊" {
+		t.Fatalf("expected attribute recall for >=3 rune query, got %+v", hits)
+	}
+
+	// 验证 010 迁移索引已创建
+	var idxCount int
+	if err := st.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sqlite_master
+		WHERE type = 'index' AND name IN (
+			'idx_chapters_book_status',
+			'idx_state_events_book_status_seq',
+			'idx_batch_runs_book_id',
+			'idx_entity_relations_src'
+		)
+	`).Scan(&idxCount); err != nil {
+		t.Fatalf("query sqlite_master: %v", err)
+	}
+	if idxCount != 4 {
+		t.Fatalf("expected 4 sampled v10 indexes, got %d", idxCount)
+	}
+}

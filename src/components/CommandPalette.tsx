@@ -21,7 +21,8 @@ import {
 } from "lucide-react";
 import { LibraryService } from "../mygo";
 import { useApp } from "../stores/AppContext";
-import { formatErrorMessage, formatSeq } from "../lib/constants";
+import { useAutopilotActions } from "../stores/AutopilotContext";
+import { formatErrorMessage, formatSeq, isIMEComposing } from "../lib/constants";
 
 interface PaletteCommand {
   id: string;
@@ -47,8 +48,13 @@ const SHORTCUT_ITEMS: Array<{ keys: string; desc: string; scope: string }> = [
 ];
 
 export function CommandPalette() {
+  const { commandPaletteOpen } = useApp();
+  if (!commandPaletteOpen) return null;
+  return <CommandPaletteBody />;
+}
+
+function CommandPaletteBody() {
   const {
-    commandPaletteOpen,
     closeCommandPalette,
     viewMode,
     activeBook,
@@ -64,27 +70,27 @@ export function CommandPalette() {
     openCreateBook,
     openSettings,
     openMemorySearch,
-    openAutopilot,
     toggleDirector,
     toggleStudioDrawer,
     triggerSave,
     notify,
   } = useApp();
+  const { openAutopilot } = useAutopilotActions();
 
   const [mode, setMode] = useState<"commands" | "shortcuts">("commands");
   const [query, setQuery] = useState("");
   const [selectedIdx, setSelectedIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const inWorkspace = viewMode === "workspace" && Boolean(activeBook);
 
   useEffect(() => {
-    if (!commandPaletteOpen) return;
     setQuery("");
     setSelectedIdx(0);
     setMode("commands");
     requestAnimationFrame(() => inputRef.current?.focus());
-  }, [commandPaletteOpen]);
+  }, []);
 
   const commands = useMemo<PaletteCommand[]>(() => {
     const list: PaletteCommand[] = [];
@@ -321,7 +327,10 @@ export function CommandPalette() {
   }, [query, mode]);
 
   useEffect(() => {
-    if (!commandPaletteOpen) return;
+    itemRefs.current[selectedIdx]?.scrollIntoView({ block: "nearest" });
+  }, [selectedIdx]);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -335,7 +344,7 @@ export function CommandPalette() {
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         setSelectedIdx((i) => (i - 1 + filtered.length) % filtered.length);
-      } else if (e.key === "Enter") {
+      } else if (e.key === "Enter" && !isIMEComposing(e)) {
         e.preventDefault();
         const target = filtered[selectedIdx];
         if (target) {
@@ -346,12 +355,11 @@ export function CommandPalette() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [commandPaletteOpen, mode, filtered, selectedIdx, closeCommandPalette]);
-
-  if (!commandPaletteOpen) return null;
+  }, [mode, filtered, selectedIdx, closeCommandPalette]);
 
   return (
     <div
+      data-nib-modal="true"
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 px-4 pt-[11vh] backdrop-blur-[2px]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) closeCommandPalette();
@@ -432,6 +440,9 @@ export function CommandPalette() {
                       </div>
                     )}
                     <button
+                      ref={(el) => {
+                        itemRefs.current[idx] = el;
+                      }}
                       type="button"
                       onMouseEnter={() => setSelectedIdx(idx)}
                       onClick={() => {

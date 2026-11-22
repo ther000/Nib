@@ -25,6 +25,7 @@
 
   /* Semantic Accents */
   --accent: #d4a95e;
+  --accent-hover: #dfba74;
   --accent-soft: rgba(212, 169, 94, 0.14);
   --status-ok: #58a67a;
   --status-ok-soft: rgba(88, 166, 122, 0.14);
@@ -75,6 +76,7 @@
 
   /* Semantic Accents */
   --accent: #9c6d24;
+  --accent-hover: #875c1c;
   --accent-soft: rgba(156, 109, 36, 0.12);
   --status-ok: #2d7a4e;
   --status-ok-soft: rgba(45, 122, 78, 0.12);
@@ -107,6 +109,7 @@
   --color-ink-secondary: var(--text-secondary);
   --color-ink-muted: var(--text-muted);
   --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
   --color-accent-soft: var(--accent-soft);
   --color-ok: var(--status-ok);
   --color-ok-soft: var(--status-ok-soft);

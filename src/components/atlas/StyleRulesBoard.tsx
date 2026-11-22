@@ -105,19 +105,14 @@ export function StyleRulesBoard() {
     setProfileDirty(false);
   }, []);
 
-  const loadAll = useCallback(async () => {
+  const loadProfileAndRules = useCallback(async () => {
     if (!activeBook) return;
     try {
-      const [prof, sampleList, ruleList] = await Promise.all([
+      const [prof, ruleList] = await Promise.all([
         StyleService.getStyleProfile(activeBook.id),
-        StyleService.listStyleSamples(
-          activeBook.id,
-          sceneFilter === "all" ? "" : sceneFilter
-        ),
         StyleService.listDeaiRules(activeBook.id),
       ]);
       syncProfileForm(prof);
-      setSamples(sampleList);
       setRules(ruleList);
     } catch (err) {
       notify({
@@ -126,7 +121,7 @@ export function StyleRulesBoard() {
         detail: formatErrorMessage(err),
       });
     }
-  }, [activeBook, sceneFilter, syncProfileForm, notify]);
+  }, [activeBook, syncProfileForm, notify]);
 
   const loadSamples = useCallback(async () => {
     if (!activeBook) return;
@@ -152,8 +147,12 @@ export function StyleRulesBoard() {
   }, [activeBook, notify]);
 
   useEffect(() => {
-    void loadAll();
-  }, [loadAll]);
+    void loadProfileAndRules();
+  }, [loadProfileAndRules]);
+
+  useEffect(() => {
+    void loadSamples();
+  }, [loadSamples]);
 
   useEffect(() => {
     return () => {
@@ -166,17 +165,18 @@ export function StyleRulesBoard() {
 
   // Close modals on Escape
   useEffect(() => {
-    if (!extractModalOpen && !sampleEditor && !ruleEditor) return;
+    if (!extractModalOpen && !sampleEditor && !ruleEditor && !sensitiveModalOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         if (extractModalOpen && !extractingProfile) setExtractModalOpen(false);
         if (sampleEditor) setSampleEditor(null);
         if (ruleEditor) setRuleEditor(null);
+        if (sensitiveModalOpen && !importingSensitive) setSensitiveModalOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [extractModalOpen, extractingProfile, sampleEditor, ruleEditor]);
+  }, [extractModalOpen, extractingProfile, sampleEditor, ruleEditor, sensitiveModalOpen, importingSensitive]);
 
   const handleSaveProfile = async () => {
     if (!activeBook) return;
@@ -810,15 +810,15 @@ export function StyleRulesBoard() {
                           {rule.pattern}
                         </span>
                         <span
-                          className={`rounded border px-1.5 py-0.2 text-[10px] ${sevMeta.badgeClass}`}
+                          className={`rounded border px-1.5 py-0.5 text-[10px] ${sevMeta.badgeClass}`}
                         >
                           {sevMeta.label}
                         </span>
-                        <span className="rounded bg-surface px-1.5 py-0.2 text-[10px] text-ink-muted">
+                        <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] text-ink-muted">
                           {getDeaiCategoryLabel(rule.category)}
                         </span>
                         {rule.isRegex && (
-                          <span className="nib-mono rounded bg-surface px-1 py-0.2 text-[9.5px] text-accent">
+                          <span className="nib-mono rounded bg-surface px-1 py-0.5 text-[9.5px] text-accent">
                             Regex
                           </span>
                         )}
@@ -895,6 +895,7 @@ export function StyleRulesBoard() {
       {/* Extract Style Profile Modal */}
       {extractModalOpen && (
         <div
+          data-nib-modal="true"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget && !extractingProfile) {
@@ -1014,6 +1015,7 @@ export function StyleRulesBoard() {
       {/* Style Sample Editor Modal */}
       {sampleEditor && (
         <div
+          data-nib-modal="true"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) setSampleEditor(null);
@@ -1110,6 +1112,7 @@ export function StyleRulesBoard() {
       {/* Bulk Sensitive / Forbidden Words Modal */}
       {sensitiveModalOpen && (
         <div
+          data-nib-modal="true"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget && !importingSensitive) {
@@ -1172,6 +1175,7 @@ export function StyleRulesBoard() {
       {/* De-AI Rule Editor Modal */}
       {ruleEditor && (
         <div
+          data-nib-modal="true"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) setRuleEditor(null);

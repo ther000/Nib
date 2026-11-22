@@ -16,6 +16,7 @@ import {
   Sun,
 } from "lucide-react";
 import { useApp } from "../stores/AppContext";
+import { useAutopilotActions, useAutopilotState } from "../stores/AutopilotContext";
 import type { WorkspaceTab } from "../lib/constants";
 
 const WORKSPACE_TABS: Array<{ id: WorkspaceTab; label: string; shortcut: string }> = [
@@ -39,12 +40,12 @@ export function TopBar() {
     openSettings,
     openCreateBook,
     openMemorySearch,
-    openAutopilot,
-    autopilotState,
     directorOpen,
     toggleDirector,
     openCommandPalette,
   } = useApp();
+  const { autopilotState } = useAutopilotState();
+  const { openAutopilot } = useAutopilotActions();
 
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);

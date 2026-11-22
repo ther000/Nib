@@ -143,6 +143,7 @@ func Lint(content string, rules []domain.DeaiRule, profile domain.StyleProfile) 
 	}
 
 	type spanKey struct {
+		ruleID    string
 		paraIdx   int
 		startRune int
 		endRune   int
@@ -151,7 +152,7 @@ func Lint(content string, rules []domain.DeaiRule, profile domain.StyleProfile) 
 	issues := make([]domain.LintIssue, 0)
 
 	addIssue := func(iss domain.LintIssue) {
-		k := spanKey{paraIdx: iss.ParagraphIndex, startRune: iss.StartRune, endRune: iss.EndRune}
+		k := spanKey{ruleID: iss.RuleID, paraIdx: iss.ParagraphIndex, startRune: iss.StartRune, endRune: iss.EndRune}
 		if seenSpans[k] {
 			return
 		}

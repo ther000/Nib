@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ArrowRight, GitFork, Plus, Trash2 } from "lucide-react";
 import { AtlasService, type EntityRelation } from "../../mygo";
 import { useApp } from "../../stores/AppContext";
-import { formatErrorMessage } from "../../lib/constants";
+import { formatErrorMessage, isIMEComposing } from "../../lib/constants";
 
 const PRESET_RELATIONS = ["师徒", "死敌", "同盟", "隶属", "宿敌", "亲友", "道侣", "交易"];
 
@@ -158,7 +158,7 @@ export function RelationsBoard() {
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") {
+                if (e.key === "Enter" && !isIMEComposing(e)) {
                   e.preventDefault();
                   void handleAdd();
                 }

@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { MemoryService, type MemorySearchHit } from "../mygo";
 import { useApp } from "../stores/AppContext";
-import { formatErrorMessage, formatSeq } from "../lib/constants";
+import { formatErrorMessage, formatSeq, isIMEComposing } from "../lib/constants";
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -101,6 +101,7 @@ export function MemorySearchModal() {
   const [activeIndex, setActiveIndex] = useState(0);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const reqIdRef = useRef(0);
 
   useEffect(() => {
@@ -181,6 +182,11 @@ export function MemorySearchModal() {
     }
   };
 
+  useEffect(() => {
+    if (!memorySearchOpen) return;
+    itemRefs.current[activeIndex]?.scrollIntoView({ block: "nearest" });
+  }, [memorySearchOpen, activeIndex]);
+
   // Keyboard navigation inside modal
   useEffect(() => {
     if (!memorySearchOpen) return;
@@ -202,7 +208,7 @@ export function MemorySearchModal() {
         );
         return;
       }
-      if (e.key === "Enter" && hits.length > 0) {
+      if (e.key === "Enter" && !isIMEComposing(e) && hits.length > 0) {
         const chosen = hits[activeIndex] ?? hits[0];
         if (chosen) {
           e.preventDefault();
@@ -219,6 +225,7 @@ export function MemorySearchModal() {
 
   return (
     <div
+      data-nib-modal="true"
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 px-4 pt-[13vh]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) closeMemorySearch();
@@ -304,6 +311,9 @@ export function MemorySearchModal() {
                 const isChapter = hit.source === "chapter";
                 return (
                   <button
+                    ref={(el) => {
+                      itemRefs.current[idx] = el;
+                    }}
                     key={`${hit.source}-${hit.chapterId}-${hit.entityId}-${idx}`}
                     type="button"
                     onMouseEnter={() => setActiveIndex(idx)}

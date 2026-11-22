@@ -314,6 +314,7 @@ export function CreateBookModal() {
 
   return (
     <div
+      data-nib-modal="true"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget && !generating && !submitting) {
@@ -584,7 +585,7 @@ export function CreateBookModal() {
                     type="button"
                     disabled={submitting}
                     onClick={() => void handleApplyPlan()}
-                    className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
+                    className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-1.5 text-[13px] font-medium text-canvas transition-colors hover:bg-accent-hover disabled:opacity-50"
                   >
                     {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                     <span>{submitting ? "创建中…" : "确认建书并进入大纲"}</span>
@@ -751,7 +752,7 @@ export function CreateBookModal() {
                     <button
                       type="button"
                       onClick={() => void handleGeneratePlan()}
-                      className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
+                      className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-1.5 text-[13px] font-medium text-canvas transition-colors hover:bg-accent-hover"
                     >
                       <Sparkles className="h-3.5 w-3.5" />
                       <span>生成开书企划</span>
@@ -902,7 +903,7 @@ export function CreateBookModal() {
               <button
                 type="submit"
                 disabled={submitting}
-                className="rounded-lg bg-accent px-4 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
+                className="rounded-lg bg-accent px-4 py-1.5 text-[13px] font-medium text-canvas transition-colors hover:bg-accent-hover disabled:opacity-50"
               >
                 {submitting ? "创建中…" : "创建书籍"}
               </button>

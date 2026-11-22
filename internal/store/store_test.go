@@ -897,3 +897,30 @@ func TestResequenceUpdatesEntityStateEventChapterSeq(t *testing.T) {
 		t.Fatalf("expected event chapter_seq synced to 1 after resequence, got %+v", snaps)
 	}
 }
+
+func TestDeleteBookCleansBookDeaiRules(t *testing.T) {
+	ctx := context.Background()
+	st := openMemoryStore(t)
+
+	book, _ := st.CreateBook(ctx, domain.CreateBookInput{Title: "删书清规则", Genre: domain.GenreUrban})
+	if _, err := st.UpsertDeaiRule(ctx, domain.UpsertDeaiRuleInput{
+		BookID:   book.ID,
+		Category: domain.DeaiCategoryCliche,
+		Pattern:  "专属禁用词",
+		Severity: domain.LintSeverityWarn,
+		Enabled:  true,
+	}); err != nil {
+		t.Fatalf("UpsertDeaiRule: %v", err)
+	}
+
+	if err := st.DeleteBook(ctx, book.ID); err != nil {
+		t.Fatalf("DeleteBook: %v", err)
+	}
+	var cnt int
+	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM deai_rules WHERE book_id = ?`, book.ID).Scan(&cnt); err != nil {
+		t.Fatalf("count deai_rules: %v", err)
+	}
+	if cnt != 0 {
+		t.Fatalf("expected 0 orphan deai_rules after DeleteBook, got %d", cnt)
+	}
+}

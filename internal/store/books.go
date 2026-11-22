@@ -173,11 +173,14 @@ func (s *Store) UpdateBook(ctx context.Context, in domain.UpdateBookInput) (doma
 	return result, nil
 }
 
-// DeleteBook 按 ID 删除书籍（级联删除全部卷、章、节拍、版本与设定实体）。
+// DeleteBook 按 ID 删除书籍（级联删除全部卷、章、节拍、版本、设定实体与书内去 AI 味规则）。
 func (s *Store) DeleteBook(ctx context.Context, id int64) error {
 	return s.withWriteTx(ctx, func(tx *sql.Tx) error {
 		if err := snapshotBookTrashTx(ctx, tx, id); err != nil {
 			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM deai_rules WHERE book_id = ?`, id); err != nil {
+			return mapSQLiteError(err)
 		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM books WHERE id = ?`, id)
 		if err != nil {

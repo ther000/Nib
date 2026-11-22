@@ -991,6 +991,26 @@ func (s *Store) SearchMemory(ctx context.Context, bookID int64, query string, ma
 	var err error
 	if utf8.RuneCountInString(q) >= 3 {
 		hits, err = s.searchMemoryFTS5(ctx, bookID, q, maxChapterSeq)
+		if err == nil {
+			attrHits, attrErr := s.searchEntityAttributesLike(ctx, bookID, q)
+			if attrErr != nil {
+				return nil, attrErr
+			}
+			if len(attrHits) > 0 {
+				seenEntity := make(map[int64]bool, len(hits))
+				for _, h := range hits {
+					if h.Source == domain.MemorySearchSourceEntity && h.EntityID > 0 {
+						seenEntity[h.EntityID] = true
+					}
+				}
+				for _, ah := range attrHits {
+					if !seenEntity[ah.EntityID] {
+						seenEntity[ah.EntityID] = true
+						hits = append(hits, ah)
+					}
+				}
+			}
+		}
 	} else {
 		hits, err = s.searchMemoryLike(ctx, bookID, q, maxChapterSeq)
 	}
@@ -1102,6 +1122,46 @@ func (s *Store) searchMemoryFTS5(ctx context.Context, bookID int64, q string, ma
 		return nil, err
 	}
 
+	return hits, nil
+}
+
+// searchEntityAttributesLike 弥补 entities_fts 未索引 attributes_json 导致的 3+ 字属性/境界词漏召回。
+func (s *Store) searchEntityAttributesLike(ctx context.Context, bookID int64, q string) ([]domain.MemorySearchHit, error) {
+	pattern := "%" + escapeLikePattern(q) + "%"
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, aliases_json, summary, attributes_json
+		FROM entities
+		WHERE book_id = ?
+		  AND attributes_json LIKE ? ESCAPE '\'
+		ORDER BY is_invariant DESC, id ASC
+		LIMIT 20
+	`, bookID, pattern)
+	if err != nil {
+		return nil, mapSQLiteError(err)
+	}
+	defer rows.Close()
+
+	hits := make([]domain.MemorySearchHit, 0)
+	for rows.Next() {
+		var (
+			id                                    int64
+			name, aliasesJSON, summary, attrsJSON string
+		)
+		if err := rows.Scan(&id, &name, &aliasesJSON, &summary, &attrsJSON); err != nil {
+			return nil, mapSQLiteError(err)
+		}
+		combined := formatEntitySearchText(name, unmarshalStringSlice(aliasesJSON), summary, unmarshalAttributes(attrsJSON))
+		hits = append(hits, domain.MemorySearchHit{
+			Source:   domain.MemorySearchSourceEntity,
+			EntityID: id,
+			Title:    name,
+			Snippet:  buildContextSnippet(combined, q, name),
+			Score:    1.25,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return hits, nil
 }
 
@@ -1549,8 +1609,10 @@ func buildContextSnippet(text, query, fallback string) string {
 		return string(runes[:radius*2]) + "…"
 	}
 
+	matchIdx = min(matchIdx, len(runes))
+	matchEnd := min(len(runes), matchIdx+len(qRunes))
 	start := max(0, matchIdx-radius)
-	end := min(len(runes), matchIdx+len(qRunes)+radius)
+	end := min(len(runes), matchEnd+radius)
 
 	var b strings.Builder
 	if start > 0 {
@@ -1558,9 +1620,9 @@ func buildContextSnippet(text, query, fallback string) string {
 	}
 	b.WriteString(string(runes[start:matchIdx]))
 	b.WriteString("【")
-	b.WriteString(string(runes[matchIdx : matchIdx+len(qRunes)]))
+	b.WriteString(string(runes[matchIdx:matchEnd]))
 	b.WriteString("】")
-	b.WriteString(string(runes[matchIdx+len(qRunes) : end]))
+	b.WriteString(string(runes[matchEnd:end]))
 	if end < len(runes) {
 		b.WriteString("…")
 	}

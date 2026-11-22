@@ -257,6 +257,7 @@ type RuntimeDeps struct {
 type Runtime struct {
 	mu         sync.RWMutex
 	deps       RuntimeDeps
+	initErr    error
 	baseCtx    context.Context
 	baseCancel context.CancelFunc
 	activeWG   sync.WaitGroup
@@ -269,6 +270,36 @@ func NewRuntime() *Runtime {
 	return &Runtime{}
 }
 
+// SetInitError 记录 WhenReady 阶段初始化失败原因，便于服务层向前端返回精确诊断信息。
+func (r *Runtime) SetInitError(err error) {
+	if r == nil || err == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.initErr = err
+}
+
+// RunBackground 启动受 Runtime 生命周期托管的后台维护任务（关库前会等待其结束）。
+func (r *Runtime) RunBackground(fn func(ctx context.Context)) {
+	if r == nil || fn == nil {
+		return
+	}
+	r.mu.RLock()
+	if !r.ready || r.closed || r.baseCtx == nil {
+		r.mu.RUnlock()
+		return
+	}
+	ctx := r.baseCtx
+	r.activeWG.Add(1)
+	r.mu.RUnlock()
+
+	go func() {
+		defer r.activeWG.Done()
+		fn(ctx)
+	}()
+}
+
 // Init 在 WhenReady 中注入已就绪的底层引擎与仓储实现。
 func (r *Runtime) Init(deps RuntimeDeps) {
 	r.mu.Lock()
@@ -277,6 +308,7 @@ func (r *Runtime) Init(deps RuntimeDeps) {
 		r.baseCancel()
 	}
 	r.deps = deps
+	r.initErr = nil
 	r.baseCtx, r.baseCancel = context.WithCancel(context.Background())
 	r.ready = true
 	r.closed = false
@@ -326,6 +358,9 @@ func (r *Runtime) store() (Store, error) {
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if r.initErr != nil {
+		return nil, fmt.Errorf("%w: %v", ErrRuntimeNotReady, r.initErr)
+	}
 	if !r.ready || r.closed || r.deps.Store == nil {
 		return nil, ErrRuntimeNotReady
 	}

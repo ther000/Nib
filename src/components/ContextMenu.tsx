@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
@@ -61,8 +62,6 @@ function isEditableTextElement(el: EventTarget | null): el is EditableTextElemen
       "url",
       "tel",
       "password",
-      "email",
-      "number",
     ]);
     return textTypes.has(el.type || "text") && !el.disabled;
   }
@@ -362,8 +361,13 @@ export function ContextMenuProvider({ children }: { children: ReactNode }) {
     };
   }, [menu, activeIndex, closeContextMenu]);
 
+  const contextValue = useMemo(
+    () => ({ openContextMenu, closeContextMenu }),
+    [openContextMenu, closeContextMenu]
+  );
+
   return (
-    <ContextMenuContext.Provider value={{ openContextMenu, closeContextMenu }}>
+    <ContextMenuContext.Provider value={contextValue}>
       {children}
       {menu &&
         createPortal(

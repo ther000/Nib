@@ -35,6 +35,7 @@ import {
   PIPELINE_STAGES,
   PROVIDER_PROTOCOLS,
   formatErrorMessage,
+  isIMEComposing,
 } from "../lib/constants";
 
 interface ProviderFormState {
@@ -920,6 +921,7 @@ export function SettingsModal() {
 
   return (
     <div
+      data-nib-modal="true"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) closeSettings();
@@ -1293,7 +1295,7 @@ export function SettingsModal() {
                                   {modelId}
                                 </span>
                                 {isCustom && (
-                                  <span className="shrink-0 rounded bg-elevated px-1.5 py-0.2 text-[10px] text-ink-muted">
+                                  <span className="shrink-0 rounded bg-elevated px-1.5 py-0.5 text-[10px] text-ink-muted">
                                     自定义
                                   </span>
                                 )}
@@ -1331,7 +1333,7 @@ export function SettingsModal() {
                         value={customModelInput}
                         onChange={(e) => setCustomModelInput(e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter") {
+                          if (e.key === "Enter" && !isIMEComposing(e)) {
                             e.preventDefault();
                             handleAddCustomModel();
                           }

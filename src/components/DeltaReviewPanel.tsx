@@ -26,6 +26,7 @@ interface DeltaReviewPanelProps {
   chapterHasContent: boolean;
   delta: ChapterDelta | null;
   loading: boolean;
+  onEnsureSavedBeforeExtract?: () => Promise<boolean>;
   onDeltaLoaded: (delta: ChapterDelta | null) => void;
   onDeltaApplied: (result: ApplyDeltaResult) => Promise<void>;
   onNotify: (input: {
@@ -40,6 +41,7 @@ export function DeltaReviewPanel({
   chapterHasContent,
   delta,
   loading,
+  onEnsureSavedBeforeExtract,
   onDeltaLoaded,
   onDeltaApplied,
   onNotify,
@@ -127,6 +129,10 @@ export function DeltaReviewPanel({
 
   const handleExtract = useCallback(async () => {
     if (extracting) return;
+    if (onEnsureSavedBeforeExtract) {
+      const saved = await onEnsureSavedBeforeExtract();
+      if (!saved) return;
+    }
     const targetChapterId = chapterId;
     const runId = ++extractRunIdRef.current;
     const ac = new AbortController();
@@ -176,7 +182,7 @@ export function DeltaReviewPanel({
         setExtracting(false);
       }
     }
-  }, [chapterId, extracting, onDeltaLoaded, onNotify]);
+  }, [chapterId, extracting, onEnsureSavedBeforeExtract, onDeltaLoaded, onNotify]);
 
   const counts = useMemo(() => {
     if (!delta) return { selected: 0, total: 0, highRiskSelected: 0 };
@@ -276,7 +282,7 @@ export function DeltaReviewPanel({
                 {counts.selected}/{counts.total} 项拟入库
               </span>
               {delta.highRiskFlags > 0 && (
-                <span className="rounded bg-danger-soft px-1.5 py-0.2 text-[10px] font-medium text-danger">
+                <span className="rounded bg-danger-soft px-1.5 py-0.5 text-[10px] font-medium text-danger">
                   {delta.highRiskFlags} 高危
                 </span>
               )}

@@ -39,6 +39,7 @@ import {
   getBeatAccentClass,
   getChapterStatusMeta,
   getEntityKindLabel,
+  isIMEComposing,
 } from "../lib/constants";
 
 interface VolumeDialogState {
@@ -1253,7 +1254,7 @@ export function ArchitectView() {
                                     disabled={insertingChapter}
                                     onChange={(e) => setInsertChapterTitle(e.target.value)}
                                     onKeyDown={(e) => {
-                                      if (e.key === "Enter") {
+                                      if (e.key === "Enter" && !isIMEComposing(e)) {
                                         e.preventDefault();
                                         void handleInsertChapterAfter(vol.id, chap.id);
                                       } else if (e.key === "Escape") {
@@ -1297,7 +1298,7 @@ export function ArchitectView() {
                               disabled={creatingChapter}
                               onChange={(e) => setNewChapterTitle(e.target.value)}
                               onKeyDown={(e) => {
-                                if (e.key === "Enter") {
+                                if (e.key === "Enter" && !isIMEComposing(e)) {
                                   e.preventDefault();
                                   void handleCreateChapter(vol.id);
                                 } else if (e.key === "Escape") {
@@ -1900,7 +1901,7 @@ export function ArchitectView() {
                     setVolumeDialog({ ...volumeDialog, title: e.target.value })
                   }
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") {
+                    if (e.key === "Enter" && !isIMEComposing(e)) {
                       e.preventDefault();
                       void handleSubmitVolume();
                     }

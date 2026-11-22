@@ -19,7 +19,7 @@ import {
 } from "../mygo";
 import { useApp } from "../stores/AppContext";
 import { useMygoChannel } from "../hooks/useMygoStream";
-import { formatErrorMessage } from "../lib/constants";
+import { formatErrorMessage, isIMEComposing } from "../lib/constants";
 
 const QUICK_PROMPTS = [
   "检查当前书的设定和章纲，帮我补全不足之处",
@@ -406,7 +406,7 @@ export function DirectorDrawer() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+              if (e.key === "Enter" && !e.shiftKey && !isIMEComposing(e)) {
                 e.preventDefault();
                 void handleSend();
               }
@@ -430,7 +430,7 @@ export function DirectorDrawer() {
                 type="button"
                 disabled={!input.trim()}
                 onClick={() => void handleSend()}
-                className="flex items-center gap-1 rounded-[6px] bg-accent px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
+                className="flex items-center gap-1 rounded-[6px] bg-accent px-3 py-1 text-xs font-medium text-canvas transition-colors hover:bg-accent-hover disabled:opacity-40"
               >
                 <Send className="h-3 w-3" />
                 <span>执行</span>

@@ -95,6 +95,7 @@ export function ReverseExtractModal() {
         { bookId, startSeq: parsedStart, endSeq: parsedEnd, maxChapters: parsedMax },
         channel
       );
+      if (!stream.isCurrent(runId)) return;
       setPreview(result);
       setSelection({
         entities: result.entities.map(() => true),
@@ -104,12 +105,14 @@ export function ReverseExtractModal() {
       });
       setProgressText("");
     } catch (err) {
-      if (!stream.wasStopped()) {
+      if (stream.isCurrent(runId) && !stream.wasStopped()) {
         notify({ tone: "danger", message: "AI 反推设定失败", detail: formatErrorMessage(err) });
       }
     } finally {
       stream.release(channel);
-      setRunning(false);
+      if (stream.isCurrent(runId)) {
+        setRunning(false);
+      }
     }
   };
 
@@ -147,6 +150,21 @@ export function ReverseExtractModal() {
     setProgressText("");
   };
 
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !applying) {
+        e.preventDefault();
+        if (running) stream.stop();
+        setOpen(false);
+        setPreview(null);
+        setProgressText("");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, applying, running, stream]);
+
   if (!open) return null;
 
   const toggle = (group: keyof SelectedState, index: number) => {
@@ -158,7 +176,13 @@ export function ReverseExtractModal() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+    <div
+      data-nib-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !applying) close();
+      }}
+    >
       <div className="flex max-h-[86vh] w-full max-w-[760px] flex-col overflow-hidden rounded-xl border border-border-strong bg-elevated shadow-[var(--shadow-elevated)]">
         <div className="flex items-center justify-between border-b border-border-subtle px-5 py-3">
           <div className="flex items-center gap-2">

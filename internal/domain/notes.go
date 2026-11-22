@@ -35,7 +35,7 @@ func (in UpsertScratchNoteInput) Validate() error {
 	if strings.TrimSpace(in.Title) == "" && strings.TrimSpace(in.Content) == "" {
 		return newValidationError("title", "标题和内容不能同时为空")
 	}
-	if len(in.Content) > 20000 {
+	if len([]rune(in.Content)) > 20000 {
 		return newValidationError("content", "单条便签不能超过 20,000 字")
 	}
 	if len(in.Tags) > 12 {
