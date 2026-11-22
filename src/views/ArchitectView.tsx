@@ -1,24 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ArrowDown,
-  ArrowRight,
-  ArrowUp,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  Copy,
-  Download,
-  GripVertical,
-  Layers,
-  ListChecks,
-  PenLine,
-  Pencil,
-  Plus,
-  Save,
-  Sparkles,
-  Trash2,
-  X,
-} from "lucide-react";
+import { Plus, Sparkles } from "lucide-react";
 import {
   LibraryService,
   type Beat,
@@ -26,41 +7,20 @@ import {
   type Volume,
 } from "../mygo";
 import { useApp } from "../stores/AppContext";
-import { useContextMenu } from "../components/ContextMenu";
 import { VolumePacingChart } from "../components/architect/VolumePacingChart";
 import { BatchOutlineModal } from "../components/architect/BatchOutlineModal";
+import { ChapterTreeSidebar } from "../components/architect/ChapterTreeSidebar";
+import { ChapterMetaForm } from "../components/architect/ChapterMetaForm";
 import {
-  BEAT_STAGES,
-  EMOTION_TAGS,
-  HOOK_TYPES,
-  formatErrorMessage,
-  formatNumber,
-  formatSeq,
-  getBeatAccentClass,
-  getChapterStatusMeta,
-  getEntityKindLabel,
-  isIMEComposing,
-} from "../lib/constants";
-
-interface VolumeDialogState {
-  mode: "create" | "edit";
-  id: number;
-  seq: number;
-  title: string;
-  goal: string;
-  climaxPlan: string;
-}
-
-interface EditableBeat {
-  localKey: string;
-  id: number;
-  stage: string;
-  summary: string;
-  conflictNote: string;
-  povEntityId?: number;
-  entityIds: number[];
-  targetWords: number;
-}
+  BeatEditorList,
+  type EditableBeat,
+} from "../components/architect/BeatEditorList";
+import {
+  VolumeFormModal,
+  type VolumeDialogState,
+} from "../components/architect/VolumeFormModal";
+import { ConfirmDialog, type ConfirmDialogState } from "../components/ui/ConfirmDialog";
+import { formatErrorMessage, formatSeq } from "../lib/constants";
 
 let beatKeyCounter = 1;
 function nextBeatKey(): string {
@@ -98,30 +58,22 @@ export function ArchitectView() {
     notify,
     registerSaveHandler,
   } = useApp();
-  const { openContextMenu } = useContextMenu();
 
   // Phase 4 outline modal & pacing refresh counter
   const [outlineModalOpen, setOutlineModalOpen] = useState(false);
   const [pacingRefreshKey, setPacingRefreshKey] = useState(0);
 
-  // Tree state
-  const [collapsedVolIds, setCollapsedVolIds] = useState<Set<number>>(new Set());
-  const [addingChapterVolId, setAddingChapterVolId] = useState<number | null>(null);
-  const [newChapterTitle, setNewChapterTitle] = useState("");
+  // Tree & modal shared operation state
+  const [emptyVolChapterTitle, setEmptyVolChapterTitle] = useState("");
   const [creatingChapter, setCreatingChapter] = useState(false);
-  const [confirmDeleteVolId, setConfirmDeleteVolId] = useState<number | null>(null);
-  const [confirmDeleteChapId, setConfirmDeleteChapId] = useState<number | null>(null);
-  const [insertingAfterChap, setInsertingAfterChap] = useState<{ volId: number; afterChapId: number } | null>(null);
-  const [insertChapterTitle, setInsertChapterTitle] = useState("");
   const [insertingChapter, setInsertingChapter] = useState(false);
   const [movingChapterId, setMovingChapterId] = useState<number | null>(null);
-  const [draggingChapterId, setDraggingChapterId] = useState<number | null>(null);
-  const [dragOverVolumeId, setDragOverVolumeId] = useState<number | null>(null);
   const [batchMode, setBatchMode] = useState(false);
   const [selectedChapterIds, setSelectedChapterIds] = useState<Set<number>>(new Set());
   const [batchBusy, setBatchBusy] = useState(false);
   const [volumeDialog, setVolumeDialog] = useState<VolumeDialogState | null>(null);
   const [savingVolume, setSavingVolume] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
 
   // Chapter metadata draft
   const [metaTitle, setMetaTitle] = useState("");
@@ -143,9 +95,7 @@ export function ArchitectView() {
 
   const entityMap = useMemo(() => {
     const map = new Map<number, (typeof entities)[number]>();
-    for (const e of entities) {
-      map.set(e.id, e);
-    }
+    for (const e of entities) map.set(e.id, e);
     return map;
   }, [entities]);
 
@@ -153,11 +103,8 @@ export function ArchitectView() {
     const map = new Map<number, Chapter[]>();
     for (const c of chapters) {
       const list = map.get(c.volumeId);
-      if (list) {
-        list.push(c);
-      } else {
-        map.set(c.volumeId, [c]);
-      }
+      if (list) list.push(c);
+      else map.set(c.volumeId, [c]);
     }
     return map;
   }, [chapters]);
@@ -314,16 +261,6 @@ export function ArchitectView() {
     };
   }, [openEntityPickerKey]);
 
-  // Close volume dialog on Escape
-  useEffect(() => {
-    if (!volumeDialog) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setVolumeDialog(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [volumeDialog]);
-
   const handleSaveMeta = useCallback(async (): Promise<boolean> => {
     if (!activeChapter) return true;
     const trimmedTitle = metaTitle.trim();
@@ -390,7 +327,6 @@ export function ArchitectView() {
       const saved = await LibraryService.replaceBeats(activeChapter.id, payload);
       setBeats(toEditableBeats(saved));
       setBeatsDirty(false);
-      // Reload chapter so status transitions (e.g. planned -> outlined) reflect cleanly
       const fresh = await LibraryService.getChapter(activeChapter.id);
       updateChapterInCache(fresh);
       return true;
@@ -419,7 +355,6 @@ export function ArchitectView() {
       notify({ tone: "ok", message: "编排已保存" });
       return true;
     }
-    // Explicit save when nothing dirty still saves cleanly
     const okMeta = await handleSaveMeta();
     const okBeats = okMeta ? await handleSaveBeats() : false;
     if (okMeta && okBeats) {
@@ -494,7 +429,6 @@ export function ArchitectView() {
     if (!activeBook) return;
     try {
       await LibraryService.deleteVolume(volId);
-      setConfirmDeleteVolId(null);
       await refreshBookData(activeBook.id, null);
       notify({ tone: "ok", message: "已删除该卷" });
     } catch (err) {
@@ -520,7 +454,6 @@ export function ArchitectView() {
     if (!activeBook) return;
     try {
       await LibraryService.deleteChapter(chapId);
-      setConfirmDeleteChapId(null);
       const nextPreferred = activeChapterId === chapId ? null : activeChapterId;
       await refreshBookData(activeBook.id, nextPreferred);
       setPacingRefreshKey((k) => k + 1);
@@ -530,7 +463,11 @@ export function ArchitectView() {
     }
   };
 
-  const handleMoveChapterToVolume = async (chapId: number, targetVolumeId: number, targetVolSeq = 0) => {
+  const handleMoveChapterToVolume = async (
+    chapId: number,
+    targetVolumeId: number,
+    targetVolSeq = 0
+  ) => {
     if (!activeBook || movingChapterId !== null) return;
     setMovingChapterId(chapId);
     try {
@@ -542,14 +479,6 @@ export function ArchitectView() {
     } finally {
       setMovingChapterId(null);
     }
-  };
-
-  const handleDropChapter = async (targetVolumeId: number, targetVolSeq: number) => {
-    const chapId = draggingChapterId;
-    setDraggingChapterId(null);
-    setDragOverVolumeId(null);
-    if (!chapId) return;
-    await handleMoveChapterToVolume(chapId, targetVolumeId, targetVolSeq);
   };
 
   const toggleChapterSelection = (chapId: number) => {
@@ -576,30 +505,41 @@ export function ArchitectView() {
     }
   };
 
-  const handleBatchDelete = async () => {
+  const handleBatchDelete = () => {
     if (!activeBook || selectedChapterIds.size === 0) return;
-    const confirmed = window.confirm(`确认删除选中的 ${selectedChapterIds.size} 章？删除后可在设置里的回收站恢复。`);
-    if (!confirmed) return;
-    setBatchBusy(true);
-    try {
-      const count = await LibraryService.batchDeleteChapters(Array.from(selectedChapterIds));
-      setSelectedChapterIds(new Set());
-      const nextPreferred = selectedChapterIds.has(activeChapterId ?? -1) ? null : activeChapterId;
-      await refreshBookData(activeBook.id, nextPreferred);
-      setPacingRefreshKey((k) => k + 1);
-      notify({ tone: "ok", message: `已删除 ${count} 章，可在回收站恢复` });
-    } catch (err) {
-      notify({ tone: "danger", message: "批量删除失败", detail: formatErrorMessage(err) });
-    } finally {
-      setBatchBusy(false);
-    }
+    const ids = Array.from(selectedChapterIds);
+    setConfirmDialog({
+      title: "批量删除章节",
+      message: `确认删除选中的 ${ids.length} 章？删除后可在设置里的回收站恢复。`,
+      confirmLabel: "确认删除",
+      danger: true,
+      onConfirm: async () => {
+        setBatchBusy(true);
+        try {
+          const count = await LibraryService.batchDeleteChapters(ids);
+          setConfirmDialog(null);
+          setSelectedChapterIds(new Set());
+          const nextPreferred = ids.includes(activeChapterId ?? -1) ? null : activeChapterId;
+          await refreshBookData(activeBook.id, nextPreferred);
+          setPacingRefreshKey((k) => k + 1);
+          notify({ tone: "ok", message: `已删除 ${count} 章，可在回收站恢复` });
+        } catch (err) {
+          notify({ tone: "danger", message: "批量删除失败", detail: formatErrorMessage(err) });
+        } finally {
+          setBatchBusy(false);
+        }
+      },
+    });
   };
 
   const handleBatchExport = async () => {
     if (!activeBook || selectedChapterIds.size === 0) return;
     setBatchBusy(true);
     try {
-      const outPath = await LibraryService.exportChaptersTXT(activeBook.id, Array.from(selectedChapterIds));
+      const outPath = await LibraryService.exportChaptersTXT(
+        activeBook.id,
+        Array.from(selectedChapterIds)
+      );
       if (outPath) {
         notify({ tone: "ok", message: `已导出 ${selectedChapterIds.size} 章`, detail: outPath });
       }
@@ -610,12 +550,16 @@ export function ArchitectView() {
     }
   };
 
-  const handleInsertChapterAfter = async (volId: number, afterChapId: number) => {
-    if (!activeBook || insertingChapter) return;
-    const trimmed = insertChapterTitle.trim();
+  const handleInsertChapterAfter = async (
+    volId: number,
+    afterChapId: number,
+    title: string
+  ): Promise<boolean> => {
+    if (!activeBook || insertingChapter) return false;
+    const trimmed = title.trim();
     if (!trimmed) {
       notify({ tone: "warn", message: "请输入章节标题" });
-      return;
+      return false;
     }
     setInsertingChapter(true);
     try {
@@ -629,25 +573,25 @@ export function ArchitectView() {
         hookNote: "",
         outlineSummary: "",
       });
-      setInsertingAfterChap(null);
-      setInsertChapterTitle("");
       await refreshBookData(activeBook.id, created.id);
       setPacingRefreshKey((k) => k + 1);
       notify({ tone: "ok", message: `已插入第 ${formatSeq(created.globalSeq)} 章` });
+      return true;
     } catch (err) {
       notify({ tone: "danger", message: "插入章节失败", detail: formatErrorMessage(err) });
+      return false;
     } finally {
       setInsertingChapter(false);
     }
   };
 
-  const handleCreateChapter = async (volumeId: number) => {
-    if (!activeBook) return;
-    const trimmed = newChapterTitle.trim();
-    if (!trimmed) {
-      setAddingChapterVolId(null);
-      return;
-    }
+  const handleCreateChapter = async (
+    volumeId: number,
+    title: string
+  ): Promise<boolean> => {
+    if (!activeBook) return false;
+    const trimmed = title.trim();
+    if (!trimmed) return false;
     setCreatingChapter(true);
     try {
       const created = await LibraryService.createChapter({
@@ -659,11 +603,11 @@ export function ArchitectView() {
         hookNote: "",
         outlineSummary: "",
       });
-      setNewChapterTitle("");
-      setAddingChapterVolId(null);
       await refreshBookData(activeBook.id, created.id);
+      return true;
     } catch (err) {
       notify({ tone: "danger", message: "新建章节失败", detail: formatErrorMessage(err) });
+      return false;
     } finally {
       setCreatingChapter(false);
     }
@@ -687,9 +631,7 @@ export function ArchitectView() {
   };
 
   const updateBeat = (localKey: string, patch: Partial<EditableBeat>) => {
-    setBeats((prev) =>
-      prev.map((b) => (b.localKey === localKey ? { ...b, ...patch } : b))
-    );
+    setBeats((prev) => prev.map((b) => (b.localKey === localKey ? { ...b, ...patch } : b)));
     setBeatsDirty(true);
   };
 
@@ -762,594 +704,45 @@ export function ArchitectView() {
     [beats]
   );
 
-  const toggleVolumeCollapse = (volId: number) => {
-    setCollapsedVolIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(volId)) next.delete(volId);
-      else next.add(volId);
-      return next;
-    });
-  };
-
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
-      {/* Left Panel: Volume & Chapter Tree (240px) */}
-      <aside
-        className="flex shrink-0 flex-col border-r border-border-subtle bg-surface"
-        style={{ width: "var(--sidebar-tree-width)" }}
-      >
-        <div className="flex items-center justify-between border-b border-border-subtle px-3 py-2.5">
-          <div className="flex items-center gap-1.5 text-xs font-medium text-ink-secondary">
-            <Layers className="h-3.5 w-3.5 text-ink-muted" />
-            <span>目录</span>
-            <span className="nib-mono text-xs text-ink-muted">
-              {chapters.length}
-            </span>
-          </div>
-          <div className="flex items-center gap-1">
-            {activeVolume && (
-              <button
-                type="button"
-                onClick={() => setOutlineModalOpen(true)}
-                title="AI 批量生成章纲与节拍卡"
-                className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-accent transition-colors hover:bg-accent-soft"
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                <span>AI 章纲</span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                setBatchMode((value) => !value);
-                setSelectedChapterIds(new Set());
-              }}
-              title="批量管理章节"
-              className={`flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium transition-colors ${
-                batchMode ? "bg-accent-soft text-accent" : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
-              }`}
-            >
-              <ListChecks className="h-3.5 w-3.5" />
-              <span>批量</span>
-            </button>
-            <button
-              type="button"
-              onClick={openCreateVolume}
-              title="新建卷"
-              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
-            >
-              <Plus className="h-3.5 w-3.5 text-accent" />
-              <span>新建卷</span>
-            </button>
-          </div>
-        </div>
-
-        {batchMode && (
-          <div className="flex flex-col gap-1.5 border-b border-border-subtle bg-accent-soft/25 px-2.5 py-2">
-            <div className="flex items-center justify-between text-[11px] text-ink-secondary">
-              <span>已选 {selectedChapterIds.size} 章</span>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  disabled={batchBusy || selectedChapterIds.size === 0}
-                  onClick={() => void handleBatchFinalize()}
-                  className="rounded border border-border-subtle bg-surface px-2 py-0.5 text-[11px] text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
-                >
-                  定稿
-                </button>
-                <button
-                  type="button"
-                  disabled={batchBusy || selectedChapterIds.size === 0}
-                  onClick={() => void handleBatchExport()}
-                  className="flex items-center gap-1 rounded border border-border-subtle bg-surface px-2 py-0.5 text-[11px] text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
-                >
-                  <Download className="h-3 w-3" />
-                  导出
-                </button>
-                <button
-                  type="button"
-                  disabled={batchBusy || selectedChapterIds.size === 0}
-                  onClick={() => void handleBatchDelete()}
-                  className="rounded border border-border-subtle bg-surface px-2 py-0.5 text-[11px] text-danger transition-colors hover:border-danger/40 disabled:opacity-40"
-                >
-                  删除
-                </button>
-              </div>
-            </div>
-            {selectedChapterIds.size > 0 && (
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const all = new Set(chapters.map((chapter) => chapter.id));
-                    setSelectedChapterIds(all);
-                  }}
-                  className="text-[11px] text-ink-muted hover:text-accent"
-                >
-                  全选
-                </button>
-                <span className="text-border-strong">/</span>
-                <button
-                  type="button"
-                  onClick={() => setSelectedChapterIds(new Set())}
-                  className="text-[11px] text-ink-muted hover:text-accent"
-                >
-                  清空
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
-        <div className="flex-1 overflow-y-auto px-2 py-2">
-          {volumes.length === 0 ? (
-            <div className="flex flex-col items-center justify-center px-3 py-12 text-center">
-              <div className="text-xs text-ink-muted">暂无卷结构</div>
-              <button
-                type="button"
-                onClick={openCreateVolume}
-                className="mt-3 flex items-center gap-1 rounded-md border border-accent/40 bg-accent-soft px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:border-accent"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                <span>新建第一卷</span>
-              </button>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              {volumes.map((vol) => {
-                const collapsed = collapsedVolIds.has(vol.id);
-                const volChapters = chaptersByVolume.get(vol.id) ?? [];
-                const confirmingDel = confirmDeleteVolId === vol.id;
-                return (
-                  <div key={vol.id} className="select-none">
-                    {/* Volume header */}
-                    <div
-                      onContextMenu={(e) => {
-                        openContextMenu(e, [
-                          {
-                            label: "在本卷新建章",
-                            icon: <Plus className="h-3.5 w-3.5" />,
-                            onSelect: () => {
-                              setCollapsedVolIds((prev) => {
-                                const next = new Set(prev);
-                                next.delete(vol.id);
-                                return next;
-                              });
-                              setAddingChapterVolId(vol.id);
-                              setNewChapterTitle("");
-                            },
-                          },
-                          {
-                            label: "编辑卷信息",
-                            icon: <Pencil className="h-3.5 w-3.5" />,
-                            onSelect: () => openEditVolume(vol),
-                          },
-                          {
-                            label: collapsed ? "展开本卷" : "收起本卷",
-                            icon: collapsed ? (
-                              <ChevronRight className="h-3.5 w-3.5" />
-                            ) : (
-                              <ChevronDown className="h-3.5 w-3.5" />
-                            ),
-                            onSelect: () => toggleVolumeCollapse(vol.id),
-                          },
-                          { type: "separator" },
-                          {
-                            label: "删除本卷",
-                            icon: <Trash2 className="h-3.5 w-3.5" />,
-                            danger: true,
-                            onSelect: () => setConfirmDeleteVolId(vol.id),
-                          },
-                        ]);
-                      }}
-                      onDragOver={(e) => {
-                        if (draggingChapterId === null) return;
-                        e.preventDefault();
-                        setDragOverVolumeId(vol.id);
-                      }}
-                      onDragLeave={() => {
-                        if (dragOverVolumeId === vol.id) setDragOverVolumeId(null);
-                      }}
-                      onDrop={(e) => {
-                        if (draggingChapterId === null) return;
-                        e.preventDefault();
-                        void handleDropChapter(vol.id, 0);
-                      }}
-                      className={`group flex items-center gap-1 rounded-md px-1.5 py-1.5 transition-colors hover:bg-elevated/70 ${
-                        dragOverVolumeId === vol.id ? "bg-accent-soft/40 ring-1 ring-accent/30" : ""
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => toggleVolumeCollapse(vol.id)}
-                        className="flex min-w-0 flex-1 items-center gap-1 text-left"
-                      >
-                        {collapsed ? (
-                          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ink-muted" />
-                        ) : (
-                          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-ink-muted" />
-                        )}
-                        <span className="truncate text-xs font-medium text-ink-primary">
-                          {vol.title}
-                        </span>
-                      </button>
-
-                      {confirmingDel ? (
-                        <div className="flex items-center gap-0.5">
-                          <button
-                            type="button"
-                            onClick={() => void handleDeleteVolume(vol.id)}
-                            title="确认删除卷及下属章节"
-                            className="rounded bg-danger-soft px-1.5 py-0.5 text-[10px] font-medium text-danger"
-                          >
-                            删除
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteVolId(null)}
-                            className="rounded p-0.5 text-ink-muted hover:text-ink-primary"
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setCollapsedVolIds((prev) => {
-                                const next = new Set(prev);
-                                next.delete(vol.id);
-                                return next;
-                              });
-                              setAddingChapterVolId(vol.id);
-                              setNewChapterTitle("");
-                            }}
-                            title="新建章"
-                            className="rounded p-1 text-ink-muted hover:bg-surface hover:text-accent"
-                          >
-                            <Plus className="h-3 w-3" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openEditVolume(vol)}
-                            title="编辑卷"
-                            className="rounded p-1 text-ink-muted hover:bg-surface hover:text-ink-primary"
-                          >
-                            <Pencil className="h-3 w-3" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteVolId(vol.id)}
-                            title="删除卷"
-                            className="rounded p-1 text-ink-muted hover:bg-surface hover:text-danger"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Volume chapters */}
-                    {!collapsed && (
-                      <div className="mt-0.5 flex flex-col gap-0.5 pl-3">
-                        {volChapters.map((chap, chapIdx) => {
-                          const selected = chap.id === activeChapterId;
-                          const st = getChapterStatusMeta(chap.status);
-                          const confirmingChapDel = confirmDeleteChapId === chap.id;
-                          const isInsertingAfter =
-                            insertingAfterChap?.volId === vol.id &&
-                            insertingAfterChap.afterChapId === chap.id;
-                          return (
-                            <div key={chap.id} className="flex flex-col">
-                              <div
-                                onContextMenu={(e) => {
-                                  openContextMenu(e, [
-                                    {
-                                      label: "进入正文写作",
-                                      icon: <PenLine className="h-3.5 w-3.5" />,
-                                      onSelect: () => void jumpToChapter(chap.id),
-                                    },
-                                    {
-                                      label: "选中编排本章",
-                                      icon: <Layers className="h-3.5 w-3.5" />,
-                                      onSelect: () => void selectChapter(chap.id),
-                                    },
-                                    { type: "separator" },
-                                    {
-                                      label: "在此章后插入新章",
-                                      icon: <Plus className="h-3.5 w-3.5" />,
-                                      onSelect: () => {
-                                        setInsertingAfterChap({ volId: vol.id, afterChapId: chap.id });
-                                        setInsertChapterTitle("");
-                                      },
-                                    },
-                                    {
-                                      label: "上移一章",
-                                      icon: <ArrowUp className="h-3.5 w-3.5" />,
-                                      disabled: chapIdx === 0 || movingChapterId !== null,
-                                      onSelect: () => void handleMoveChapter(chap.id, "up"),
-                                    },
-                                    {
-                                      label: "下移一章",
-                                      icon: <ArrowDown className="h-3.5 w-3.5" />,
-                                      disabled: chapIdx === volChapters.length - 1 || movingChapterId !== null,
-                                      onSelect: () => void handleMoveChapter(chap.id, "down"),
-                                    },
-                                    ...volumes
-                                      .filter((target) => target.id !== vol.id)
-                                      .map((target) => ({
-                                        label: `移动到「${target.title}」`,
-                                        icon: <ArrowRight className="h-3.5 w-3.5" />,
-                                        disabled: movingChapterId !== null,
-                                        onSelect: () => void handleMoveChapterToVolume(chap.id, target.id),
-                                      })),
-                                    {
-                                      label: "复制章节标题",
-                                      icon: <Copy className="h-3.5 w-3.5" />,
-                                      onSelect: async () => {
-                                        try {
-                                          await navigator.clipboard.writeText(chap.title);
-                                          notify({ tone: "ok", message: "已复制章节标题" });
-                                        } catch {
-                                          // ignore
-                                        }
-                                      },
-                                    },
-                                    { type: "separator" },
-                                    {
-                                      label: "删除本章",
-                                      icon: <Trash2 className="h-3.5 w-3.5" />,
-                                      danger: true,
-                                      onSelect: () => setConfirmDeleteChapId(chap.id),
-                                    },
-                                  ]);
-                                }}
-                                draggable={!batchMode && movingChapterId === null}
-                                onDragStart={(e) => {
-                                  e.dataTransfer.effectAllowed = "move";
-                                  e.dataTransfer.setData("text/plain", String(chap.id));
-                                  setDraggingChapterId(chap.id);
-                                }}
-                                onDragEnd={() => {
-                                  setDraggingChapterId(null);
-                                  setDragOverVolumeId(null);
-                                }}
-                                onDragOver={(e) => {
-                                  if (draggingChapterId === null) return;
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  setDragOverVolumeId(vol.id);
-                                }}
-                                onDrop={(e) => {
-                                  if (draggingChapterId === null) return;
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  void handleDropChapter(vol.id, chapIdx + 1);
-                                }}
-                                className={`group flex w-full items-center gap-1 rounded-md px-2 py-1.5 transition-colors ${
-                                  selected
-                                    ? "bg-accent-soft text-ink-primary"
-                                    : "text-ink-secondary hover:bg-elevated/60 hover:text-ink-primary"
-                                } ${dragOverVolumeId === vol.id ? "ring-1 ring-accent/25" : ""}`}
-                              >
-                                {batchMode && (
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleChapterSelection(chap.id)}
-                                    aria-label={selectedChapterIds.has(chap.id) ? "取消选择" : "选择本章"}
-                                    className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                                      selectedChapterIds.has(chap.id)
-                                        ? "border-accent bg-accent text-canvas"
-                                        : "border-border-strong bg-canvas"
-                                    }`}
-                                  >
-                                    {selectedChapterIds.has(chap.id) && <Check className="h-3 w-3" />}
-                                  </button>
-                                )}
-                                {!batchMode && (
-                                  <GripVertical className="h-3 w-3 shrink-0 cursor-grab text-ink-muted opacity-0 group-hover:opacity-100" />
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => (batchMode ? toggleChapterSelection(chap.id) : void selectChapter(chap.id))}
-                                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                                >
-                                  <span
-                                    className={`nib-mono shrink-0 text-xs ${
-                                      selected ? "text-accent" : "text-ink-muted"
-                                    }`}
-                                  >
-                                    {formatSeq(chap.globalSeq)}
-                                  </span>
-                                  <span className="min-w-0 flex-1 truncate text-[12.5px]">
-                                    {chap.title}
-                                  </span>
-                                </button>
-
-                                {confirmingChapDel ? (
-                                  <div className="flex shrink-0 items-center gap-0.5">
-                                    <button
-                                      type="button"
-                                      onClick={() => void handleDeleteChapter(chap.id)}
-                                      title="确认删除本章"
-                                      className="rounded bg-danger-soft px-1.5 py-0.5 text-xs font-medium text-danger"
-                                    >
-                                      删除
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => setConfirmDeleteChapId(null)}
-                                      className="rounded p-0.5 text-ink-muted hover:text-ink-primary"
-                                    >
-                                      <X className="h-3 w-3" />
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <>
-                                    <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
-                                      <button
-                                        type="button"
-                                        disabled={chapIdx === 0 || movingChapterId !== null}
-                                        onClick={() => void handleMoveChapter(chap.id, "up")}
-                                        title="上移一章"
-                                        className="rounded p-0.5 text-ink-muted hover:bg-surface hover:text-ink-primary disabled:opacity-30"
-                                      >
-                                        <ArrowUp className="h-3 w-3" />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        disabled={chapIdx === volChapters.length - 1 || movingChapterId !== null}
-                                        onClick={() => void handleMoveChapter(chap.id, "down")}
-                                        title="下移一章"
-                                        className="rounded p-0.5 text-ink-muted hover:bg-surface hover:text-ink-primary disabled:opacity-30"
-                                      >
-                                        <ArrowDown className="h-3 w-3" />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setInsertingAfterChap({ volId: vol.id, afterChapId: chap.id });
-                                          setInsertChapterTitle("");
-                                        }}
-                                        title="在此章后插入新章"
-                                        className="rounded p-0.5 text-ink-muted hover:bg-surface hover:text-accent"
-                                      >
-                                        <Plus className="h-3 w-3" />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setConfirmDeleteChapId(chap.id)}
-                                        title="删除本章"
-                                        className="rounded p-0.5 text-ink-muted hover:bg-surface hover:text-danger"
-                                      >
-                                        <Trash2 className="h-3 w-3" />
-                                      </button>
-                                    </div>
-                                    <div className="flex shrink-0 items-center group-hover:hidden">
-                                      {chap.status === "upstream_dirty" ? (
-                                        <span
-                                          title="上游章节设定变更，建议复核"
-                                          className="shrink-0 rounded border border-danger/40 bg-danger-soft px-1 text-xs font-medium text-danger"
-                                        >
-                                          变更
-                                        </span>
-                                      ) : (
-                                        <span
-                                          title={st.label}
-                                          className={`h-1.5 w-1.5 shrink-0 rounded-full ${st.dotClass}`}
-                                        />
-                                      )}
-                                    </div>
-                                  </>
-                                )}
-                              </div>
-
-                              {isInsertingAfter && (
-                                <div className="my-1 flex items-center gap-1 rounded-md border border-accent/50 bg-canvas px-1.5 py-1">
-                                  <input
-                                    type="text"
-                                    autoFocus
-                                    value={insertChapterTitle}
-                                    disabled={insertingChapter}
-                                    onChange={(e) => setInsertChapterTitle(e.target.value)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter" && !isIMEComposing(e)) {
-                                        e.preventDefault();
-                                        void handleInsertChapterAfter(vol.id, chap.id);
-                                      } else if (e.key === "Escape") {
-                                        setInsertingAfterChap(null);
-                                        setInsertChapterTitle("");
-                                      }
-                                    }}
-                                    placeholder="插入章节标题…"
-                                    className="min-w-0 flex-1 bg-transparent text-xs text-ink-primary placeholder:text-ink-muted focus:outline-none"
-                                  />
-                                  <button
-                                    type="button"
-                                    disabled={insertingChapter}
-                                    onClick={() => void handleInsertChapterAfter(vol.id, chap.id)}
-                                    className="rounded p-0.5 text-accent hover:bg-surface"
-                                  >
-                                    <Check className="h-3.5 w-3.5" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setInsertingAfterChap(null);
-                                      setInsertChapterTitle("");
-                                    }}
-                                    className="rounded p-0.5 text-ink-muted hover:text-ink-primary"
-                                  >
-                                    <X className="h-3.5 w-3.5" />
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-
-                        {addingChapterVolId === vol.id ? (
-                          <div className="mt-1 flex items-center gap-1 rounded-md border border-accent/50 bg-canvas px-1.5 py-1">
-                            <input
-                              type="text"
-                              autoFocus
-                              value={newChapterTitle}
-                              disabled={creatingChapter}
-                              onChange={(e) => setNewChapterTitle(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" && !isIMEComposing(e)) {
-                                  e.preventDefault();
-                                  void handleCreateChapter(vol.id);
-                                } else if (e.key === "Escape") {
-                                  setAddingChapterVolId(null);
-                                  setNewChapterTitle("");
-                                }
-                              }}
-                              placeholder="章节标题…"
-                              className="min-w-0 flex-1 bg-transparent text-xs text-ink-primary placeholder:text-ink-muted focus:outline-none"
-                            />
-                            <button
-                              type="button"
-                              disabled={creatingChapter}
-                              onClick={() => void handleCreateChapter(vol.id)}
-                              className="rounded p-0.5 text-accent hover:bg-surface"
-                            >
-                              <Check className="h-3.5 w-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setAddingChapterVolId(null);
-                                setNewChapterTitle("");
-                              }}
-                              className="rounded p-0.5 text-ink-muted hover:text-ink-primary"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setAddingChapterVolId(vol.id);
-                              setNewChapterTitle("");
-                            }}
-                            className="mt-0.5 flex items-center gap-1.5 rounded-md px-2 py-1 text-[11.5px] text-ink-muted transition-colors hover:bg-elevated/40 hover:text-ink-secondary"
-                          >
-                            <Plus className="h-3 w-3" />
-                            <span>新建章</span>
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </aside>
+      <ChapterTreeSidebar
+        volumes={volumes}
+        chapters={chapters}
+        chaptersByVolume={chaptersByVolume}
+        activeVolume={activeVolume}
+        activeChapterId={activeChapterId}
+        movingChapterId={movingChapterId}
+        batchMode={batchMode}
+        selectedChapterIds={selectedChapterIds}
+        batchBusy={batchBusy}
+        creatingChapter={creatingChapter}
+        insertingChapter={insertingChapter}
+        onToggleBatchMode={() => {
+          setBatchMode((value) => !value);
+          setSelectedChapterIds(new Set());
+        }}
+        onToggleChapterSelection={toggleChapterSelection}
+        onSelectAllChapters={() => setSelectedChapterIds(new Set(chapters.map((c) => c.id)))}
+        onClearSelectedChapters={() => setSelectedChapterIds(new Set())}
+        onBatchFinalize={() => void handleBatchFinalize()}
+        onBatchExport={() => void handleBatchExport()}
+        onBatchDelete={handleBatchDelete}
+        onOpenOutlineModal={() => setOutlineModalOpen(true)}
+        onOpenCreateVolume={openCreateVolume}
+        onOpenEditVolume={openEditVolume}
+        onDeleteVolume={(volId) => void handleDeleteVolume(volId)}
+        onSelectChapter={(chapId) => void selectChapter(chapId)}
+        onJumpToChapter={(chapId) => void jumpToChapter(chapId)}
+        onCreateChapter={handleCreateChapter}
+        onInsertChapterAfter={handleInsertChapterAfter}
+        onMoveChapter={(chapId, dir) => void handleMoveChapter(chapId, dir)}
+        onMoveChapterToVolume={(chapId, targetVolId, targetSeq) =>
+          void handleMoveChapterToVolume(chapId, targetVolId, targetSeq)
+        }
+        onDeleteChapter={(chapId) => void handleDeleteChapter(chapId)}
+        notify={notify}
+      />
 
       {/* Center Workspace */}
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-canvas">
@@ -1372,27 +765,33 @@ export function ArchitectView() {
             ) : (
               <div className="flex w-full max-w-[380px] flex-col items-center gap-3">
                 <div className="text-[13px] text-ink-secondary">
-                  {activeVolume ? `「${activeVolume.title}」还没有章节` : "选择或新建一章开始写大纲"}
+                  {activeVolume
+                    ? `「${activeVolume.title}」还没有章节`
+                    : "选择或新建一章开始写大纲"}
                 </div>
                 {activeVolume && (
                   <form
-                    onSubmit={(e) => {
+                    onSubmit={async (e) => {
                       e.preventDefault();
-                      void handleCreateChapter(activeVolume.id);
+                      const ok = await handleCreateChapter(
+                        activeVolume.id,
+                        emptyVolChapterTitle
+                      );
+                      if (ok) setEmptyVolChapterTitle("");
                     }}
                     className="flex w-full items-center gap-2"
                   >
                     <input
                       type="text"
-                      value={newChapterTitle}
+                      value={emptyVolChapterTitle}
                       disabled={creatingChapter}
-                      onChange={(e) => setNewChapterTitle(e.target.value)}
+                      onChange={(e) => setEmptyVolChapterTitle(e.target.value)}
                       placeholder="输入第一章标题，回车新建"
                       className="min-w-0 flex-1 rounded-lg border border-border-subtle bg-surface px-3 py-2 text-[13px] text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
                     />
                     <button
                       type="submit"
-                      disabled={creatingChapter || !newChapterTitle.trim()}
+                      disabled={creatingChapter || !emptyVolChapterTitle.trim()}
                       className="shrink-0 rounded-lg bg-accent px-4 py-2 text-[13px] font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-45"
                     >
                       新建
@@ -1415,7 +814,6 @@ export function ArchitectView() {
         ) : (
           <div className="flex-1 overflow-y-auto px-8 py-6">
             <div className="mx-auto flex w-full max-w-[880px] flex-col gap-6">
-              {/* Volume Pacing SVG Chart & Diagnostics */}
               {activeVolume && (
                 <VolumePacingChart
                   volume={activeVolume}
@@ -1426,433 +824,76 @@ export function ArchitectView() {
                 />
               )}
 
-              {/* Chapter Metadata Card */}
-              <section className="rounded-xl border border-border-subtle bg-surface p-5">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex min-w-0 flex-1 items-center gap-2.5">
-                    <span className="nib-mono shrink-0 rounded bg-elevated px-2 py-0.5 text-xs text-ink-secondary">
-                      第 {formatSeq(activeChapter.globalSeq)} 章
-                    </span>
-                    <input
-                      type="text"
-                      value={metaTitle}
-                      onChange={(e) => {
-                        setMetaTitle(e.target.value);
-                        setMetaDirty(true);
-                      }}
-                      placeholder="输入章节标题"
-                      className="min-w-0 flex-1 bg-transparent text-base font-medium text-ink-primary placeholder:text-ink-muted focus:outline-none"
-                    />
-                  </div>
+              <ChapterMetaForm
+                chapter={activeChapter}
+                title={metaTitle}
+                emotion={metaEmotion}
+                hookType={metaHookType}
+                hookNote={metaHookNote}
+                outline={metaOutline}
+                dirty={metaDirty || beatsDirty}
+                saving={savingMeta || savingBeats}
+                onChangeTitle={(v) => {
+                  setMetaTitle(v);
+                  setMetaDirty(true);
+                }}
+                onChangeEmotion={(v) => {
+                  setMetaEmotion(v);
+                  setMetaDirty(true);
+                }}
+                onChangeHookType={(v) => {
+                  setMetaHookType(v);
+                  setMetaDirty(true);
+                }}
+                onChangeHookNote={(v) => {
+                  setMetaHookNote(v);
+                  setMetaDirty(true);
+                }}
+                onChangeOutline={(v) => {
+                  setMetaOutline(v);
+                  setMetaDirty(true);
+                }}
+                onSaveAll={() => void handleSaveAll()}
+                onStartWriting={async () => {
+                  if (metaDirty || beatsDirty) {
+                    const ok = await handleSaveAll();
+                    if (!ok) return;
+                  }
+                  setActiveTab("studio");
+                }}
+              />
 
-                  <div className="flex shrink-0 items-center gap-2">
-                    <span
-                      className={`rounded-full border px-2 py-0.5 text-xs ${
-                        getChapterStatusMeta(activeChapter.status).badgeClass
-                      }`}
-                    >
-                      {getChapterStatusMeta(activeChapter.status).label}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={savingMeta || savingBeats || (!metaDirty && !beatsDirty)}
-                      onClick={() => void handleSaveAll()}
-                      title="保存大纲 (Ctrl+S)"
-                      className="flex items-center gap-1 rounded-lg border border-border-subtle bg-elevated px-2.5 py-1 text-xs font-medium text-ink-primary transition-colors hover:border-border-strong disabled:opacity-45"
-                    >
-                      <Save className="h-3.5 w-3.5 text-accent" />
-                      <span>{savingMeta || savingBeats ? "保存中…" : "保存"}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        if (metaDirty || beatsDirty) {
-                          const ok = await handleSaveAll();
-                          if (!ok) return;
-                        }
-                        setActiveTab("studio");
-                      }}
-                      className="flex items-center gap-1 rounded-lg bg-accent px-3 py-1 text-xs font-semibold text-canvas transition-opacity hover:opacity-90"
-                    >
-                      <span>开始写作</span>
-                      <ArrowRight className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Emotion, Hook Type, Hook Note */}
-                <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-[170px_170px_1fr]">
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-ink-secondary">
-                      本章节奏
-                    </label>
-                    <select
-                      value={metaEmotion}
-                      onChange={(e) => {
-                        setMetaEmotion(e.target.value);
-                        setMetaDirty(true);
-                      }}
-                      className="w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-                    >
-                      {EMOTION_TAGS.map((opt) => (
-                        <option key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-ink-secondary">
-                      章末悬念
-                    </label>
-                    <select
-                      value={metaHookType}
-                      onChange={(e) => {
-                        setMetaHookType(e.target.value);
-                        setMetaDirty(true);
-                      }}
-                      className="w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-                    >
-                      {HOOK_TYPES.map((opt) => (
-                        <option key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-ink-secondary">
-                      结尾留白说明
-                    </label>
-                    <input
-                      type="text"
-                      value={metaHookNote}
-                      onChange={(e) => {
-                        setMetaHookNote(e.target.value);
-                        setMetaDirty(true);
-                      }}
-                      placeholder="例如：刚收完战利品，宗门追兵的血玉令牌亮起"
-                      className="w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                {/* Outline Summary */}
-                <div className="mt-3">
-                  <label className="mb-1 block text-xs font-medium text-ink-secondary">
-                    本章梗概
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={metaOutline}
-                    onChange={(e) => {
-                      setMetaOutline(e.target.value);
-                      setMetaDirty(true);
-                    }}
-                    placeholder="本章主要剧情推进与结尾结果"
-                    className="w-full resize-y rounded-lg border border-border-subtle bg-canvas px-3 py-2 text-[13px] leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
-                  />
-                </div>
-              </section>
-
-              {/* Beat Cards Section */}
-              <section ref={beatListRef} className="flex flex-col gap-3 pb-10">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2.5">
-                    <h2 className="text-sm font-medium text-ink-primary">剧情节拍</h2>
-                    <span className="nib-mono text-xs text-ink-muted">
-                      {beats.length} 段 目标 {formatNumber(totalBeatWords)} 字
-                    </span>
-                    {beatsDirty && (
-                      <span className="rounded bg-warn-soft px-1.5 py-0.5 text-xs text-warn">
-                        未保存
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    {confirmFillBeats ? (
-                      <div className="flex items-center gap-1.5 rounded-md border border-warn/40 bg-warn-soft px-2 py-1 text-xs">
-                        <span className="text-warn">替换当前 {beats.length} 张节拍？</span>
-                        <button
-                          type="button"
-                          onClick={applyGenreBeatTemplates}
-                          className="rounded bg-warn px-2 py-0.5 text-[11px] font-medium text-canvas"
-                        >
-                          确定
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmFillBeats(false)}
-                          className="text-ink-secondary hover:text-ink-primary"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={applyGenreBeatTemplates}
-                        className="flex items-center gap-1.5 rounded-md border border-border-subtle bg-surface px-2.5 py-1.5 text-xs text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary"
-                      >
-                        <Sparkles className="h-3.5 w-3.5 text-accent" />
-                        <span>按题材填充默认节拍</span>
-                      </button>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={addBeat}
-                      className="flex items-center gap-1 rounded-md border border-border-subtle bg-surface px-2.5 py-1.5 text-xs text-ink-primary transition-colors hover:border-border-strong hover:bg-elevated"
-                    >
-                      <Plus className="h-3.5 w-3.5 text-accent" />
-                      <span>添加节拍</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      disabled={savingBeats || !beatsDirty}
-                      onClick={() => void handleSaveBeats().then((ok) => ok && notify({ tone: "ok", message: "节拍卡已保存" }))}
-                      className="flex items-center gap-1 rounded-md bg-accent-soft border border-accent/35 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:border-accent disabled:opacity-40"
-                    >
-                      <Save className="h-3.5 w-3.5" />
-                      <span>{savingBeats ? "保存中…" : "保存节拍"}</span>
-                    </button>
-                  </div>
-                </div>
-
-                {beatsLoading ? (
-                  <div className="rounded-lg border border-border-subtle bg-surface/50 px-4 py-10 text-center text-xs text-ink-muted">
-                    正在读取节拍卡…
-                  </div>
-                ) : beats.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border-strong bg-surface/35 px-6 py-10 text-center">
-                    <div className="text-xs text-ink-secondary">
-                      尚未编排节拍卡（建议单章 3~6 张）
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={applyGenreBeatTemplates}
-                        className="flex items-center gap-1.5 rounded-md bg-accent-soft border border-accent/35 px-3 py-1.5 text-xs font-medium text-accent hover:border-accent"
-                      >
-                        <Sparkles className="h-3.5 w-3.5" />
-                        <span>
-                          按「{activeGenrePreset?.name ?? "当前题材"}」填充默认节拍
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={addBeat}
-                        className="rounded-md border border-border-subtle bg-surface px-3 py-1.5 text-xs text-ink-secondary hover:text-ink-primary"
-                      >
-                        手动新增
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-3">
-                    {beats.map((beat, idx) => {
-                      const pickerOpen = openEntityPickerKey === beat.localKey;
-                      return (
-                        <div
-                          key={beat.localKey}
-                          className={`rounded-xl border border-border-subtle border-l-[3px] ${getBeatAccentClass(
-                            beat.stage
-                          )} bg-surface p-4 transition-colors`}
-                        >
-                          {/* Card Top Row */}
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="nib-mono text-xs font-medium text-ink-muted">
-                              #{idx + 1}
-                            </span>
-
-                            <select
-                              value={beat.stage}
-                              onChange={(e) =>
-                                updateBeat(beat.localKey, { stage: e.target.value })
-                              }
-                              className="rounded-md border border-border-subtle bg-canvas px-2 py-1 text-xs font-medium text-ink-primary focus:border-accent focus:outline-none"
-                            >
-                              {BEAT_STAGES.map((st) => (
-                                <option key={st.value} value={st.value}>
-                                  {st.label}
-                                </option>
-                              ))}
-                            </select>
-
-                            <div className="flex items-center gap-1.5 text-xs text-ink-secondary">
-                              <span className="text-xs text-ink-muted">视角人物</span>
-                              <select
-                                value={beat.povEntityId ?? ""}
-                                onChange={(e) => {
-                                  const raw = e.target.value;
-                                  updateBeat(beat.localKey, {
-                                    povEntityId: raw ? Number(raw) : undefined,
-                                  });
-                                }}
-                                className="max-w-[140px] rounded-md border border-border-subtle bg-canvas px-2 py-1 text-xs text-ink-primary focus:border-accent focus:outline-none"
-                              >
-                                <option value="">不指定</option>
-                                {entities.map((ent) => (
-                                  <option key={ent.id} value={ent.id}>
-                                    {ent.name}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-
-                            <div className="flex items-center gap-1">
-                              <input
-                                type="number"
-                                min={100}
-                                max={10000}
-                                step={50}
-                                value={beat.targetWords}
-                                onChange={(e) =>
-                                  updateBeat(beat.localKey, {
-                                    targetWords: Math.max(
-                                      0,
-                                      Number.parseInt(e.target.value, 10) || 0
-                                    ),
-                                  })
-                                }
-                                className="nib-mono w-[74px] rounded-md border border-border-subtle bg-canvas px-2 py-1 text-right text-xs text-ink-primary focus:border-accent focus:outline-none"
-                              />
-                              <span className="text-[11px] text-ink-muted">字</span>
-                            </div>
-
-                            <div className="ml-auto flex items-center gap-0.5">
-                              <button
-                                type="button"
-                                disabled={idx === 0}
-                                onClick={() => moveBeat(idx, -1)}
-                                title="上移"
-                                className="rounded p-1 text-ink-muted transition-colors hover:bg-elevated hover:text-ink-primary disabled:opacity-30"
-                              >
-                                <ArrowUp className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                disabled={idx === beats.length - 1}
-                                onClick={() => moveBeat(idx, 1)}
-                                title="下移"
-                                className="rounded p-1 text-ink-muted transition-colors hover:bg-elevated hover:text-ink-primary disabled:opacity-30"
-                              >
-                                <ArrowDown className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => removeBeat(beat.localKey)}
-                                title="移除节拍"
-                                className="rounded p-1 text-ink-muted transition-colors hover:bg-danger-soft hover:text-danger"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Summary & Conflict Note */}
-                          <div className="mt-3 flex flex-col gap-2">
-                            <textarea
-                              rows={2}
-                              value={beat.summary}
-                              onChange={(e) =>
-                                updateBeat(beat.localKey, { summary: e.target.value })
-                              }
-                              placeholder="节拍推进摘要（具体行动、关键反转或结果落袋）"
-                              className="w-full resize-none rounded-md border border-border-subtle bg-canvas px-3 py-2 text-[13px] leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
-                            />
-                            <input
-                              type="text"
-                              value={beat.conflictNote}
-                              onChange={(e) =>
-                                updateBeat(beat.localKey, { conflictNote: e.target.value })
-                              }
-                              placeholder="冲突 / 博弈要点（可选，例如：不可提前暴露底牌）"
-                              className="w-full rounded-md border border-border-subtle bg-canvas px-3 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
-                            />
-                          </div>
-
-                          {/* Participating Entities Chips */}
-                          <div
-                            data-entity-picker
-                            className="relative mt-2.5 flex flex-wrap items-center gap-1.5"
-                          >
-                            <span className="text-xs text-ink-muted">登场角色与道具</span>
-                            {beat.entityIds.map((eid) => {
-                              const ent = entityMap.get(eid);
-                              if (!ent) return null;
-                              return (
-                                <span
-                                  key={eid}
-                                  className="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-elevated px-2 py-0.5 text-[11px] text-ink-primary"
-                                >
-                                  <span>{ent.name}</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleBeatEntity(beat.localKey, eid)}
-                                    className="text-ink-muted hover:text-danger"
-                                  >
-                                    <X className="h-2.5 w-2.5" />
-                                  </button>
-                                </span>
-                              );
-                            })}
-                            {entities.length > 0 && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setOpenEntityPickerKey(pickerOpen ? null : beat.localKey)
-                                }
-                                className="inline-flex items-center gap-1 rounded-full border border-dashed border-border-strong px-2 py-0.5 text-[11px] text-ink-secondary transition-colors hover:border-accent hover:text-accent"
-                              >
-                                <Plus className="h-2.5 w-2.5" />
-                                <span>关联</span>
-                              </button>
-                            )}
-
-                            {pickerOpen && (
-                              <div className="absolute top-[calc(100%+6px)] left-0 z-20 max-h-52 w-64 overflow-y-auto rounded-lg border border-border-strong bg-elevated p-1.5 shadow-[var(--shadow-elevated)]">
-                                {entities.map((ent) => {
-                                  const checked = beat.entityIds.includes(ent.id);
-                                  return (
-                                    <button
-                                      key={ent.id}
-                                      type="button"
-                                      onClick={() =>
-                                        toggleBeatEntity(beat.localKey, ent.id)
-                                      }
-                                      className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs transition-colors ${
-                                        checked
-                                          ? "bg-accent-soft text-accent"
-                                          : "text-ink-primary hover:bg-surface"
-                                      }`}
-                                    >
-                                      <span className="truncate">{ent.name}</span>
-                                      <span className="ml-2 shrink-0 text-[10px] text-ink-muted">
-                                        {getEntityKindLabel(ent.kind)}
-                                      </span>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
+              <BeatEditorList
+                beatListRef={beatListRef}
+                beats={beats}
+                beatsLoading={beatsLoading}
+                beatsDirty={beatsDirty}
+                savingBeats={savingBeats}
+                totalBeatWords={totalBeatWords}
+                confirmFillBeats={confirmFillBeats}
+                activeGenreName={activeGenrePreset?.name ?? "当前题材"}
+                entities={entities}
+                entityMap={entityMap}
+                openEntityPickerKey={openEntityPickerKey}
+                onSetOpenEntityPickerKey={setOpenEntityPickerKey}
+                onSetConfirmFillBeats={setConfirmFillBeats}
+                onApplyGenreBeatTemplates={applyGenreBeatTemplates}
+                onAddBeat={addBeat}
+                onSaveBeats={() =>
+                  void handleSaveBeats().then(
+                    (ok) => ok && notify({ tone: "ok", message: "节拍卡已保存" })
+                  )
+                }
+                onUpdateBeat={updateBeat}
+                onMoveBeat={moveBeat}
+                onRemoveBeat={removeBeat}
+                onToggleBeatEntity={toggleBeatEntity}
+              />
             </div>
           </div>
         )}
       </main>
 
-      {/* Batch Outline Generation Modal */}
       {activeBook && (
         <BatchOutlineModal
           open={outlineModalOpen}
@@ -1869,96 +910,19 @@ export function ArchitectView() {
         />
       )}
 
-      {/* Create / Edit Volume Modal */}
-      {volumeDialog && (
-        <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-black/55 p-4"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setVolumeDialog(null);
-          }}
-        >
-          <div className="w-full max-w-[440px] overflow-hidden rounded-xl border border-border-strong bg-elevated shadow-[var(--shadow-elevated)]">
-            <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
-              <h3 className="text-sm font-medium text-ink-primary">
-                {volumeDialog.mode === "create" ? "新建卷" : "编辑卷"}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setVolumeDialog(null)}
-                className="rounded p-1 text-ink-muted hover:bg-surface hover:text-ink-primary"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="flex flex-col gap-3 p-4">
-              <div>
-                <label className="mb-1 block text-xs text-ink-secondary">卷名</label>
-                <input
-                  type="text"
-                  autoFocus
-                  value={volumeDialog.title}
-                  onChange={(e) =>
-                    setVolumeDialog({ ...volumeDialog, title: e.target.value })
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !isIMEComposing(e)) {
-                      e.preventDefault();
-                      void handleSubmitVolume();
-                    }
-                  }}
-                  placeholder="例如：第一卷 青云起"
-                  className="w-full rounded-md border border-border-subtle bg-canvas px-3 py-2 text-sm text-ink-primary focus:border-accent focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-ink-secondary">
-                  卷核心目标
-                </label>
-                <textarea
-                  rows={2}
-                  value={volumeDialog.goal}
-                  onChange={(e) =>
-                    setVolumeDialog({ ...volumeDialog, goal: e.target.value })
-                  }
-                  placeholder="本卷主角要达成的实力/地位/资源阶段目标"
-                  className="w-full resize-none rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs leading-relaxed text-ink-primary focus:border-accent focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-ink-secondary">
-                  卷末高潮规划
-                </label>
-                <textarea
-                  rows={2}
-                  value={volumeDialog.climaxPlan}
-                  onChange={(e) =>
-                    setVolumeDialog({ ...volumeDialog, climaxPlan: e.target.value })
-                  }
-                  placeholder="本卷收束大战、揭秘或换地图节点"
-                  className="w-full resize-none rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs leading-relaxed text-ink-primary focus:border-accent focus:outline-none"
-                />
-              </div>
-            </div>
-            <div className="flex items-center justify-end gap-2 border-t border-border-subtle bg-surface/50 px-4 py-2.5">
-              <button
-                type="button"
-                onClick={() => setVolumeDialog(null)}
-                className="rounded-md px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface hover:text-ink-primary"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                disabled={savingVolume}
-                onClick={() => void handleSubmitVolume()}
-                className="rounded-md bg-accent px-3.5 py-1.5 text-xs font-semibold text-canvas hover:opacity-90 disabled:opacity-50"
-              >
-                {savingVolume ? "保存中…" : "保存"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <VolumeFormModal
+        dialog={volumeDialog}
+        saving={savingVolume}
+        onChange={setVolumeDialog}
+        onClose={() => setVolumeDialog(null)}
+        onSubmit={() => void handleSubmitVolume()}
+      />
+
+      <ConfirmDialog
+        dialog={confirmDialog}
+        busy={batchBusy}
+        onClose={() => setConfirmDialog(null)}
+      />
     </div>
   );
 }

@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Channel } from "mygo-runtime";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   Check,
   FolderOpen,
@@ -16,6 +15,8 @@ import {
   type GenesisChunk,
 } from "../mygo";
 import { useApp } from "../stores/AppContext";
+import { useMygoChannel } from "../hooks/useMygoStream";
+import { hasAnyEnabledModel, hasReadyModelRoute } from "../lib/modelReady";
 import {
   EMOTION_TAGS,
   ENTITY_KINDS,
@@ -74,24 +75,24 @@ export function CreateBookModal() {
   const [plan, setPlan] = useState<BookGenesisPlan | null>(null);
   const [selectedEntityIdx, setSelectedEntityIdx] = useState<Set<number>>(new Set());
   const [selectedOutlineIdx, setSelectedOutlineIdx] = useState<Set<number>>(new Set());
-  const channelRef = useRef<Channel<GenesisChunk> | null>(null);
-  const userStoppedRef = useRef(false);
+  const {
+    open: openGenesisStream,
+    stop: stopGenesisStream,
+    release: releaseGenesisStream,
+    isCurrent: isCurrentGenesis,
+    wasStopped: wasGenesisStopped,
+  } = useMygoChannel<GenesisChunk>();
 
-  const hasReadyModel = useMemo(() => {
-    const enabledProviderIds = new Set(
-      providers.filter((p) => p.enabled && p.models.length > 0).map((p) => p.id),
-    );
-    return modelRoutes.some(
-      (r) =>
-        (r.stage === "outline" || r.stage === "draft") &&
-        r.providerId != null &&
-        enabledProviderIds.has(r.providerId) &&
-        r.modelName.trim().length > 0,
-    );
-  }, [providers, modelRoutes]);
+  const hasReadyModel = useMemo(
+    () => hasReadyModelRoute(providers, modelRoutes, ["outline", "draft"]),
+    [providers, modelRoutes]
+  );
 
   useEffect(() => {
-    if (!createBookOpen) return;
+    if (!createBookOpen) {
+      stopGenesisStream();
+      return;
+    }
     setMode("ai");
     setTitle("");
     setGenre(genrePresets[0]?.id ?? "xuanhuan");
@@ -107,7 +108,9 @@ export function CreateBookModal() {
     setPlan(null);
     setSelectedEntityIdx(new Set());
     setSelectedOutlineIdx(new Set());
-  }, [createBookOpen, genrePresets]);
+    // 仅在弹窗刚打开时初始化默认表单，不因 genrePresets 刷新而清空用户输入
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createBookOpen, stopGenesisStream]);
 
   useEffect(() => {
     if (!createBookOpen) return;
@@ -119,18 +122,6 @@ export function CreateBookModal() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [createBookOpen, generating, submitting, closeCreateBook]);
-
-  useEffect(() => {
-    return () => {
-      userStoppedRef.current = true;
-      try {
-        channelRef.current?.close();
-      } catch {
-        // ignore
-      }
-      channelRef.current = null;
-    };
-  }, []);
 
   if (!createBookOpen) return null;
 
@@ -144,12 +135,7 @@ export function CreateBookModal() {
   };
 
   const handleStopGenerate = () => {
-    userStoppedRef.current = true;
-    try {
-      channelRef.current?.close();
-    } catch {
-      // ignore
-    }
+    stopGenesisStream();
   };
 
   const handleGeneratePlan = async () => {
@@ -164,7 +150,7 @@ export function CreateBookModal() {
       return;
     }
     if (!hasReadyModel) {
-      const needProvider = !providers.some((p) => p.enabled && p.models.length > 0);
+      const needProvider = !hasAnyEnabledModel(providers);
       notify({
         tone: "warn",
         message: needProvider ? "请先连接一个模型服务并启用模型" : "请先为写作或大纲阶段分配模型",
@@ -177,18 +163,12 @@ export function CreateBookModal() {
       return;
     }
 
-    try {
-      channelRef.current?.close();
-    } catch {
-      // ignore
-    }
-    userStoppedRef.current = false;
-
     setGenerating(true);
     setStreamChars(0);
     setPlan(null);
 
-    const ch = new Channel<GenesisChunk>((chunk) => {
+    const { channel: ch, runId } = openGenesisStream((chunk) => {
+      if (!isCurrentGenesis(runId)) return;
       if (chunk.kind === "delta" && chunk.delta) {
         setStreamChars((prev) => prev + chunk.delta!.length);
       } else if (chunk.kind === "completed" && chunk.plan) {
@@ -197,10 +177,9 @@ export function CreateBookModal() {
         setSelectedOutlineIdx(new Set(chunk.plan.initialOutlines.map((_, i) => i)));
       }
     });
-    channelRef.current = ch;
 
     try {
-      // 注意：MyGo v0.10.0 中带 Channel 参数的方法不可与 .with({ signal }) 混用（否则 pageCtx 包装会导致 Channel 立即关闭），
+      // 注意：MyGo v0.10.0 中带 Channel 参数的方法不可与 .with({ signal }) 混用，
       // 取消流式调用直接通过 ch.close() 触发 Go 端 ctx 取消。
       const generated = await LibraryService.generateBookGenesis(
         {
@@ -211,11 +190,12 @@ export function CreateBookModal() {
         },
         ch,
       );
+      if (!isCurrentGenesis(runId)) return;
       setPlan(generated);
       setSelectedEntityIdx(new Set(generated.entities.map((_, i) => i)));
       setSelectedOutlineIdx(new Set(generated.initialOutlines.map((_, i) => i)));
     } catch (err) {
-      if (!userStoppedRef.current) {
+      if (isCurrentGenesis(runId) && !wasGenesisStopped()) {
         notify({
           tone: "danger",
           message: "生成开书企划失败",
@@ -223,13 +203,10 @@ export function CreateBookModal() {
         });
       }
     } finally {
-      try {
-        if (!ch.closed) ch.close();
-      } catch {
-        // ignore
+      releaseGenesisStream(ch);
+      if (isCurrentGenesis(runId)) {
+        setGenerating(false);
       }
-      if (channelRef.current === ch) channelRef.current = null;
-      setGenerating(false);
     }
   };
 

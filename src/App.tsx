@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { Suspense, lazy, useEffect } from "react";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { AppProvider, useApp } from "./stores/AppContext";
 import { useAutopilotState } from "./stores/AutopilotContext";
@@ -14,10 +14,30 @@ import { ToastHost } from "./components/ToastHost";
 import { ScratchNotesDrawer } from "./components/ScratchNotesDrawer";
 import { ReverseExtractModal } from "./components/ReverseExtractModal";
 import { HomeView } from "./views/HomeView";
-import { ArchitectView } from "./views/ArchitectView";
-import { StudioView } from "./views/StudioView";
-import { AtlasView } from "./views/AtlasView";
-import { SettingsModal } from "./views/SettingsModal";
+
+const ArchitectView = lazy(() =>
+  import("./views/ArchitectView").then((m) => ({ default: m.ArchitectView }))
+);
+const StudioView = lazy(() =>
+  import("./views/StudioView").then((m) => ({ default: m.StudioView }))
+);
+const AtlasView = lazy(() =>
+  import("./views/AtlasView").then((m) => ({ default: m.AtlasView }))
+);
+const SettingsModal = lazy(() =>
+  import("./views/SettingsModal").then((m) => ({ default: m.SettingsModal }))
+);
+
+function ViewFallback() {
+  return (
+    <div className="flex flex-1 items-center justify-center bg-canvas">
+      <div className="flex items-center gap-2 text-xs text-ink-muted">
+        <Loader2 className="h-4 w-4 animate-spin text-accent" />
+        <span>正在切换工作区…</span>
+      </div>
+    </div>
+  );
+}
 
 function NibShell() {
   const {
@@ -219,13 +239,15 @@ function NibShell() {
       ) : (
         <div className="flex min-h-0 flex-1 overflow-hidden">
           <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-            {activeTab === "architect" ? (
-              <ArchitectView />
-            ) : activeTab === "studio" ? (
-              <StudioView />
-            ) : (
-              <AtlasView />
-            )}
+            <Suspense fallback={<ViewFallback />}>
+              {activeTab === "architect" ? (
+                <ArchitectView />
+              ) : activeTab === "studio" ? (
+                <StudioView />
+              ) : (
+                <AtlasView />
+              )}
+            </Suspense>
           </div>
           {!effectiveFocusMode && <DirectorDrawer />}
         </div>
@@ -237,7 +259,11 @@ function NibShell() {
       <AutopilotModal />
       <MemorySearchModal />
       <CommandPalette />
-      <SettingsModal />
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsModal />
+        </Suspense>
+      )}
       <ToastHost />
     </div>
   );

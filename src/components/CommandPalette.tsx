@@ -19,10 +19,10 @@ import {
   Sun,
   X,
 } from "lucide-react";
-import { LibraryService } from "../mygo";
 import { useApp } from "../stores/AppContext";
 import { useAutopilotActions } from "../stores/AutopilotContext";
-import { formatErrorMessage, formatSeq, isIMEComposing } from "../lib/constants";
+import { exportBookWithNotify } from "../lib/bookExport";
+import { formatSeq, isIMEComposing } from "../lib/constants";
 
 interface PaletteCommand {
   id: string;
@@ -194,14 +194,7 @@ function CommandPaletteBody() {
           label: `导出《${activeBook.title}》整本 TXT`,
           keywords: "daochu txt export",
           icon: <FileText className="h-3.5 w-3.5" />,
-          run: async () => {
-            try {
-              const p = await LibraryService.exportBookTXT(activeBook.id);
-              if (p) notify({ tone: "ok", message: "已导出整本 TXT", detail: p });
-            } catch (err) {
-              notify({ tone: "danger", message: "导出 TXT 失败", detail: formatErrorMessage(err) });
-            }
-          },
+          run: () => void exportBookWithNotify(activeBook.id, activeBook.title, "txt", notify),
         },
         {
           id: "export-epub",
@@ -209,14 +202,7 @@ function CommandPaletteBody() {
           label: `导出《${activeBook.title}》EPUB 电子书`,
           keywords: "daochu epub export",
           icon: <Download className="h-3.5 w-3.5" />,
-          run: async () => {
-            try {
-              const p = await LibraryService.exportBookEPUB(activeBook.id);
-              if (p) notify({ tone: "ok", message: "已导出 EPUB 电子书", detail: p });
-            } catch (err) {
-              notify({ tone: "danger", message: "导出 EPUB 失败", detail: formatErrorMessage(err) });
-            }
-          },
+          run: () => void exportBookWithNotify(activeBook.id, activeBook.title, "epub", notify),
         },
         {
           id: "nav-home",

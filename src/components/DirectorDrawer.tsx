@@ -19,6 +19,7 @@ import {
 } from "../mygo";
 import { useApp } from "../stores/AppContext";
 import { useMygoChannel } from "../hooks/useMygoStream";
+import { hasAnyEnabledModel, hasReadyModelRoute } from "../lib/modelReady";
 import { formatErrorMessage, isIMEComposing } from "../lib/constants";
 
 const QUICK_PROMPTS = [
@@ -62,18 +63,10 @@ export function DirectorDrawer() {
   const activeBookIdRef = useRef<number | null>(activeBook?.id ?? null);
   activeBookIdRef.current = activeBook?.id ?? null;
 
-  const hasReadyModel = useMemo(() => {
-    const enabledProviderIds = new Set(
-      providers.filter((p) => p.enabled && p.models.length > 0).map((p) => p.id),
-    );
-    return modelRoutes.some(
-      (r) =>
-        (r.stage === "outline" || r.stage === "draft") &&
-        r.providerId != null &&
-        enabledProviderIds.has(r.providerId) &&
-        r.modelName.trim().length > 0,
-    );
-  }, [providers, modelRoutes]);
+  const hasReadyModel = useMemo(
+    () => hasReadyModelRoute(providers, modelRoutes, ["outline", "draft"]),
+    [providers, modelRoutes]
+  );
 
   // 切换书籍时取消旧流；仅在抽屉打开时从 SQLite 加载该书持久化的 AI 导演对话记录
   useEffect(() => {
@@ -145,7 +138,7 @@ export function DirectorDrawer() {
     if (!text || running) return;
 
     if (!hasReadyModel) {
-      const needProvider = !providers.some((p) => p.enabled && p.models.length > 0);
+      const needProvider = !hasAnyEnabledModel(providers);
       notify({
         tone: "warn",
         message: needProvider ? "请先连接模型服务并启用模型" : "请先为大纲或写作分配模型",

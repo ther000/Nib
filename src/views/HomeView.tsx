@@ -17,6 +17,8 @@ import {
 import { LibraryService, SettingsService, type Book, type UsageSummary, type WritingStatsSummary } from "../mygo";
 import { useApp } from "../stores/AppContext";
 import { useContextMenu } from "../components/ContextMenu";
+import { exportBookWithNotify } from "../lib/bookExport";
+import { hasAnyEnabledModel, hasReadyModelRoute } from "../lib/modelReady";
 import {
   PIPELINE_STAGES,
   formatCompactTokens,
@@ -80,15 +82,9 @@ export function HomeView() {
   const [usageLoading, setUsageLoading] = useState(false);
   const [usageDetailTab, setUsageDetailTab] = useState<"stage" | "model">("stage");
 
-  const enabledProviders = useMemo(
-    () => providers.filter((p) => p.enabled),
-    [providers]
-  );
-  const hasEnabledProvider = enabledProviders.length > 0;
-  const hasEnabledModel = enabledProviders.some((p) => (p.models?.length ?? 0) > 0);
-  const hasDraftRoute = modelRoutes.some(
-    (r) => r.stage === "draft" && Boolean(r.providerId) && Boolean(r.modelName?.trim())
-  );
+  const hasEnabledProvider = providers.some((p) => p.enabled);
+  const hasEnabledModel = hasAnyEnabledModel(providers);
+  const hasDraftRoute = hasReadyModelRoute(providers, modelRoutes, ["draft"]);
   const modelReady = hasEnabledProvider && hasEnabledModel && hasDraftRoute;
 
   const modelStatusHint = useMemo(() => {
@@ -210,30 +206,12 @@ export function HomeView() {
         {
           label: "导出整本 TXT",
           icon: <FileText className="h-3.5 w-3.5" />,
-          onSelect: async () => {
-            try {
-              const outPath = await LibraryService.exportBookTXT(book.id);
-              if (outPath) {
-                notify({ tone: "ok", message: `已导出《${book.title}》TXT`, detail: outPath });
-              }
-            } catch (err) {
-              notify({ tone: "danger", message: "导出 TXT 失败", detail: formatErrorMessage(err) });
-            }
-          },
+          onSelect: () => void exportBookWithNotify(book.id, book.title, "txt", notify),
         },
         {
           label: "导出 EPUB 电子书",
           icon: <Download className="h-3.5 w-3.5" />,
-          onSelect: async () => {
-            try {
-              const outPath = await LibraryService.exportBookEPUB(book.id);
-              if (outPath) {
-                notify({ tone: "ok", message: `已导出《${book.title}》EPUB`, detail: outPath });
-              }
-            } catch (err) {
-              notify({ tone: "danger", message: "导出 EPUB 失败", detail: formatErrorMessage(err) });
-            }
-          },
+          onSelect: () => void exportBookWithNotify(book.id, book.title, "epub", notify),
         },
         { type: "separator" },
         {

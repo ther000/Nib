@@ -156,16 +156,23 @@ export function formatWebNovelProse(raw: string): { text: string; changed: boole
 
   const formattedLines = lines.map((line) => {
     let s = line;
-    // 清理中文字符之间多余空格
-    s = s.replace(/([\u4e00-\u9fff\u3000-\u303f\uff00-\uffef])[ \t]+([\u4e00-\u9fff\u3000-\u303f\uff00-\uffef])/g, "$1$2");
+    // 清理中文字符之间多余空格（循环直到全部消除，避免连续三个汉字间空格漏处理）
+    let prev: string;
+    do {
+      prev = s;
+      s = s.replace(
+        /([\u4e00-\u9fff\u3000-\u303f\uff00-\uffef])[ \t]+([\u4e00-\u9fff\u3000-\u303f\uff00-\uffef])/g,
+        "$1$2"
+      );
+    } while (s !== prev);
     // 英文省略号转中文省略号
     s = s.replace(/\.{3,}/g, "……");
-    // 中文后紧跟的半角标点转全角
-    s = s.replace(/([\u4e00-\u9fff”’》）】])[,]/g, "$1，");
-    s = s.replace(/([\u4e00-\u9fff”’》）】])[?]/g, "$1？");
-    s = s.replace(/([\u4e00-\u9fff”’》）】])[!]/g, "$1！");
-    s = s.replace(/([\u4e00-\u9fff”’》）】])[;]/g, "$1；");
-    s = s.replace(/([\u4e00-\u9fff”’》）】])[:]/g, "$1：");
+    // 中文及中文标点后紧跟的半角标点转全角
+    s = s.replace(/([\u4e00-\u9fff”’》）】？！，。；：])[,]/g, "$1，");
+    s = s.replace(/([\u4e00-\u9fff”’》）】？！，。；：])[?]/g, "$1？");
+    s = s.replace(/([\u4e00-\u9fff”’》）】？！，。；：])[!]/g, "$1！");
+    s = s.replace(/([\u4e00-\u9fff”’》）】？！，。；：])[;]/g, "$1；");
+    s = s.replace(/([\u4e00-\u9fff”’》）】？！，。；：])[:]/g, "$1：");
     // 配对英文双引号转中文弯引号
     let openQuote = true;
     s = s.replace(/"/g, () => {

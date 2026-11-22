@@ -8,7 +8,8 @@
     "build": "mygo build",
     "build:web": "tsc --noEmit && vite build",
     "generate": "mygo generate",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:web": "bun test"
   },
   "dependencies": {
     "lucide-react": "^1.77.0",

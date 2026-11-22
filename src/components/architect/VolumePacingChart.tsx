@@ -278,7 +278,7 @@ export function VolumePacingChart({
         </div>
       ) : (
         <div className="py-2 text-xs text-ink-muted">
-          本卷尚无章节，可手动新建或使用右侧「批量生成章纲」。
+          本卷尚无章节，可手动新建或使用上方「批量生成章纲」。
         </div>
       )}
     </section>

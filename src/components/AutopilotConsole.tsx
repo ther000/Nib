@@ -15,6 +15,7 @@ import {
 } from "../mygo";
 import { useApp } from "../stores/AppContext";
 import { useAutopilotActions, useAutopilotState } from "../stores/AutopilotContext";
+import { hasReadyModelRoute } from "../lib/modelReady";
 import { formatCompactTokens, formatErrorMessage } from "../lib/constants";
 
 const STEP_LABELS: Record<string, string> = {
@@ -237,18 +238,10 @@ export function AutopilotModal() {
   const [maxTokensBudget, setMaxTokensBudget] = useState("");
   const [starting, setStarting] = useState(false);
 
-  const hasDraftRoute = useMemo(() => {
-    const enabledProviderIds = new Set(
-      providers.filter((p) => p.enabled && p.models.length > 0).map((p) => p.id),
-    );
-    return modelRoutes.some(
-      (r) =>
-        r.stage === "draft" &&
-        r.providerId != null &&
-        enabledProviderIds.has(r.providerId) &&
-        r.modelName.trim().length > 0,
-    );
-  }, [providers, modelRoutes]);
+  const hasDraftRoute = useMemo(
+    () => hasReadyModelRoute(providers, modelRoutes, ["draft"]),
+    [providers, modelRoutes]
+  );
 
   useEffect(() => {
     if (!autopilotOpen) return;
