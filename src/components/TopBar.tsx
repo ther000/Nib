@@ -18,11 +18,11 @@ import { useApp } from "../stores/AppContext";
 import { useAutopilotState } from "../stores/AutopilotContext";
 import type { WorkspaceTab } from "../lib/constants";
 
-const CORE_TABS: Array<{ id: WorkspaceTab; label: string; shortcut: string }> = [
+const CORE_TABS: Array<{ id: WorkspaceTab; label: string; title?: string; shortcut: string }> = [
   { id: "architect", label: "大纲", shortcut: "Ctrl+1" },
   { id: "studio", label: "写作", shortcut: "Ctrl+2" },
   { id: "atlas", label: "设定", shortcut: "Ctrl+3" },
-  { id: "book_settings", label: "本书设置", shortcut: "Ctrl+4" },
+  { id: "book_settings", label: "设置", title: "本书设置", shortcut: "Ctrl+4" },
 ];
 
 export function TopBar() {
@@ -215,7 +215,7 @@ export function TopBar() {
               <button
                 key={tab.id}
                 type="button"
-                title={`${tab.label} (${tab.shortcut})`}
+                title={`${tab.title ?? tab.label} (${tab.shortcut})`}
                 onClick={() => setActiveTab(tab.id)}
                 className={`rounded-[6px] px-3.5 py-1 text-xs font-medium transition-colors ${
                   active
@@ -275,7 +275,7 @@ export function TopBar() {
                   ? "托管待确认"
                   : isAutopilotRunning && autopilotState
                     ? `托管 ${autopilotState.completedChapters}/${autopilotState.targetChapters}`
-                    : "导演"}
+                    : "AI"}
               </span>
             </button>
 

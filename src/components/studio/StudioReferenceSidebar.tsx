@@ -10,7 +10,6 @@ import {
   List,
   ListChecks,
   Loader2,
-  PanelLeftClose,
   Plus,
   RefreshCw,
   Search,
@@ -62,7 +61,6 @@ interface StudioReferenceSidebarProps {
   onChangeTab: (tab: ReferenceTab) => void;
   onChangeIncludePending: (next: boolean) => void;
   onRefreshSnapshots: () => void;
-  onClose: () => void;
   onSwitchChapter: (chapterId: number) => void;
   onFocusParagraph: (paragraphIndex: number) => void;
   onInsertEntityName: (name: string) => void;
@@ -92,7 +90,6 @@ export function StudioReferenceSidebar({
   onChangeTab,
   onChangeIncludePending,
   onRefreshSnapshots,
-  onClose,
   onSwitchChapter,
   onFocusParagraph,
   onInsertEntityName,
@@ -270,8 +267,8 @@ export function StudioReferenceSidebar({
   return (
     <aside className="flex w-[264px] shrink-0 flex-col bg-transparent px-1.5 pb-2">
       {/* Header Tabs */}
-      <div className="flex h-10 shrink-0 items-center justify-between px-1">
-        <div className="flex items-center gap-0.5 rounded-lg bg-[var(--bg-hover)] p-0.5">
+      <div className="flex h-10 shrink-0 items-center px-1">
+        <div className="flex w-full items-center gap-0.5 rounded-lg bg-[var(--bg-hover)] p-0.5">
           {(
             [
               { id: "toc", label: "目录", icon: List },
@@ -292,7 +289,7 @@ export function StudioReferenceSidebar({
                 key={tab.id}
                 type="button"
                 onClick={() => onChangeTab(tab.id)}
-                className={`flex items-center gap-1 rounded-md px-1.5 py-1 text-[11.5px] font-medium transition-colors ${
+                className={`flex flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-md px-1.5 py-1 text-[11.5px] font-medium transition-colors ${
                   active
                     ? "bg-elevated text-ink-primary shadow-xs"
                     : "text-ink-secondary hover:text-ink-primary"
@@ -307,16 +304,6 @@ export function StudioReferenceSidebar({
             );
           })}
         </div>
-
-        <button
-          type="button"
-          onClick={onClose}
-          title="收起左侧对照栏"
-          aria-label="收起左侧对照栏"
-          className="rounded-lg p-1 text-ink-muted transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary"
-        >
-          <PanelLeftClose className="h-3.5 w-3.5" />
-        </button>
       </div>
 
       {/* Tab 0: 目录速切 */}

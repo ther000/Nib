@@ -2113,7 +2113,6 @@ export function StudioView() {
           onChangeTab={setRefSidebarTab}
           onChangeIncludePending={setIncludePending}
           onRefreshSnapshots={() => void loadChapterSnapshots()}
-          onClose={() => setRefSidebarOpen(false)}
           onSwitchChapter={(cid) => void selectChapter(cid)}
           onFocusParagraph={scrollToParagraph}
           onInsertEntityName={handleInsertEntityName}
@@ -2168,21 +2167,22 @@ export function StudioView() {
 
         {/* Fixed Top Chapter Meta, Status & Panel Controls Bar */}
         {!focusMode && (
-          <div className="relative z-10 flex shrink-0 items-center justify-between gap-2 border-b border-border-subtle/70 px-4 py-2 text-xs text-ink-muted select-none">
-            <div className="flex min-w-0 items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setRefSidebarOpen((v) => !v)}
-                title={refSidebarOpen ? "收起左侧目录与对照栏" : "展开左侧目录与对照栏"}
-                aria-label="切换左侧目录栏"
-                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors ${
-                  refSidebarOpen
-                    ? "bg-accent-soft text-accent"
-                    : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
-                }`}
-              >
-                <PanelLeft className="h-3.5 w-3.5" />
-              </button>
+          <div className="relative z-10 shrink-0 border-b border-border-subtle/70 px-10 py-2 text-xs text-ink-muted select-none">
+            <div className="mx-auto flex w-full max-w-[var(--prose-max-width)] items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRefSidebarOpen((v) => !v)}
+                  title={refSidebarOpen ? "收起左侧目录与对照栏" : "展开左侧目录与对照栏"}
+                  aria-label="切换左侧目录栏"
+                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors ${
+                    refSidebarOpen
+                      ? "bg-accent-soft text-accent"
+                      : "text-ink-secondary hover:bg-[var(--bg-hover)] hover:text-ink-primary"
+                  }`}
+                >
+                  <PanelLeft className="h-3.5 w-3.5" />
+                </button>
               {activeVolumeTitle && (
                 <span className="truncate text-ink-muted">{activeVolumeTitle}</span>
               )}
@@ -2263,14 +2263,15 @@ export function StudioView() {
                 </div>
               )}
 
-              <div className="flex items-center gap-1.5 px-1 text-[11px]">
-                <span className="nib-mono font-medium text-ink-secondary">
-                  {formatNumber(liveWordCount)} 字
+              <div className="flex items-center gap-1.5 px-1 text-xs leading-none">
+                <span className="inline-flex items-baseline gap-0.5 font-medium text-ink-secondary">
+                  <span className="nib-mono tabular-nums">{formatNumber(liveWordCount)}</span>
+                  <span>字</span>
                 </span>
                 <span className="text-border-strong" aria-hidden="true">
                   ·
                 </span>
-                <span>
+                <span className="leading-none">
                   {generating ? (
                     <span className="text-accent">写作中</span>
                   ) : saving ? (
@@ -2280,7 +2281,10 @@ export function StudioView() {
                   ) : activeChapter.status === "partial" ? (
                     <span className="text-warn">未写完</span>
                   ) : lastAutoSavedAt ? (
-                    <span className="text-ink-muted">已存 {lastAutoSavedAt}</span>
+                    <span className="inline-flex items-baseline gap-0.5 text-ink-muted">
+                      <span>已存</span>
+                      <span className="nib-mono tabular-nums">{lastAutoSavedAt}</span>
+                    </span>
                   ) : (
                     <span className="text-ink-muted">已保存</span>
                   )}
@@ -2395,6 +2399,7 @@ export function StudioView() {
               >
                 <PanelRight className="h-3.5 w-3.5" />
               </button>
+            </div>
             </div>
           </div>
         )}
@@ -2692,7 +2697,7 @@ export function StudioView() {
                 className="flex items-center gap-1 rounded-full px-2.5 py-1 text-ink-secondary transition-colors hover:bg-[var(--bg-hover)] hover:text-ink-primary"
               >
                 <ShieldCheck className="h-3 w-3" />
-                <span>全书体检</span>
+                <span>体检</span>
               </button>
 
               <span className="hidden h-3.5 w-px bg-border-strong sm:block" aria-hidden="true" />
