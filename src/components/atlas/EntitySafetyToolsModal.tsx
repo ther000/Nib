@@ -79,7 +79,7 @@ function HitReviewList({
           {warningCount > 0 && (
             <span className="inline-flex items-center gap-1 rounded bg-warn-soft px-1.5 py-0.5 text-[11px] font-medium text-warn">
               <AlertTriangle className="h-3 w-3" />
-              {warningCount} 处存在粘连词风险
+              {warningCount} 处可能误伤复合词
             </span>
           )}
         </div>
@@ -196,6 +196,10 @@ export function EntitySafetyToolsModal({
   useEffect(() => {
     if (!open) return;
     setTab(initialTab);
+    setSourceId("");
+    setTargetId("");
+    setOldName("");
+    setNewName("");
     setMergePreview(null);
     setMergeExcluded(new Set());
     setRenamePreview(null);
@@ -324,7 +328,7 @@ export function EntitySafetyToolsModal({
       open={open}
       onClose={onClose}
       closeDisabled={busy}
-      title="账本安全工具：实体合并与全书改名"
+      title="设定合并与全书改名"
       icon={tab === "merge" ? <Merge className="h-4 w-4 text-accent" /> : <Replace className="h-4 w-4 text-accent" />}
       maxWidthClass="max-w-[740px]"
     >
@@ -342,7 +346,7 @@ export function EntitySafetyToolsModal({
             }`}
           >
             <Merge className="h-3.5 w-3.5" />
-            <span>合并重复实体</span>
+            <span>合并重复档案</span>
           </button>
           <button
             type="button"
@@ -362,13 +366,13 @@ export function EntitySafetyToolsModal({
         {tab === "merge" ? (
           <>
             <div className="rounded-lg border border-border-subtle bg-surface/60 px-3 py-2 text-xs leading-relaxed text-ink-secondary">
-              将重复抽取的源实体所有历史事件、关系、伏笔与节拍卡迁移至目标实体，并自动保留源名称为别名；正文替换默认先留存章节快照与安全撤销点。
+              将重复档案的所有历史记录、关系、伏笔与节拍合并到保留档案中，并自动把原名称存为别名；替换正文前自动备份历史版本。
             </div>
 
             <div className="grid grid-cols-1 items-center gap-2.5 sm:grid-cols-[1fr_auto_1fr]">
               <div>
-                <label className="mb-1 block text-[11px] text-ink-secondary">
-                  被合并并移除的源实体
+                <label className="mb-1 block text-xs text-ink-secondary">
+                  将被合并移除的档案
                 </label>
                 <select
                   value={sourceId}
@@ -378,7 +382,7 @@ export function EntitySafetyToolsModal({
                   }}
                   className="w-full rounded-lg border border-border-subtle bg-canvas px-3 py-2 text-xs text-ink-primary focus:border-accent focus:outline-none"
                 >
-                  <option value="">选择源实体…</option>
+                  <option value="">选择要移除的档案…</option>
                   {entities.map((e) => (
                     <option key={e.id} value={e.id}>
                       {e.name}（{getEntityKindLabel(e.kind)}）
@@ -390,8 +394,8 @@ export function EntitySafetyToolsModal({
               <ArrowRight className="mx-auto hidden h-4 w-4 text-ink-muted sm:mt-4 sm:block" />
 
               <div>
-                <label className="mb-1 block text-[11px] text-ink-secondary">
-                  保留并合入的目标实体
+                <label className="mb-1 block text-xs text-ink-secondary">
+                  保留并合入的目标档案
                 </label>
                 <select
                   value={targetId}
@@ -401,7 +405,7 @@ export function EntitySafetyToolsModal({
                   }}
                   className="w-full rounded-lg border border-border-subtle bg-canvas px-3 py-2 text-xs text-ink-primary focus:border-accent focus:outline-none"
                 >
-                  <option value="">选择目标实体…</option>
+                  <option value="">选择要保留的档案…</option>
                   {entities
                     .filter((e) => String(e.id) !== sourceId)
                     .map((e) => (
@@ -489,7 +493,7 @@ export function EntitySafetyToolsModal({
         ) : (
           <>
             <div className="rounded-lg border border-border-subtle bg-surface/60 px-3 py-2 text-xs leading-relaxed text-ink-secondary">
-              分模块扫描正文、大纲、节拍与设定账本中的全部命中，自动标出潜在粘连词（如「林渊」可能误伤「林渊阁」），支持逐条取消勾选；执行前自动落章版本快照与全库撤销点。
+              分模块扫描正文、大纲、节拍与设定库中的全部命中，自动标出可能误伤的复合词（如「林渊」可能误伤「林渊阁」），支持逐条跳过；执行前自动备份章节快照。
             </div>
 
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-[1fr_1fr]">

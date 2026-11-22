@@ -52,6 +52,52 @@ function dedupeModels(list: string[]): string[] {
   return out;
 }
 
+interface VendorQuickPreset {
+  label: string;
+  name: string;
+  protocol: ProviderProtocol;
+  baseUrl: string;
+  hint: string;
+}
+
+const VENDOR_PRESETS: VendorQuickPreset[] = [
+  {
+    label: "DeepSeek",
+    name: "DeepSeek",
+    protocol: "openai_compat",
+    baseUrl: "https://api.deepseek.com/v1",
+    hint: "粘贴 DeepSeek API Key 即可使用",
+  },
+  {
+    label: "OpenRouter",
+    name: "OpenRouter",
+    protocol: "openai_compat",
+    baseUrl: "https://openrouter.ai/api/v1",
+    hint: "一个 Key 调用多家主流模型",
+  },
+  {
+    label: "Claude",
+    name: "Anthropic",
+    protocol: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+    hint: "Anthropic 官方接口",
+  },
+  {
+    label: "Gemini",
+    name: "Gemini",
+    protocol: "gemini",
+    baseUrl: "https://generativelanguage.googleapis.com",
+    hint: "Google AI Studio 密钥",
+  },
+  {
+    label: "本地 Ollama",
+    name: "Ollama",
+    protocol: "openai_compat",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    hint: "本地运行，密钥留空即可",
+  },
+];
+
 function createBlankProvider(): ProviderFormState {
   const defaultProto = PROVIDER_PROTOCOLS[0];
   return {
@@ -366,7 +412,7 @@ export function ProvidersTab({ focusProviderId, onConsumeFocus }: ProvidersTabPr
       notify({
         tone: autoTriggered ? "warn" : "danger",
         message: autoTriggered
-          ? "供应商已保存，但自动拉取模型列表失败（可手动添加）"
+          ? "模型服务已保存，但自动拉取模型列表失败（可手动添加）"
           : "拉取模型列表失败",
         detail: formatErrorMessage(err),
       });
@@ -378,12 +424,12 @@ export function ProvidersTab({ focusProviderId, onConsumeFocus }: ProvidersTabPr
   const handleSaveProvider = async () => {
     const name = provForm.name.trim();
     if (!name) {
-      notify({ tone: "warn", message: "请填写供应商名称" });
+      notify({ tone: "warn", message: "请填写模型服务名称" });
       return;
     }
     const baseUrl = provForm.baseUrl.trim();
     if (!baseUrl) {
-      notify({ tone: "warn", message: "请填写 Base URL" });
+      notify({ tone: "warn", message: "请填写接口地址" });
       return;
     }
     const isNew = provForm.id <= 0;
@@ -415,9 +461,9 @@ export function ProvidersTab({ focusProviderId, onConsumeFocus }: ProvidersTabPr
         return;
       }
 
-      notify({ tone: "ok", message: `已保存供应商「${saved.name}」` });
+      notify({ tone: "ok", message: `已保存模型服务「${saved.name}」` });
     } catch (err) {
-      notify({ tone: "danger", message: "保存供应商失败", detail: formatErrorMessage(err) });
+      notify({ tone: "danger", message: "保存模型服务失败", detail: formatErrorMessage(err) });
     } finally {
       setSavingProv(false);
     }
@@ -437,7 +483,7 @@ export function ProvidersTab({ focusProviderId, onConsumeFocus }: ProvidersTabPr
       } else {
         notify({
           tone: "danger",
-          message: "供应商连通性探测失败",
+          message: "模型服务连接测试失败",
           detail: formatErrorMessage(result.message),
         });
       }
@@ -447,7 +493,7 @@ export function ProvidersTab({ focusProviderId, onConsumeFocus }: ProvidersTabPr
         ...prev,
         [id]: { ok: false, latencyMs: 0, modelUsed: "", message: msg },
       }));
-      notify({ tone: "danger", message: "连通性探测出错", detail: msg });
+      notify({ tone: "danger", message: "连接测试出错", detail: msg });
     } finally {
       setTestingId(null);
     }
@@ -465,9 +511,9 @@ export function ProvidersTab({ focusProviderId, onConsumeFocus }: ProvidersTabPr
       setProvForm(blank);
       latestEnabledRef.current = [];
       latestFetchedRef.current = [];
-      notify({ tone: "ok", message: "已删除供应商" });
+      notify({ tone: "ok", message: "已删除模型服务" });
     } catch (err) {
-      notify({ tone: "danger", message: "删除供应商失败", detail: formatErrorMessage(err) });
+      notify({ tone: "danger", message: "删除模型服务失败", detail: formatErrorMessage(err) });
     } finally {
       setSavingProv(false);
     }
@@ -569,6 +615,43 @@ export function ProvidersTab({ focusProviderId, onConsumeFocus }: ProvidersTabPr
       {/* Provider Form */}
       <div className="flex min-w-0 flex-1 flex-col overflow-y-auto px-5 py-4">
         <div className="flex flex-col gap-3.5">
+          {provForm.id <= 0 && (
+            <div className="rounded-lg border border-border-subtle bg-surface/60 px-3.5 py-2.5">
+              <div className="mb-2 text-xs font-medium text-ink-secondary">
+                常用服务快速填充（点击后只需填密钥）
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {VENDOR_PRESETS.map((preset) => {
+                  const active =
+                    provForm.name === preset.name &&
+                    provForm.baseUrl === preset.baseUrl;
+                  return (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      title={preset.hint}
+                      onClick={() =>
+                        setProvForm((prev) => ({
+                          ...prev,
+                          name: preset.name,
+                          protocol: preset.protocol,
+                          baseUrl: preset.baseUrl,
+                        }))
+                      }
+                      className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                        active
+                          ? "border-accent bg-accent-soft text-accent"
+                          : "border-border-subtle bg-canvas text-ink-secondary hover:border-border-strong hover:text-ink-primary"
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="mb-1 block text-xs text-ink-secondary">
@@ -751,8 +834,8 @@ export function ProvidersTab({ focusProviderId, onConsumeFocus }: ProvidersTabPr
             {provForm.id > 0 &&
               allCandidateModels.length > 0 &&
               provForm.enabledModels.length === 0 && (
-                <div className="border-b border-warn/25 bg-warn-soft/70 px-3 py-1.5 text-[11px] text-warn">
-                  开启下方开关以启用模型，已启用的模型会同步至「模型路由」下拉列表。
+                <div className="border-b border-warn/25 bg-warn-soft/70 px-3 py-1.5 text-xs text-warn">
+                  开启下方开关即可启用模型，已启用的模型可在「模型分配」中选用。
                 </div>
               )}
 
@@ -761,14 +844,14 @@ export function ProvidersTab({ focusProviderId, onConsumeFocus }: ProvidersTabPr
               {fetchingModelsId === provForm.id && allCandidateModels.length === 0 ? (
                 <div className="flex items-center justify-center gap-2 py-6 text-xs text-ink-muted">
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
-                  <span>正在拉取上游模型列表…</span>
+                  <span>正在拉取可用模型列表…</span>
                 </div>
               ) : visibleModels.length === 0 ? (
                 <div className="px-3 py-5 text-center text-xs text-ink-muted">
                   {allCandidateModels.length === 0
                     ? provForm.id > 0
                       ? "暂无候选模型，点击右上角「拉取模型」或在下方手动添加"
-                      : "保存供应商后将自动拉取可用模型，也可先在下方手动添加"
+                      : "保存服务后会自动拉取可用模型，也可先在下方手动添加"
                     : onlyEnabledModels
                     ? "当前未启用任何模型"
                     : "无匹配模型"}
@@ -841,8 +924,8 @@ export function ProvidersTab({ focusProviderId, onConsumeFocus }: ProvidersTabPr
                     handleAddCustomModel();
                   }
                 }}
-                placeholder="手动添加模型 ID（回车加入并启用）"
-                className="nib-mono min-w-0 flex-1 rounded border border-border-subtle bg-canvas px-2.5 py-1 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                placeholder="手动添加模型名称（回车加入并启用）"
+                className="nib-mono min-w-0 flex-1 rounded border border-border-subtle bg-canvas px-2.5 py-1 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent"
               />
               <button
                 type="button"
@@ -857,7 +940,7 @@ export function ProvidersTab({ focusProviderId, onConsumeFocus }: ProvidersTabPr
           </div>
 
           <label className="flex cursor-pointer items-center justify-between rounded-md border border-border-subtle bg-canvas/60 px-3 py-2">
-            <span className="text-xs text-ink-primary">启用此供应商</span>
+            <span className="text-xs text-ink-primary">启用此模型服务</span>
             <input
               type="checkbox"
               checked={provForm.enabled}

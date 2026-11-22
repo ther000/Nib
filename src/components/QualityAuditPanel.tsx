@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import {
   StyleService,
-  type ApplySurgicalDiffResult,
   type ChapterAudit,
   type LintIssue,
 } from "../mygo";
@@ -34,8 +33,9 @@ interface QualityAuditPanelProps {
   loading: boolean;
   activeParagraphIndex: number | null;
   polishingParagraphs: boolean;
+  applyingDiffId: string | null;
   onAuditUpdated: (audit: ChapterAudit) => void;
-  onDiffApplied: (res: ApplySurgicalDiffResult) => void;
+  onApplyDiff: (diffId: string, accept: boolean) => Promise<void>;
   onFocusParagraph: (paragraphIndex: number) => void;
   onEnsureSavedBeforeAudit: () => Promise<boolean>;
   onRunLocalLint: () => Promise<void>;
@@ -56,8 +56,9 @@ export function QualityAuditPanel({
   loading,
   activeParagraphIndex,
   polishingParagraphs,
+  applyingDiffId,
   onAuditUpdated,
-  onDiffApplied,
+  onApplyDiff,
   onFocusParagraph,
   onEnsureSavedBeforeAudit,
   onRunLocalLint,
@@ -69,7 +70,6 @@ export function QualityAuditPanel({
   const [filter, setFilter] = useState<AuditFilter>("all");
   const [criticFilter, setCriticFilter] = useState<string>("all");
   const [criticRunning, setCriticRunning] = useState(false);
-  const [applyingDiffId, setApplyingDiffId] = useState<string | null>(null);
 
   const criticAbortRef = useRef<AbortController | null>(null);
   const criticRunIdRef = useRef(0);
@@ -154,27 +154,7 @@ export function QualityAuditPanel({
   }, [chapterId, criticRunning, onEnsureSavedBeforeAudit, onAuditUpdated, onNotify]);
 
   const handleApplyDiff = async (diffId: string, accept: boolean) => {
-    setApplyingDiffId(diffId);
-    try {
-      const res = await StyleService.applySurgicalDiff({
-        chapterId,
-        diffId,
-        accept,
-      });
-      onDiffApplied(res);
-      onNotify({
-        tone: accept ? "ok" : "info",
-        message: accept ? "已采纳手术润色并归档快照" : "已忽略该条润色建议",
-      });
-    } catch (err) {
-      onNotify({
-        tone: "danger",
-        message: "应用手术润色失败",
-        detail: formatErrorMessage(err),
-      });
-    } finally {
-      setApplyingDiffId(null);
-    }
+    await onApplyDiff(diffId, accept);
   };
 
   const lintIssues = audit?.lintIssues ?? [];
@@ -242,13 +222,13 @@ export function QualityAuditPanel({
             )}
           </div>
 
-          <span className="nib-mono text-[11px] text-ink-muted">
-            {lintIssues.length} 告警 · {criticFindings.length} 盲审
+          <span className="nib-mono text-xs text-ink-muted">
+            {lintIssues.length} 提醒 · {criticFindings.length} 复核
           </span>
         </div>
 
         {audit?.hookVerdict && (
-          <div className="mt-1.5 text-[11px] leading-relaxed text-ink-secondary">
+          <div className="mt-1.5 text-xs leading-relaxed text-ink-secondary">
             钩子评语：{audit.hookVerdict}
           </div>
         )}
@@ -259,8 +239,8 @@ export function QualityAuditPanel({
             type="button"
             disabled={!chapterHasContent || loading}
             onClick={() => void onRunLocalLint()}
-            title="0 Token 确定性本地扫描 (<20ms)"
-            className="flex items-center justify-center gap-1 rounded-md border border-border-subtle bg-elevated px-2 py-1.5 text-[11px] font-medium text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
+            title="本地快速检查套话、结构与敏感词"
+            className="flex items-center justify-center gap-1 rounded-md border border-border-subtle bg-elevated px-2 py-1.5 text-xs font-medium text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
           >
             <ScanSearch className="h-3 w-3 text-accent" />
             <span>本地扫描</span>
@@ -270,21 +250,21 @@ export function QualityAuditPanel({
             <button
               type="button"
               onClick={stopCritic}
-              className="flex items-center justify-center gap-1 rounded-md border border-danger/40 bg-danger-soft px-2 py-1.5 text-[11px] font-medium text-danger"
+              className="flex items-center justify-center gap-1 rounded-md border border-danger/40 bg-danger-soft px-2 py-1.5 text-xs font-medium text-danger"
             >
               <Square className="h-2.5 w-2.5 fill-current" />
-              <span>停止盲审</span>
+              <span>停止复核</span>
             </button>
           ) : (
             <button
               type="button"
               disabled={!chapterHasContent || polishingParagraphs}
               onClick={() => void handleRunCritic()}
-              title="调用 critic 模型执行 4 维防吃书与钩子盲审"
-              className="flex items-center justify-center gap-1 rounded-md border border-border-subtle bg-elevated px-2 py-1.5 text-[11px] font-medium text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
+              title="AI 复核防吃书、毒点、节拍落点与章末钩子"
+              className="flex items-center justify-center gap-1 rounded-md border border-border-subtle bg-elevated px-2 py-1.5 text-xs font-medium text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
             >
               <Eye className="h-3 w-3 text-accent" />
-              <span>Critic 盲审</span>
+              <span>剧情复核</span>
             </button>
           )}
 
@@ -292,7 +272,7 @@ export function QualityAuditPanel({
             <button
               type="button"
               onClick={onStopSurgicalPolish}
-              className="flex items-center justify-center gap-1 rounded-md border border-danger/40 bg-danger-soft px-2 py-1.5 text-[11px] font-medium text-danger"
+              className="flex items-center justify-center gap-1 rounded-md border border-danger/40 bg-danger-soft px-2 py-1.5 text-xs font-medium text-danger"
             >
               <Square className="h-2.5 w-2.5 fill-current" />
               <span>停止润色</span>
@@ -310,13 +290,17 @@ export function QualityAuditPanel({
               }
               title={
                 activeParagraphIndex !== null
-                  ? `针对当前选中段 [P${activeParagraphIndex + 1}] 生成手术式润色`
-                  : "针对病灶段落生成最小局部替换建议"
+                  ? `针对第 ${activeParagraphIndex + 1} 段生成局部润色`
+                  : "针对本章问题段落生成局部润色建议"
               }
-              className="flex items-center justify-center gap-1 rounded-md border border-accent/35 bg-accent-soft px-2 py-1.5 text-[11px] font-medium text-accent transition-colors hover:border-accent disabled:opacity-40"
+              className="flex items-center justify-center gap-1 rounded-md border border-accent/35 bg-accent-soft px-2 py-1.5 text-xs font-medium text-accent transition-colors hover:border-accent disabled:opacity-40"
             >
               <Wand2 className="h-3 w-3" />
-              <span>手术润色</span>
+              <span>
+                {activeParagraphIndex !== null
+                  ? `润色第 ${activeParagraphIndex + 1} 段`
+                  : "局部润色"}
+              </span>
             </button>
           )}
         </div>
@@ -328,19 +312,19 @@ export function QualityAuditPanel({
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
           <span>
             {criticRunning
-              ? "正在执行 4 维独立盲审（防吃书 / 防毒 / 节拍 / 钩子）…"
-              : "正在针对病灶段落生成手术式局部替换建议…"}
+              ? "正在检查设定一致性、毒点、节拍与章末钩子…"
+              : "正在针对问题段落生成局部润色建议…"}
           </span>
         </div>
       )}
 
       {/* Filter Bar */}
-      <div className="flex shrink-0 items-center gap-1 border-b border-border-subtle bg-canvas/40 px-3 py-1.5 text-[11px]">
+      <div className="flex shrink-0 items-center gap-1 border-b border-border-subtle bg-canvas/40 px-3 py-1.5 text-xs">
         {(
           [
             { id: "all", label: "全部" },
             { id: "diffs", label: `润色 (${pendingDiffs.length})` },
-            { id: "critic", label: `盲审 (${criticFindings.length})` },
+            { id: "critic", label: `复核 (${criticFindings.length})` },
             { id: "lint", label: `AI 味 (${lintIssues.length})` },
           ] as Array<{ id: AuditFilter; label: string }>
         ).map((tab) => (
@@ -363,7 +347,7 @@ export function QualityAuditPanel({
       <div className="flex-1 overflow-y-auto px-3.5 py-3">
         {!chapterHasContent ? (
           <div className="py-12 text-center text-xs text-ink-muted">
-            本章尚无正文，生成或输入正文后即可自动执行去 AI 味扫描与审校。
+            本章尚无正文，写完或生成正文后即可进行扫描与复核。
           </div>
         ) : pendingDiffs.length === 0 &&
           criticFindings.length === 0 &&
@@ -371,10 +355,10 @@ export function QualityAuditPanel({
           <div className="flex flex-col items-center justify-center gap-2 py-12 text-center">
             <CheckCircle2 className="h-5 w-5 text-ok" />
             <div className="text-xs font-medium text-ink-primary">
-              当前未检出 AI 套话或结构病灶
+              当前未检出套话或敏感词问题
             </div>
-            <div className="text-[11px] text-ink-muted">
-              可点击上方「Critic 盲审」进一步核验吃书冲突与章末钩子
+            <div className="text-xs text-ink-muted">
+              可点击上方「剧情复核」进一步核验设定冲突与章末钩子
             </div>
           </div>
         ) : (
@@ -382,8 +366,8 @@ export function QualityAuditPanel({
             {/* 1. Surgical Diffs */}
             {(filter === "all" || filter === "diffs") && pendingDiffs.length > 0 && (
               <div className="flex flex-col gap-2">
-                <div className="text-[11px] font-medium text-ink-secondary">
-                  待处理手术润色建议（{pendingDiffs.length}）
+                <div className="text-xs font-medium text-ink-secondary">
+                  待处理局部润色（{pendingDiffs.length}）
                 </div>
                 {pendingDiffs.map((diff) => {
                   const isFocused = activeParagraphIndex === diff.paragraphIndex;
@@ -400,20 +384,20 @@ export function QualityAuditPanel({
                     >
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-1.5">
-                          <span className="nib-mono rounded bg-accent-soft px-1.5 py-0.5 text-[10px] font-semibold text-accent">
-                            P{diff.paragraphIndex + 1}
+                          <span className="nib-mono rounded bg-accent-soft px-1.5 py-0.5 text-xs font-semibold text-accent">
+                            第 {diff.paragraphIndex + 1} 段
                           </span>
                           <span className="truncate text-xs font-medium text-ink-primary">
-                            {diff.reason || "病灶段落润色"}
+                            {diff.reason || "段落润色建议"}
                           </span>
                         </div>
                         <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" />
                       </div>
 
-                      <div className="mt-2 rounded bg-danger-soft/50 px-2 py-1.5 text-[11.5px] leading-relaxed text-ink-muted line-through">
+                      <div className="mt-2 rounded bg-danger-soft/50 px-2 py-1.5 text-xs leading-relaxed text-ink-muted line-through">
                         {diff.original}
                       </div>
-                      <div className="mt-1.5 rounded bg-ok-soft/60 px-2 py-1.5 text-[11.5px] leading-relaxed text-ink-primary">
+                      <div className="mt-1.5 rounded bg-ok-soft/60 px-2 py-1.5 text-xs leading-relaxed text-ink-primary">
                         {diff.replacement}
                       </div>
 
@@ -425,7 +409,7 @@ export function QualityAuditPanel({
                           type="button"
                           disabled={isApplying}
                           onClick={() => void handleApplyDiff(diff.id, false)}
-                          className="flex items-center gap-1 rounded border border-border-subtle bg-surface px-2.5 py-1 text-[11px] text-ink-secondary hover:text-ink-primary"
+                          className="flex items-center gap-1 rounded border border-border-subtle bg-surface px-2.5 py-1 text-xs text-ink-secondary hover:text-ink-primary"
                         >
                           <X className="h-3 w-3" />
                           <span>忽略</span>
@@ -434,7 +418,7 @@ export function QualityAuditPanel({
                           type="button"
                           disabled={isApplying}
                           onClick={() => void handleApplyDiff(diff.id, true)}
-                          className="flex items-center gap-1 rounded bg-ok px-2.5 py-1 text-[11px] font-semibold text-white hover:opacity-90"
+                          className="flex items-center gap-1 rounded bg-ok px-2.5 py-1 text-xs font-semibold text-canvas hover:opacity-90"
                         >
                           <Check className="h-3 w-3" />
                           <span>采纳替换</span>
@@ -451,13 +435,13 @@ export function QualityAuditPanel({
               criticFindings.length > 0 && (
                 <div className="flex flex-col gap-2">
                   <div className="flex flex-wrap items-center justify-between gap-1">
-                    <span className="text-[11px] font-medium text-ink-secondary">
-                      Critic 盲审意见（{filteredCriticFindings.length}）
+                    <span className="text-xs font-medium text-ink-secondary">
+                      剧情与悬念复核（{filteredCriticFindings.length}）
                     </span>
                     <select
                       value={criticFilter}
                       onChange={(e) => setCriticFilter(e.target.value)}
-                      className="rounded border border-border-subtle bg-canvas px-1.5 py-0.5 text-[10.5px] text-ink-secondary focus:border-accent focus:outline-none"
+                      className="rounded border border-border-subtle bg-canvas px-1.5 py-0.5 text-xs text-ink-secondary focus:border-accent"
                     >
                       <option value="all">全部维度</option>
                       <option value="consistency">防吃书一致性</option>
@@ -489,17 +473,17 @@ export function QualityAuditPanel({
                         <div className="flex flex-wrap items-center justify-between gap-1.5">
                           <div className="flex flex-wrap items-center gap-1.5">
                             {finding.paragraphIndex >= 0 && (
-                              <span className="nib-mono rounded bg-surface px-1.5 py-0.5 text-[10px] font-medium text-ink-secondary">
-                                P{finding.paragraphIndex + 1}
+                              <span className="nib-mono rounded bg-surface px-1.5 py-0.5 text-xs font-medium text-ink-secondary">
+                                第 {finding.paragraphIndex + 1} 段
                               </span>
                             )}
                             <span
-                              className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${dimMeta.badgeClass}`}
+                              className={`rounded border px-1.5 py-0.5 text-[11px] font-medium ${dimMeta.badgeClass}`}
                             >
                               {dimMeta.shortLabel ?? dimMeta.label}
                             </span>
                             <span
-                              className={`rounded border px-1.5 py-0.5 text-[10px] ${sevMeta.badgeClass}`}
+                              className={`rounded border px-1.5 py-0.5 text-[11px] ${sevMeta.badgeClass}`}
                             >
                               {sevMeta.label}
                             </span>
@@ -513,9 +497,9 @@ export function QualityAuditPanel({
                                 e.stopPropagation();
                                 void onRunSurgicalPolish([finding.paragraphIndex]);
                               }}
-                              className="flex items-center gap-1 text-[10.5px] font-medium text-accent hover:opacity-80"
+                              className="flex items-center gap-1 text-xs font-medium text-accent hover:opacity-80"
                             >
-                              <Wand2 className="h-2.5 w-2.5" />
+                              <Wand2 className="h-3 w-3" />
                               <span>润色此段</span>
                             </button>
                           )}
@@ -525,12 +509,12 @@ export function QualityAuditPanel({
                           {finding.title}
                         </div>
                         {finding.detail && (
-                          <div className="mt-1 text-[11.5px] leading-relaxed text-ink-secondary">
+                          <div className="mt-1 text-xs leading-relaxed text-ink-secondary">
                             {finding.detail}
                           </div>
                         )}
                         {finding.suggestion && (
-                          <div className="mt-1.5 rounded bg-surface/80 px-2 py-1 text-[11px] text-ink-primary">
+                          <div className="mt-1.5 rounded bg-surface/80 px-2 py-1 text-xs text-ink-primary">
                             建议：{finding.suggestion}
                           </div>
                         )}
@@ -543,8 +527,8 @@ export function QualityAuditPanel({
             {/* 3. Local De-AI Lint Issues */}
             {(filter === "all" || filter === "lint") && lintIssues.length > 0 && (
               <div className="flex flex-col gap-2">
-                <div className="text-[11px] font-medium text-ink-secondary">
-                  本地 AI 味与排版告警（{lintIssues.length}）
+                <div className="text-xs font-medium text-ink-secondary">
+                  套话与敏感词提醒（{lintIssues.length}）
                 </div>
                 {lintIssues.map((issue, idx) => {
                   const sevMeta = getLintSeverityMeta(issue.severity);
@@ -561,11 +545,11 @@ export function QualityAuditPanel({
                     >
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="nib-mono rounded bg-surface px-1.5 py-0.5 text-[10px] font-medium text-ink-secondary">
-                            P{issue.paragraphIndex + 1}
+                          <span className="nib-mono rounded bg-surface px-1.5 py-0.5 text-xs font-medium text-ink-secondary">
+                            第 {issue.paragraphIndex + 1} 段
                           </span>
                           <span
-                            className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${sevMeta.badgeClass}`}
+                            className={`rounded border px-1.5 py-0.5 text-[11px] font-medium ${sevMeta.badgeClass}`}
                           >
                             {issue.severity === "error" ? (
                               <ShieldAlert className="mr-0.5 inline h-2.5 w-2.5" />
@@ -573,7 +557,7 @@ export function QualityAuditPanel({
                             {getDeaiCategoryLabel(issue.category)}
                           </span>
                           {issue.matchedText && (
-                            <span className="truncate rounded bg-danger-soft/60 px-1.5 py-0.5 text-[11px] font-medium text-danger">
+                            <span className="truncate rounded bg-danger-soft/60 px-1.5 py-0.5 text-xs font-medium text-danger">
                               「{issue.matchedText}」
                             </span>
                           )}
@@ -591,7 +575,7 @@ export function QualityAuditPanel({
                                     issue.replacement ?? ""
                                   );
                                 }}
-                                className="rounded bg-ok-soft px-1.5 py-0.5 text-[10.5px] font-medium text-ok hover:bg-ok hover:text-white"
+                                className="rounded bg-ok-soft px-1.5 py-0.5 text-xs font-medium text-ok hover:bg-ok hover:text-canvas"
                               >
                                 {issue.replacement
                                   ? `替换为「${issue.replacement}」`
@@ -605,7 +589,7 @@ export function QualityAuditPanel({
                               e.stopPropagation();
                               void onRunSurgicalPolish([issue.paragraphIndex]);
                             }}
-                            className="shrink-0 text-[10.5px] font-medium text-accent hover:opacity-80"
+                            className="shrink-0 text-xs font-medium text-accent hover:opacity-80"
                           >
                             润色
                           </button>
@@ -613,7 +597,7 @@ export function QualityAuditPanel({
                       </div>
 
                       {issue.hint && (
-                        <div className="mt-1.5 text-[11px] leading-relaxed text-ink-secondary">
+                        <div className="mt-1.5 text-xs leading-relaxed text-ink-secondary">
                           {issue.hint}
                         </div>
                       )}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Save, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Save, Sparkles, Trash2 } from "lucide-react";
 import {
   SettingsService,
   type ModelPricing,
@@ -44,7 +44,24 @@ export function RoutesPricingTab({
   const [dirtyStages, setDirtyStages] = useState<Set<string>>(() => new Set());
   const dirtyStagesRef = useRef<Set<string>>(new Set());
   const [savingStage, setSavingStage] = useState<string | null>(null);
+  const [savingAll, setSavingAll] = useState(false);
   const [customModelStages, setCustomModelStages] = useState<Set<string>>(() => new Set());
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showPricing, setShowPricing] = useState(false);
+
+  // Quick unified-model selector state
+  const [quickProviderId, setQuickProviderId] = useState<number>(() => {
+    const draftRoute = modelRoutes.find((r) => r.stage === "draft");
+    if (draftRoute?.providerId) return draftRoute.providerId;
+    return providers.find((p) => p.enabled)?.id ?? providers[0]?.id ?? 0;
+  });
+  const [quickModelName, setQuickModelName] = useState<string>(() => {
+    const draftRoute = modelRoutes.find((r) => r.stage === "draft");
+    if (draftRoute?.modelName) return draftRoute.modelName;
+    const firstProv = providers.find((p) => p.enabled) ?? providers[0];
+    return firstProv?.models?.[0] ?? "";
+  });
+  const [applyingAll, setApplyingAll] = useState(false);
 
   const [pricingList, setPricingList] = useState<ModelPricing[]>([]);
   const [pricingProvider, setPricingProvider] = useState("");
@@ -73,6 +90,15 @@ export function RoutesPricingTab({
     });
   }, [modelRoutes]);
 
+  useEffect(() => {
+    if (quickProviderId > 0 && providerMap.has(quickProviderId)) return;
+    const fallbackProv = providers.find((p) => p.enabled) ?? providers[0];
+    if (fallbackProv) {
+      setQuickProviderId(fallbackProv.id);
+      setQuickModelName(fallbackProv.models[0] ?? "");
+    }
+  }, [providers, providerMap, quickProviderId]);
+
   const loadPricing = useCallback(async () => {
     try {
       const list = await SettingsService.listModelPricing();
@@ -100,39 +126,50 @@ export function RoutesPricingTab({
     });
   };
 
+  const validateRoute = (draft: ModelRoute): string | null => {
+    if (!Number.isFinite(draft.temperature) || draft.temperature < 0 || draft.temperature > 2) {
+      return "创意度需在 0.0 到 2.0 之间";
+    }
+    if (!Number.isFinite(draft.maxTokens) || draft.maxTokens < 256 || draft.maxTokens > 200000) {
+      return "输出上限需在 256 到 200,000 之间";
+    }
+    return null;
+  };
+
+  const persistSingleRoute = async (stage: string, draft: ModelRoute) => {
+    const saved = await SettingsService.saveModelRoute({
+      stage: draft.stage,
+      providerId: draft.providerId && draft.providerId > 0 ? draft.providerId : undefined,
+      modelName: draft.modelName.trim(),
+      fallbackProviderId:
+        draft.fallbackProviderId && draft.fallbackProviderId > 0
+          ? draft.fallbackProviderId
+          : undefined,
+      fallbackModelName: (draft.fallbackModelName ?? "").trim(),
+      temperature: draft.temperature,
+      maxTokens: draft.maxTokens,
+      updatedAt: draft.updatedAt,
+    });
+    setRouteDrafts((prev) => ({ ...prev, [stage]: saved }));
+    setDirtyStages((prev) => {
+      const next = new Set(prev);
+      next.delete(stage);
+      dirtyStagesRef.current = next;
+      return next;
+    });
+  };
+
   const handleSaveRoute = async (stage: string) => {
     const draft = routeDrafts[stage];
     if (!draft) return;
-    if (!Number.isFinite(draft.temperature) || draft.temperature < 0 || draft.temperature > 2) {
-      notify({ tone: "warn", message: "创意度需在 0.0 到 2.0 之间" });
-      return;
-    }
-    if (!Number.isFinite(draft.maxTokens) || draft.maxTokens < 256 || draft.maxTokens > 200000) {
-      notify({ tone: "warn", message: "输出上限需在 256 到 200,000 Token 之间" });
+    const errMsg = validateRoute(draft);
+    if (errMsg) {
+      notify({ tone: "warn", message: errMsg });
       return;
     }
     setSavingStage(stage);
     try {
-      const saved = await SettingsService.saveModelRoute({
-        stage: draft.stage,
-        providerId: draft.providerId && draft.providerId > 0 ? draft.providerId : undefined,
-        modelName: draft.modelName.trim(),
-        fallbackProviderId:
-          draft.fallbackProviderId && draft.fallbackProviderId > 0
-            ? draft.fallbackProviderId
-            : undefined,
-        fallbackModelName: (draft.fallbackModelName ?? "").trim(),
-        temperature: draft.temperature,
-        maxTokens: draft.maxTokens,
-        updatedAt: draft.updatedAt,
-      });
-      setRouteDrafts((prev) => ({ ...prev, [stage]: saved }));
-      setDirtyStages((prev) => {
-        const next = new Set(prev);
-        next.delete(stage);
-        dirtyStagesRef.current = next;
-        return next;
-      });
+      await persistSingleRoute(stage, draft);
       await refreshSettingsData();
       const stageLabel = PIPELINE_STAGES.find((s) => s.stage === stage)?.label ?? stage;
       notify({ tone: "ok", message: `已保存「${stageLabel}」配置` });
@@ -143,9 +180,68 @@ export function RoutesPricingTab({
     }
   };
 
+  const handleSaveAllDirty = async () => {
+    const stages = Array.from(dirtyStagesRef.current);
+    if (stages.length === 0) return;
+    for (const stage of stages) {
+      const draft = routeDrafts[stage];
+      if (!draft) continue;
+      const errMsg = validateRoute(draft);
+      if (errMsg) {
+        notify({ tone: "warn", message: errMsg });
+        return;
+      }
+    }
+    setSavingAll(true);
+    try {
+      for (const stage of stages) {
+        const draft = routeDrafts[stage];
+        if (draft) {
+          await persistSingleRoute(stage, draft);
+        }
+      }
+      await refreshSettingsData();
+      notify({ tone: "ok", message: `已保存 ${stages.length} 个环节的模型分配` });
+    } catch (err) {
+      notify({ tone: "danger", message: "保存模型分配失败", detail: formatErrorMessage(err) });
+    } finally {
+      setSavingAll(false);
+    }
+  };
+
+  const handleApplyToAll = async () => {
+    if (!quickProviderId || !quickModelName.trim()) {
+      notify({ tone: "warn", message: "请先选择模型服务与模型" });
+      return;
+    }
+    setApplyingAll(true);
+    try {
+      for (const def of PIPELINE_STAGES) {
+        const current = routeDrafts[def.stage];
+        const next: ModelRoute = {
+          stage: def.stage,
+          providerId: quickProviderId,
+          modelName: quickModelName.trim(),
+          fallbackProviderId: current?.fallbackProviderId,
+          fallbackModelName: current?.fallbackModelName ?? "",
+          temperature: current?.temperature ?? def.defaultTemp,
+          maxTokens: current?.maxTokens ?? def.defaultMaxTokens,
+          updatedAt: current?.updatedAt ?? "",
+        };
+        await persistSingleRoute(def.stage, next);
+      }
+      await refreshSettingsData();
+      notify({ tone: "ok", message: `全部写作环节已统一设为 ${quickModelName.trim()}` });
+    } catch (err) {
+      notify({ tone: "danger", message: "批量应用失败", detail: formatErrorMessage(err) });
+    } finally {
+      setApplyingAll(false);
+    }
+  };
+
   const handleSavePricing = async () => {
     if (!pricingProvider.trim() || !pricingModel.trim()) {
-      notify({ tone: "warn", message: "请填写模型服务名称与模型 ID" });
+      notify({ tone: "warn", message: "请填写模型服务与模型名称" });
       return;
     }
     const inPrice = Number.parseFloat(pricingInput) || 0;
@@ -167,7 +263,7 @@ export function RoutesPricingTab({
       setPricingModel("");
       setPricingInput("");
       setPricingOutput("");
-      notify({ tone: "ok", message: "模型单价已保存，首页将自动计算估算花费" });
+      notify({ tone: "ok", message: "模型单价已保存" });
     } catch (err) {
       notify({ tone: "danger", message: "保存单价失败", detail: formatErrorMessage(err) });
     } finally {
@@ -184,9 +280,12 @@ export function RoutesPricingTab({
     }
   };
 
+  const quickProvider = quickProviderId ? providerMap.get(quickProviderId) : undefined;
+  const quickModels = quickProvider?.models ?? [];
+
   return (
     <div className="flex-1 overflow-y-auto px-5 py-4">
-      {providers.length === 0 && (
+      {providers.length === 0 ? (
         <div className="mb-4 flex items-center justify-between rounded-lg border border-warn/35 bg-warn-soft px-3.5 py-2.5 text-xs text-warn">
           <span>请先添加模型服务，再为各写作环节指定模型。</span>
           <button
@@ -194,12 +293,109 @@ export function RoutesPricingTab({
             onClick={onGoToProviders}
             className="font-medium underline underline-offset-2"
           >
-            去设置
+            去添加
           </button>
+        </div>
+      ) : (
+        /* Quick Unified Mode Bar */
+        <div className="mb-4 rounded-xl border border-accent/25 bg-accent-soft/30 p-3.5">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-ink-primary">
+              <Sparkles className="h-3.5 w-3.5 text-accent" />
+              <span>一键统一模型（新手推荐）</span>
+            </div>
+            <span className="text-xs text-ink-secondary">
+              全流程共用一个主力模型，免去逐项配置
+            </span>
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[170px_1fr_auto]">
+            <select
+              aria-label="统一模型服务"
+              value={quickProviderId || ""}
+              onChange={(e) => {
+                const nextId = Number(e.target.value) || 0;
+                setQuickProviderId(nextId);
+                const nextProv = providerMap.get(nextId);
+                setQuickModelName(nextProv?.models?.[0] ?? "");
+              }}
+              className="rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent"
+            >
+              <option value="">选择模型服务</option>
+              {providers.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            {quickModels.length > 0 ? (
+              <select
+                aria-label="统一模型名称"
+                value={quickModelName}
+                onChange={(e) => setQuickModelName(e.target.value)}
+                className="nib-mono rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent"
+              >
+                {!quickModelName && <option value="">选择模型</option>}
+                {quickModelName && !quickModels.includes(quickModelName) && (
+                  <option value={quickModelName}>{quickModelName}</option>
+                )}
+                {quickModels.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                value={quickModelName}
+                onChange={(e) => setQuickModelName(e.target.value)}
+                placeholder="输入模型名称"
+                className="nib-mono rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent"
+              />
+            )}
+            <button
+              type="button"
+              disabled={applyingAll || !quickProviderId || !quickModelName.trim()}
+              onClick={() => void handleApplyToAll()}
+              className="rounded-lg bg-accent px-3.5 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-40"
+            >
+              {applyingAll ? "应用中…" : "应用到全部环节"}
+            </button>
+          </div>
         </div>
       )}
 
-      <div className="divide-y divide-border-subtle">
+      {/* Per-Stage Controls Header */}
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="text-xs font-medium text-ink-secondary">按环节细调（可选）</div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((v) => !v)}
+            className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-ink-secondary transition-colors hover:bg-surface hover:text-ink-primary"
+          >
+            {showAdvanced ? (
+              <ChevronDown className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" />
+            )}
+            <span>{showAdvanced ? "收起高级参数" : "展开创意度与备用模型"}</span>
+          </button>
+          {dirtyStages.size > 0 && (
+            <button
+              type="button"
+              disabled={savingAll}
+              onClick={() => void handleSaveAllDirty()}
+              className="flex items-center gap-1 rounded-lg bg-accent px-3 py-1 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              <Save className="h-3 w-3" />
+              <span>{savingAll ? "保存中…" : `保存全部修改 (${dirtyStages.size})`}</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="divide-y divide-border-subtle rounded-xl border border-border-subtle bg-surface/40 px-4">
         {PIPELINE_STAGES.map((stageDef) => {
           const route = routeDrafts[stageDef.stage];
           if (!route) return null;
@@ -211,32 +407,32 @@ export function RoutesPricingTab({
           const isSaving = savingStage === stageDef.stage;
 
           return (
-            <div key={stageDef.stage} className="py-4 first:pt-1 last:pb-1">
-              <div className="mb-2.5 flex items-center justify-between gap-2">
-                <div className="flex items-baseline gap-2.5">
+            <div key={stageDef.stage} className="py-3.5">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="flex items-baseline gap-2">
                   <span className="text-[13px] font-medium text-ink-primary">
                     {stageDef.label}
                   </span>
                   <span className="text-xs text-ink-muted">{stageDef.desc}</span>
                 </div>
 
-                <button
-                  type="button"
-                  disabled={isSaving || !isDirty}
-                  onClick={() => void handleSaveRoute(stageDef.stage)}
-                  className="flex items-center gap-1 rounded-lg border border-accent/35 bg-accent-soft px-2.5 py-1 text-xs font-medium text-accent transition-colors hover:border-accent disabled:opacity-35"
-                >
-                  <Save className="h-3 w-3" />
-                  <span>{isSaving ? "保存中…" : "保存"}</span>
-                </button>
+                {isDirty && (
+                  <button
+                    type="button"
+                    disabled={isSaving}
+                    onClick={() => void handleSaveRoute(stageDef.stage)}
+                    className="flex items-center gap-1 rounded-lg border border-accent/35 bg-accent-soft px-2.5 py-1 text-xs font-medium text-accent transition-colors hover:border-accent disabled:opacity-40"
+                  >
+                    <Save className="h-3 w-3" />
+                    <span>{isSaving ? "保存中…" : "保存"}</span>
+                  </button>
+                )}
               </div>
 
-              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-[170px_1fr_92px_104px]">
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-[180px_1fr]">
                 {/* Provider Select */}
                 <div>
-                  <label className="mb-1 block text-xs text-ink-muted">
-                    模型服务
-                  </label>
+                  <label className="mb-1 block text-xs text-ink-muted">模型服务</label>
                   <select
                     value={route.providerId ?? ""}
                     onChange={(e) => {
@@ -256,7 +452,7 @@ export function RoutesPricingTab({
                         modelName: nextModel,
                       });
                     }}
-                    className="w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                    className="w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent"
                   >
                     <option value="">未选择</option>
                     {providers.map((p) => (
@@ -313,11 +509,9 @@ export function RoutesPricingTab({
                           });
                           return;
                         }
-                        updateRouteField(stageDef.stage, {
-                          modelName: val,
-                        });
+                        updateRouteField(stageDef.stage, { modelName: val });
                       }}
-                      className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                      className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent"
                     >
                       {!route.modelName && <option value="">选择模型</option>}
                       {route.modelName &&
@@ -338,262 +532,251 @@ export function RoutesPricingTab({
                       type="text"
                       value={route.modelName}
                       onChange={(e) =>
-                        updateRouteField(stageDef.stage, {
-                          modelName: e.target.value,
-                        })
+                        updateRouteField(stageDef.stage, { modelName: e.target.value })
                       }
                       placeholder={
                         selectedProv && modelSuggestions.length === 0
                           ? "该服务尚未启用模型，可手动输入或点右上角启用"
-                          : "输入模型 ID"
+                          : "输入模型名称"
                       }
-                      className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                      className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent"
                     />
                   )}
                 </div>
-
-                {/* Temperature */}
-                <div>
-                  <label className="mb-1 block text-xs text-ink-muted">
-                    创意度
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={2}
-                    step={0.05}
-                    value={route.temperature}
-                    onChange={(e) =>
-                      updateRouteField(stageDef.stage, {
-                        temperature: Number.parseFloat(e.target.value) || 0,
-                      })
-                    }
-                    className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-right text-xs text-ink-primary focus:border-accent focus:outline-none"
-                  />
-                </div>
-
-                {/* Max Tokens */}
-                <div>
-                  <label className="mb-1 block text-xs text-ink-muted">
-                    输出上限
-                  </label>
-                  <input
-                    type="number"
-                    min={256}
-                    max={200000}
-                    step={256}
-                    value={route.maxTokens}
-                    onChange={(e) =>
-                      updateRouteField(stageDef.stage, {
-                        maxTokens: Number.parseInt(e.target.value, 10) || 0,
-                      })
-                    }
-                    className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-right text-xs text-ink-primary focus:border-accent focus:outline-none"
-                  />
-                </div>
               </div>
 
-              {/* Optional Fallback Provider & Model */}
-              <div className="mt-2.5 grid grid-cols-1 gap-2.5 border-t border-border-subtle/70 pt-2.5 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs text-ink-muted">
-                    备用服务（主模型限流或故障时自动切换）
-                  </label>
-                  <select
-                    value={route.fallbackProviderId ?? ""}
-                    onChange={(e) => {
-                      const nextFbProvId = e.target.value
-                        ? Number.parseInt(e.target.value, 10)
+              {showAdvanced && (
+                <div className="mt-2.5 grid grid-cols-1 gap-2.5 border-t border-border-subtle/70 pt-2.5 sm:grid-cols-[100px_112px_1fr_1fr]">
+                  <div>
+                    <label className="mb-1 block text-xs text-ink-muted">创意度</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={2}
+                      step={0.05}
+                      value={route.temperature}
+                      onChange={(e) =>
+                        updateRouteField(stageDef.stage, {
+                          temperature: Number.parseFloat(e.target.value) || 0,
+                        })
+                      }
+                      className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-right text-xs text-ink-primary focus:border-accent"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-ink-muted">输出上限</label>
+                    <input
+                      type="number"
+                      min={256}
+                      max={200000}
+                      step={256}
+                      value={route.maxTokens}
+                      onChange={(e) =>
+                        updateRouteField(stageDef.stage, {
+                          maxTokens: Number.parseInt(e.target.value, 10) || 0,
+                        })
+                      }
+                      className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-right text-xs text-ink-primary focus:border-accent"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-ink-muted">备用服务</label>
+                    <select
+                      value={route.fallbackProviderId ?? ""}
+                      onChange={(e) => {
+                        const nextFbProvId = e.target.value
+                          ? Number.parseInt(e.target.value, 10)
+                          : undefined;
+                        const nextFbProv = nextFbProvId
+                          ? providerMap.get(nextFbProvId)
+                          : undefined;
+                        const nextFbModel = nextFbProvId
+                          ? nextFbProv?.models?.[0] ?? route.fallbackModelName ?? ""
+                          : "";
+                        updateRouteField(stageDef.stage, {
+                          fallbackProviderId: nextFbProvId,
+                          fallbackModelName: nextFbModel,
+                        });
+                      }}
+                      className="w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent"
+                    >
+                      <option value="">不设备用</option>
+                      {providers.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-ink-muted">备用模型</label>
+                    {(() => {
+                      const fbProv = route.fallbackProviderId
+                        ? providerMap.get(route.fallbackProviderId)
                         : undefined;
-                      const nextFbProv = nextFbProvId
-                        ? providerMap.get(nextFbProvId)
-                        : undefined;
-                      const nextFbModel = nextFbProvId
-                        ? nextFbProv?.models?.[0] ?? route.fallbackModelName ?? ""
-                        : "";
-                      updateRouteField(stageDef.stage, {
-                        fallbackProviderId: nextFbProvId,
-                        fallbackModelName: nextFbModel,
-                      });
-                    }}
-                    className="w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-                  >
-                    <option value="">不设备用</option>
-                    {providers.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-xs text-ink-muted">
-                    备用模型
-                  </label>
-                  {(() => {
-                    const fbProv = route.fallbackProviderId
-                      ? providerMap.get(route.fallbackProviderId)
-                      : undefined;
-                    const fbModels = fbProv?.models ?? [];
-                    if (fbModels.length > 0) {
+                      const fbModels = fbProv?.models ?? [];
+                      if (fbModels.length > 0) {
+                        return (
+                          <select
+                            value={route.fallbackModelName ?? ""}
+                            onChange={(e) =>
+                              updateRouteField(stageDef.stage, {
+                                fallbackModelName: e.target.value,
+                              })
+                            }
+                            className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent"
+                          >
+                            <option value="">选择备用模型</option>
+                            {fbModels.map((m) => (
+                              <option key={m} value={m}>
+                                {m}
+                              </option>
+                            ))}
+                          </select>
+                        );
+                      }
                       return (
-                        <select
+                        <input
+                          type="text"
+                          disabled={!route.fallbackProviderId}
                           value={route.fallbackModelName ?? ""}
                           onChange={(e) =>
                             updateRouteField(stageDef.stage, {
                               fallbackModelName: e.target.value,
                             })
                           }
-                          className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-                        >
-                          <option value="">选择备用模型</option>
-                          {fbModels.map((m) => (
-                            <option key={m} value={m}>
-                              {m}
-                            </option>
-                          ))}
-                        </select>
+                          placeholder={route.fallbackProviderId ? "输入备用模型" : "先选备用服务"}
+                          className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent disabled:opacity-50"
+                        />
                       );
-                    }
-                    return (
-                      <input
-                        type="text"
-                        disabled={!route.fallbackProviderId}
-                        value={route.fallbackModelName ?? ""}
-                        onChange={(e) =>
-                          updateRouteField(stageDef.stage, {
-                            fallbackModelName: e.target.value,
-                          })
-                        }
-                        placeholder={
-                          route.fallbackProviderId
-                            ? "输入备用模型 ID"
-                            : "请先选择备用服务"
-                        }
-                        className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none disabled:opacity-50"
-                      />
-                    );
-                  })()}
+                    })()}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           );
         })}
+      </div>
 
-        {/* Custom Model Pricing Section */}
-        <div className="mt-2 rounded-xl border border-border-subtle bg-surface/60 p-4">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <div>
-              <div className="text-sm font-medium text-ink-primary">
-                模型单价设置（每百万 Token）
-              </div>
-              <div className="text-xs text-ink-muted">
-                按你使用的官方或中转价格填写，首页用量面板将自动换算花费
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_92px_92px_72px_auto]">
-            <select
-              value={pricingProvider}
-              onChange={(e) => {
-                setPricingProvider(e.target.value);
-                const p = providers.find((item) => item.name === e.target.value);
-                if (p && p.models.length > 0 && !pricingModel) {
-                  setPricingModel(p.models[0] ?? "");
-                }
-              }}
-              className="rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-            >
-              <option value="">选择服务</option>
-              {providers.map((p) => (
-                <option key={p.id} value={p.name}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-            <input
-              type="text"
-              value={pricingModel}
-              onChange={(e) => setPricingModel(e.target.value)}
-              placeholder="模型 ID"
-              className="nib-mono rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
-            />
-            <input
-              type="number"
-              min={0}
-              step={0.1}
-              value={pricingInput}
-              onChange={(e) => setPricingInput(e.target.value)}
-              placeholder="输入/1M"
-              className="nib-mono rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-right text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
-            />
-            <input
-              type="number"
-              min={0}
-              step={0.1}
-              value={pricingOutput}
-              onChange={(e) => setPricingOutput(e.target.value)}
-              placeholder="输出/1M"
-              className="nib-mono rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-right text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
-            />
-            <select
-              value={pricingCurrency}
-              onChange={(e) =>
-                setPricingCurrency(e.target.value === "USD" ? "USD" : "CNY")
-              }
-              className="rounded-lg border border-border-subtle bg-canvas px-2 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-            >
-              <option value="CNY">CNY ¥</option>
-              <option value="USD">USD $</option>
-            </select>
-            <button
-              type="button"
-              disabled={savingPricing}
-              onClick={() => void handleSavePricing()}
-              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-40"
-            >
-              保存单价
-            </button>
-          </div>
-
-          {pricingList.length > 0 && (
-            <div className="mt-3 divide-y divide-border-subtle rounded-lg border border-border-subtle bg-canvas">
-              {pricingList.map((pr) => (
-                <div
-                  key={`${pr.providerName}-${pr.modelName}`}
-                  className="flex items-center justify-between gap-2 px-3 py-2 text-xs"
-                >
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="font-medium text-ink-primary">
-                      {pr.providerName}
-                    </span>
-                    <span className="nib-mono truncate text-ink-secondary">
-                      {pr.modelName}
-                    </span>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-3">
-                    <span className="nib-mono text-ink-secondary">
-                      输入 {pr.currency === "USD" ? "$" : "¥"}
-                      {pr.inputPricePerM} / 输出 {pr.currency === "USD" ? "$" : "¥"}
-                      {pr.outputPricePerM}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void handleDeletePricing(pr.providerName, pr.modelName)
-                      }
-                      className="rounded p-1 text-ink-muted hover:text-danger"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
+      {/* Collapsible Optional Model Pricing */}
+      <div className="mt-4 rounded-xl border border-border-subtle bg-surface/40">
+        <button
+          type="button"
+          onClick={() => setShowPricing((v) => !v)}
+          className="flex w-full items-center justify-between px-4 py-2.5 text-left text-xs font-medium text-ink-secondary transition-colors hover:text-ink-primary"
+        >
+          <span>自定义模型单价（可选，用于「用量统计」估算花费）</span>
+          {showPricing ? (
+            <ChevronDown className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5" />
           )}
-        </div>
+        </button>
+
+        {showPricing && (
+          <div className="border-t border-border-subtle px-4 py-3.5">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_88px_88px_72px_auto]">
+              <select
+                value={pricingProvider}
+                onChange={(e) => {
+                  setPricingProvider(e.target.value);
+                  const p = providers.find((item) => item.name === e.target.value);
+                  if (p && p.models.length > 0 && !pricingModel) {
+                    setPricingModel(p.models[0] ?? "");
+                  }
+                }}
+                className="rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent"
+              >
+                <option value="">选择服务</option>
+                {providers.map((p) => (
+                  <option key={p.id} value={p.name}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="text"
+                value={pricingModel}
+                onChange={(e) => setPricingModel(e.target.value)}
+                placeholder="模型名称"
+                className="nib-mono rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent"
+              />
+              <input
+                type="number"
+                min={0}
+                step={0.1}
+                value={pricingInput}
+                onChange={(e) => setPricingInput(e.target.value)}
+                placeholder="输入/百万"
+                className="nib-mono rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-right text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent"
+              />
+              <input
+                type="number"
+                min={0}
+                step={0.1}
+                value={pricingOutput}
+                onChange={(e) => setPricingOutput(e.target.value)}
+                placeholder="输出/百万"
+                className="nib-mono rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-right text-xs text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent"
+              />
+              <select
+                value={pricingCurrency}
+                onChange={(e) =>
+                  setPricingCurrency(e.target.value === "USD" ? "USD" : "CNY")
+                }
+                className="rounded-lg border border-border-subtle bg-canvas px-2 py-1.5 text-xs text-ink-primary focus:border-accent"
+              >
+                <option value="CNY">CNY ¥</option>
+                <option value="USD">USD $</option>
+              </select>
+              <button
+                type="button"
+                disabled={savingPricing}
+                onClick={() => void handleSavePricing()}
+                className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-40"
+              >
+                保存
+              </button>
+            </div>
+
+            {pricingList.length > 0 && (
+              <div className="mt-3 divide-y divide-border-subtle rounded-lg border border-border-subtle bg-canvas">
+                {pricingList.map((pr) => (
+                  <div
+                    key={`${pr.providerName}-${pr.modelName}`}
+                    className="flex items-center justify-between gap-2 px-3 py-2 text-xs"
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="font-medium text-ink-primary">
+                        {pr.providerName}
+                      </span>
+                      <span className="nib-mono truncate text-ink-secondary">
+                        {pr.modelName}
+                      </span>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-3">
+                      <span className="nib-mono text-ink-secondary">
+                        输入 {pr.currency === "USD" ? "$" : "¥"}
+                        {pr.inputPricePerM} / 输出 {pr.currency === "USD" ? "$" : "¥"}
+                        {pr.outputPricePerM}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void handleDeletePricing(pr.providerName, pr.modelName)
+                        }
+                        aria-label="删除单价"
+                        className="rounded p-1 text-ink-muted hover:text-danger"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

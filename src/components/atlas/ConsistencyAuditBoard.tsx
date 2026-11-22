@@ -31,6 +31,7 @@ import {
   getLocalAuditCategoryLabel,
 } from "../../lib/constants";
 import { DirtyRepairQueue } from "../architect/DirtyRepairQueue";
+import { ConfirmDialog, type ConfirmDialogState } from "../ui/ConfirmDialog";
 
 type AuditInnerTab = "local" | "ai" | "dirty";
 
@@ -39,6 +40,32 @@ const FINDING_STATUS_LABEL: Record<string, string> = {
   resolved: "已处理",
   ignored: "已忽略",
 };
+
+function readIgnoredLocalIds(bookId: number): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(`nib:ignored-local-audit:${bookId}`);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? new Set(arr.filter((x): x is string => typeof x === "string")) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function writeIgnoredLocalIds(bookId: number, ids: Set<string>) {
+  try {
+    if (ids.size === 0) {
+      window.localStorage.removeItem(`nib:ignored-local-audit:${bookId}`);
+    } else {
+      window.localStorage.setItem(
+        `nib:ignored-local-audit:${bookId}`,
+        JSON.stringify(Array.from(ids))
+      );
+    }
+  } catch {
+    // ignore storage quota errors
+  }
+}
 
 export function ConsistencyAuditBoard() {
   const {
@@ -56,14 +83,38 @@ export function ConsistencyAuditBoard() {
 
   const [innerTab, setInnerTab] = useState<AuditInnerTab>("local");
 
-  // 第一层：0 成本本地全书秒扫
+  // 第一层：快速体检（本地）
   const [absentThreshold, setAbsentThreshold] = useState(20);
   const [maxDayJump, setMaxDayJump] = useState(365);
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [localReport, setLocalReport] = useState<LocalAuditReport | null>(null);
   const [localLoading, setLocalLoading] = useState(false);
+  const [ignoredLocalIds, setIgnoredLocalIds] = useState<Set<string>>(() =>
+    activeBook ? readIgnoredLocalIds(activeBook.id) : new Set()
+  );
 
-  // 第二层：按需 AI 深度语义审计
+  useEffect(() => {
+    setIgnoredLocalIds(activeBook ? readIgnoredLocalIds(activeBook.id) : new Set());
+  }, [activeBook]);
+
+  const ignoreLocalFinding = (id: string) => {
+    if (!activeBook) return;
+    setIgnoredLocalIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      writeIgnoredLocalIds(activeBook.id, next);
+      return next;
+    });
+  };
+
+  const restoreIgnoredLocal = () => {
+    if (!activeBook) return;
+    const empty = new Set<string>();
+    setIgnoredLocalIds(empty);
+    writeIgnoredLocalIds(activeBook.id, empty);
+  };
+
+  // 第二层：深度剧情审计（AI）
   const [scopeType, setScopeType] = useState<ConsistencyAuditScopeType>("volume");
   const [selectedVolumeId, setSelectedVolumeId] = useState<string>("");
   const [startSeqDraft, setStartSeqDraft] = useState("1");
@@ -73,6 +124,8 @@ export function ConsistencyAuditBoard() {
   const [aiRunning, setAiRunning] = useState(false);
   const [aiListLoading, setAiListLoading] = useState(false);
   const [updatingFindingKey, setUpdatingFindingKey] = useState<string | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
 
   const latestSeq = useMemo(
     () => chapters.reduce((max, c) => (c.globalSeq > max ? c.globalSeq : max), 0),
@@ -224,18 +277,30 @@ export function ConsistencyAuditBoard() {
     }
   };
 
-  const handleDeleteReport = async (reportId: number) => {
-    try {
-      await MemoryService.deleteConsistencyReport(reportId);
-      await loadAIReports();
-      notify({ tone: "ok", message: "已删除审计报告" });
-    } catch (err) {
-      notify({
-        tone: "danger",
-        message: "删除审计报告失败",
-        detail: formatErrorMessage(err),
-      });
-    }
+  const requestDeleteReport = (rep: BookConsistencyReport) => {
+    setConfirmDialog({
+      title: "删除审计报告",
+      message: `确定删除「第 ${formatSeq(rep.startSeq)}–${formatSeq(rep.endSeq)} 章」的 AI 审计报告？删除后无法恢复。`,
+      confirmLabel: "删除",
+      danger: true,
+      onConfirm: async () => {
+        setConfirmBusy(true);
+        try {
+          await MemoryService.deleteConsistencyReport(rep.id);
+          setConfirmDialog(null);
+          await loadAIReports();
+          notify({ tone: "ok", message: "已删除审计报告" });
+        } catch (err) {
+          notify({
+            tone: "danger",
+            message: "删除审计报告失败",
+            detail: formatErrorMessage(err),
+          });
+        } finally {
+          setConfirmBusy(false);
+        }
+      },
+    });
   };
 
   const handleJumpFromLocalFinding = async (f: LocalAuditFinding) => {
@@ -276,11 +341,28 @@ export function ConsistencyAuditBoard() {
     await jumpToChapter(ch.id);
   };
 
-  const filteredLocalFindings = useMemo(() => {
+  const activeLocalFindings = useMemo(() => {
     const all = localReport?.findings ?? [];
-    if (categoryFilter === "all") return all;
-    return all.filter((f) => f.category === categoryFilter);
-  }, [localReport, categoryFilter]);
+    return all.filter((f) => !ignoredLocalIds.has(f.id));
+  }, [localReport, ignoredLocalIds]);
+
+  const ignoredLocalCount = useMemo(() => {
+    const all = localReport?.findings ?? [];
+    return all.length - activeLocalFindings.length;
+  }, [localReport, activeLocalFindings]);
+
+  const localCategoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const f of activeLocalFindings) {
+      counts[f.category] = (counts[f.category] ?? 0) + 1;
+    }
+    return counts;
+  }, [activeLocalFindings]);
+
+  const filteredLocalFindings = useMemo(() => {
+    if (categoryFilter === "all") return activeLocalFindings;
+    return activeLocalFindings.filter((f) => f.category === categoryFilter);
+  }, [activeLocalFindings, categoryFilter]);
 
   const activeAIReport = useMemo(
     () => aiReports.find((r) => r.id === activeReportId) ?? aiReports[0] ?? null,
@@ -307,10 +389,10 @@ export function ConsistencyAuditBoard() {
               }`}
             >
               <ShieldCheck className="h-3.5 w-3.5" />
-              <span>第一层：0 成本本地全书秒扫</span>
-              {localReport && localReport.summary.totalFindings > 0 && (
-                <span className="nib-mono rounded-full bg-danger-soft px-1.5 py-0.5 text-[10px] text-danger">
-                  {localReport.summary.totalFindings}
+              <span>快速体检（本地）</span>
+              {activeLocalFindings.length > 0 && (
+                <span className="nib-mono rounded-full bg-danger-soft px-1.5 py-0.5 text-[11px] text-danger">
+                  {activeLocalFindings.length}
                 </span>
               )}
             </button>
@@ -325,9 +407,9 @@ export function ConsistencyAuditBoard() {
               }`}
             >
               <Sparkles className="h-3.5 w-3.5" />
-              <span>第二层：AI 深度语义审计</span>
+              <span>深度剧情审计（AI）</span>
               {aiReports.length > 0 && (
-                <span className="nib-mono rounded-full bg-canvas px-1.5 py-0.5 text-[10px] text-ink-muted">
+                <span className="nib-mono rounded-full bg-canvas px-1.5 py-0.5 text-[11px] text-ink-muted">
                   {aiReports.length}
                 </span>
               )}
@@ -343,9 +425,9 @@ export function ConsistencyAuditBoard() {
               }`}
             >
               <AlertTriangle className="h-3.5 w-3.5" />
-              <span>脏标串联修复队列</span>
+              <span>前文改动待核对</span>
               {dirtyCount > 0 && (
-                <span className="nib-mono rounded-full bg-warn-soft px-1.5 py-0.5 text-[10px] text-warn">
+                <span className="nib-mono rounded-full bg-warn-soft px-1.5 py-0.5 text-[11px] text-warn">
                   {dirtyCount}
                 </span>
               )}
@@ -408,67 +490,72 @@ export function ConsistencyAuditBoard() {
                     localLoading ? "animate-spin" : ""
                   }`}
                 />
-                <span>重新秒扫</span>
+                <span>重新体检</span>
               </button>
             </div>
 
             {/* Category Filter Chips */}
             {localReport && (
-              <div className="flex flex-wrap items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setCategoryFilter("all")}
-                  className={`rounded-full border px-3 py-1 text-xs transition-colors ${
-                    categoryFilter === "all"
-                      ? "border-accent bg-accent-soft font-medium text-accent"
-                      : "border-border-subtle bg-surface text-ink-secondary hover:text-ink-primary"
-                  }`}
-                >
-                  全部 ({localReport.summary.totalFindings})
-                </button>
-                {LOCAL_AUDIT_CATEGORIES.map((cat) => {
-                  const countMap: Record<string, number> = {
-                    dead_reappear: localReport.summary.deadReappearCount,
-                    absent_entity: localReport.summary.absentEntityCount,
-                    overdue_foreshadow: localReport.summary.overdueForeshadowCount,
-                    timeline_anomaly: localReport.summary.timelineAnomalyCount,
-                    pending_delta: localReport.summary.pendingDeltaCount,
-                    upstream_dirty: localReport.summary.upstreamDirtyCount,
-                  };
-                  const count = countMap[cat.value] ?? 0;
-                  return (
-                    <button
-                      key={cat.value}
-                      type="button"
-                      onClick={() => setCategoryFilter(cat.value)}
-                      className={`rounded-full border px-3 py-1 text-xs transition-colors ${
-                        categoryFilter === cat.value
-                          ? "border-accent bg-accent-soft font-medium text-accent"
-                          : "border-border-subtle bg-surface text-ink-secondary hover:text-ink-primary"
-                      }`}
-                    >
-                      {cat.shortLabel} ({count})
-                    </button>
-                  );
-                })}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setCategoryFilter("all")}
+                    className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                      categoryFilter === "all"
+                        ? "border-accent bg-accent-soft font-medium text-accent"
+                        : "border-border-subtle bg-surface text-ink-secondary hover:text-ink-primary"
+                    }`}
+                  >
+                    全部 ({activeLocalFindings.length})
+                  </button>
+                  {LOCAL_AUDIT_CATEGORIES.map((cat) => {
+                    const count = localCategoryCounts[cat.value] ?? 0;
+                    return (
+                      <button
+                        key={cat.value}
+                        type="button"
+                        onClick={() => setCategoryFilter(cat.value)}
+                        className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                          categoryFilter === cat.value
+                            ? "border-accent bg-accent-soft font-medium text-accent"
+                            : "border-border-subtle bg-surface text-ink-secondary hover:text-ink-primary"
+                        }`}
+                      >
+                        {cat.shortLabel} ({count})
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {ignoredLocalCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={restoreIgnoredLocal}
+                    className="flex items-center gap-1 text-xs text-ink-muted hover:text-accent"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                    <span>恢复已忽略的 {ignoredLocalCount} 项</span>
+                  </button>
+                )}
               </div>
             )}
 
             {/* Findings List */}
             {localLoading && !localReport ? (
               <div className="py-16 text-center text-xs text-ink-muted">
-                正在本地秒扫全书一致性…
+                正在扫描全书一致性…
               </div>
             ) : filteredLocalFindings.length === 0 ? (
               <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border-strong bg-surface/40 py-14 text-center">
                 <CheckCircle2 className="h-7 w-7 text-ok" />
                 <div className="text-xs font-medium text-ink-primary">
                   {categoryFilter === "all"
-                    ? "全书本地确定性体检全部通过"
-                    : "当前分类下暂无告警问题"}
+                    ? "全书快速体检全部通过"
+                    : "当前分类下暂无提醒"}
                 </div>
-                <div className="text-[11px] text-ink-muted">
-                  可切至「第二层：AI 深度语义审计」排查战力崩坏与人物动机暗冲突
+                <div className="text-xs text-ink-muted">
+                  可切至「深度剧情审计（AI）」排查战力崩坏与人物动机冲突
                 </div>
               </div>
             ) : (
@@ -485,7 +572,7 @@ export function ConsistencyAuditBoard() {
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <div className="flex flex-wrap items-center gap-2">
                           <span
-                            className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] font-medium ${
+                            className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium ${
                               isErr
                                 ? "bg-danger-soft text-danger"
                                 : "bg-warn-soft text-warn"
@@ -508,24 +595,35 @@ export function ConsistencyAuditBoard() {
                           </span>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => void handleJumpFromLocalFinding(f)}
-                          className="flex shrink-0 items-center gap-1 rounded-md border border-border-subtle bg-canvas px-2.5 py-1 text-xs text-accent hover:border-accent"
-                        >
-                          <ExternalLink className="h-3 w-3" />
-                          <span>
-                            {f.jumpTarget === "studio"
-                              ? "跳转写作台"
-                              : f.jumpTarget === "architect"
-                              ? "跳转大纲"
-                              : f.jumpTarget === "atlas_entity"
-                              ? "查看档案"
-                              : f.jumpTarget === "dirty_queue"
-                              ? "打开修复队列"
-                              : "查看伏笔期限"}
-                          </span>
-                        </button>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => ignoreLocalFinding(f.id)}
+                            title="忽略此提醒（随时可恢复）"
+                            className="flex items-center gap-1 rounded-md border border-border-subtle bg-canvas px-2 py-1 text-xs text-ink-muted hover:border-border-strong hover:text-ink-primary"
+                          >
+                            <EyeOff className="h-3 w-3" />
+                            <span>忽略</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleJumpFromLocalFinding(f)}
+                            className="flex items-center gap-1 rounded-md border border-border-subtle bg-canvas px-2.5 py-1 text-xs text-accent hover:border-accent"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            <span>
+                              {f.jumpTarget === "studio"
+                                ? "去写正文"
+                                : f.jumpTarget === "architect"
+                                ? "去大纲"
+                                : f.jumpTarget === "atlas_entity"
+                                ? "查看档案"
+                                : f.jumpTarget === "dirty_queue"
+                                ? "查看待核列表"
+                                : "查看伏笔期限"}
+                            </span>
+                          </button>
+                        </div>
                       </div>
 
                       <p className="text-xs leading-relaxed text-ink-secondary">
@@ -552,10 +650,10 @@ export function ConsistencyAuditBoard() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <h3 className="text-sm font-medium text-ink-primary">
-                    按需触发 AI 跨章深度语义审计
+                    AI 跨章剧情审计
                   </h3>
                   <p className="mt-0.5 text-xs text-ink-muted">
-                    汇总分层摘要、状态演变、世界铁律与金手指规则交由 critic 模型排查战力崩坏与动机矛盾
+                    汇总前情摘要、状态演变与世界铁律，由 AI 检查跨章战力崩坏与人物动机冲突
                   </p>
                 </div>
 
@@ -703,7 +801,7 @@ export function ConsistencyAuditBoard() {
                       </div>
                       <button
                         type="button"
-                        onClick={() => void handleDeleteReport(activeAIReport.id)}
+                        onClick={() => requestDeleteReport(activeAIReport)}
                         title="删除此审计报告"
                         className="rounded p-1.5 text-ink-muted hover:bg-elevated hover:text-danger"
                       >
@@ -853,6 +951,12 @@ export function ConsistencyAuditBoard() {
           <DirtyRepairQueue bookId={activeBook.id} />
         )}
       </div>
+
+      <ConfirmDialog
+        dialog={confirmDialog}
+        busy={confirmBusy}
+        onClose={() => setConfirmDialog(null)}
+      />
     </div>
   );
 }

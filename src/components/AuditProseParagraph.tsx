@@ -34,7 +34,7 @@ interface AuditProseParagraphProps {
   polishing: boolean;
   applyingDiffId: string | null;
   entitySnapshots?: EntitySnapshot[];
-  onFocus: (paragraphIndex: number) => void;
+  onFocus: (paragraphIndex: number | null) => void;
   onRequestPolish: (paragraphIndex: number) => void;
   onApplyDiff: (
     diffId: string,
@@ -161,8 +161,8 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
     }
   }, [isFocused]);
 
-  // Tab (Accept) / Esc (Ignore) keyboard shortcuts for focused paragraph's pending diff,
-  // preserving any edited customReplacement text.
+  // Explicit Alt+Enter shortcut to accept focused paragraph's pending diff,
+  // avoiding hijacking standard Tab keyboard navigation or Escape dismissal.
   useEffect(() => {
     if (!isFocused || !pendingDiff) return;
     const onKey = (e: KeyboardEvent) => {
@@ -175,16 +175,13 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
           targetEl.isContentEditable);
       if (isTypingTarget) return;
 
-      if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      if (e.altKey && e.key === "Enter" && !e.ctrlKey && !e.metaKey) {
+        if (document.querySelector('[data-nib-modal="true"]')) return;
         e.preventDefault();
         const trimmed = customReplacement.trim();
         const override =
           trimmed && trimmed !== pendingDiff.replacement ? trimmed : undefined;
         onApplyDiff(pendingDiff.id, true, override);
-      } else if (e.key === "Escape") {
-        if (document.querySelector('[data-nib-modal="true"]')) return;
-        e.preventDefault();
-        onApplyDiff(pendingDiff.id, false);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -304,7 +301,7 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
     <div
       data-paragraph-index={paragraphIndex}
       onClick={() => {
-        if (hasAnyFlag) onFocus(paragraphIndex);
+        onFocus(hasAnyFlag ? paragraphIndex : null);
       }}
       className={`group relative mb-[var(--prose-paragraph-gap)] rounded-lg transition-colors ${
         isFocused
@@ -316,27 +313,28 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
     >
       {/* Left Gutter Paragraph Number & Issue Dot */}
       <div
-        className={`mb-1 flex items-center justify-between text-[11px] select-none ${
+        className={`mb-1 flex items-center justify-between text-xs select-none ${
           hasAnyFlag || isFocused
             ? "opacity-100"
             : "opacity-0 transition-opacity group-hover:opacity-65"
         }`}
       >
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="nib-mono text-[10.5px] text-ink-muted">
-            P{paragraphIndex + 1}
+          <span className="nib-mono text-[11px] text-ink-muted">
+            第 {paragraphIndex + 1} 段
           </span>
 
           {paragraphLevelIssues.map((iss, idx) => (
             <button
               key={idx}
               type="button"
+              onDoubleClick={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
                 onFocus(paragraphIndex);
                 setSelectedIssue((prev) => (prev === iss ? null : iss));
               }}
-              className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] ${
+              className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ${
                 getLintSeverityMeta(iss.severity).badgeClass
               }`}
             >
@@ -350,7 +348,7 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
             return (
               <span
                 key={cf.id}
-                className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium ${dimMeta.badgeClass}`}
+                className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-medium ${dimMeta.badgeClass}`}
               >
                 <span>{dimMeta.shortLabel ?? dimMeta.label}</span>
               </span>
@@ -362,15 +360,16 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
           <button
             type="button"
             disabled={polishing}
+            onDoubleClick={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               onFocus(paragraphIndex);
               onRequestPolish(paragraphIndex);
             }}
-            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] font-medium text-accent transition-colors hover:bg-accent-soft disabled:opacity-40"
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium text-accent transition-colors hover:bg-accent-soft disabled:opacity-40"
           >
-            <Wand2 className="h-2.5 w-2.5" />
-            <span>{polishing ? "润色中…" : "手术润色"}</span>
+            <Wand2 className="h-3 w-3" />
+            <span>{polishing ? "润色中…" : "局部润色"}</span>
           </button>
         )}
       </div>
@@ -383,24 +382,25 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
         )}
       </p>
 
-      {/* Inline Lint Issue Tooltip Card (when user clicks an underline or paragraph badge) */}
+      {/* Inline Lint Issue Tooltip Card */}
       {isFocused && activeIssue && !pendingDiff && (
         <div
           onClick={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
           className="mt-2.5 flex items-start justify-between gap-3 rounded-lg border border-border-strong bg-elevated px-3.5 py-2.5 font-ui text-xs"
         >
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-1.5">
               <span
-                className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium ${
+                className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-medium ${
                   getLintSeverityMeta(activeIssue.severity).badgeClass
                 }`}
               >
-                <ShieldAlert className="h-2.5 w-2.5" />
+                <ShieldAlert className="h-3 w-3" />
                 {getDeaiCategoryLabel(activeIssue.category)}
               </span>
               {activeIssue.matchedText && (
-                <span className="rounded bg-danger-soft px-1.5 py-0.5 text-[11px] font-medium text-danger">
+                <span className="rounded bg-danger-soft px-1.5 py-0.5 text-xs font-medium text-danger">
                   「{activeIssue.matchedText}」
                 </span>
               )}
@@ -420,7 +420,7 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
                   onQuickReplaceIssue(activeIssue, activeIssue.replacement!);
                   setSelectedIssue(null);
                 }}
-                className="flex items-center gap-1 rounded-md bg-ok px-2.5 py-1 text-[11px] font-semibold text-white hover:opacity-90"
+                className="flex items-center gap-1 rounded-md bg-ok px-2.5 py-1 text-xs font-semibold text-canvas hover:opacity-90"
               >
                 <Check className="h-3 w-3" />
                 <span>替换为「{activeIssue.replacement}」</span>
@@ -430,14 +430,15 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
               type="button"
               disabled={polishing}
               onClick={() => onRequestPolish(paragraphIndex)}
-              className="flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-[11px] font-semibold text-canvas hover:opacity-90 disabled:opacity-45"
+              className="flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-canvas hover:opacity-90 disabled:opacity-45"
             >
               <Wand2 className="h-3 w-3" />
-              <span>生成替换</span>
+              <span>AI 改写</span>
             </button>
             <button
               type="button"
               onClick={() => setSelectedIssue(null)}
+              aria-label="关闭提示"
               className="rounded p-1 text-ink-muted hover:text-ink-primary"
             >
               <X className="h-3.5 w-3.5" />
@@ -454,9 +455,10 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
         !activeIssue.replacement && (
           <div
             onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
             className="mt-1.5 flex items-center gap-2 rounded-lg border border-border-subtle bg-surface px-3 py-2 font-ui text-xs"
           >
-            <span className="shrink-0 text-[11px] text-ink-secondary">
+            <span className="shrink-0 text-xs text-ink-secondary">
               敏感词替换：
             </span>
             <input
@@ -464,7 +466,7 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
               value={inlineSensitiveRep}
               onChange={(e) => setInlineSensitiveRep(e.target.value)}
               placeholder="输入安全替换词（留空则直接删去）"
-              className="min-w-0 flex-1 rounded border border-border-subtle bg-canvas px-2 py-1 text-xs text-ink-primary focus:border-accent focus:outline-none"
+              className="min-w-0 flex-1 rounded border border-border-subtle bg-canvas px-2 py-1 text-xs text-ink-primary focus:border-accent"
             />
             <button
               type="button"
@@ -472,7 +474,7 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
                 onQuickReplaceIssue(activeIssue, inlineSensitiveRep);
                 setSelectedIssue(null);
               }}
-              className="rounded bg-ok px-2.5 py-1 text-[11px] font-semibold text-white hover:opacity-90"
+              className="rounded bg-ok px-2.5 py-1 text-xs font-semibold text-canvas hover:opacity-90"
             >
               {inlineSensitiveRep ? "一键替换" : "直接删去"}
             </button>
@@ -483,6 +485,7 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
       {isFocused && selectedEntity && !pendingDiff && (
         <div
           onClick={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
           className="mt-2.5 rounded-lg border border-accent/40 bg-elevated px-3.5 py-2.5 font-ui text-xs"
         >
           <div className="flex items-center justify-between gap-2">
@@ -491,12 +494,12 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
               <span className="font-medium text-ink-primary">
                 {selectedEntity.entity.name}
               </span>
-              <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] text-ink-secondary">
+              <span className="rounded bg-surface px-1.5 py-0.5 text-xs text-ink-secondary">
                 {getEntityKindLabel(selectedEntity.entity.kind)}
               </span>
               {selectedEntity.pendingEventCount > 0 && (
-                <span className="rounded bg-warn-soft px-1.5 py-0.5 text-[10px] text-warn">
-                  含 {selectedEntity.pendingEventCount} 条未审状态
+                <span className="rounded bg-warn-soft px-1.5 py-0.5 text-xs text-warn">
+                  含 {selectedEntity.pendingEventCount} 条待确认变化
                 </span>
               )}
             </div>
@@ -505,14 +508,15 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
                 <button
                   type="button"
                   onClick={() => onInspectEntity(selectedEntity)}
-                  className="rounded border border-border-subtle bg-surface px-2 py-0.5 text-[11px] text-accent hover:border-accent/50"
+                  className="rounded border border-border-subtle bg-surface px-2 py-0.5 text-xs text-accent hover:border-accent/50"
                 >
-                  在参照栏查看
+                  在对照栏查看
                 </button>
               )}
               <button
                 type="button"
                 onClick={() => setSelectedEntity(null)}
+                aria-label="关闭档案卡片"
                 className="rounded p-1 text-ink-muted hover:text-ink-primary"
               >
                 <X className="h-3.5 w-3.5" />
@@ -520,7 +524,7 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
             </div>
           </div>
           {selectedEntity.entity.summary && (
-            <div className="mt-1.5 text-[11.5px] leading-relaxed text-ink-secondary">
+            <div className="mt-1.5 text-xs leading-relaxed text-ink-secondary">
               {selectedEntity.entity.summary}
             </div>
           )}
@@ -529,7 +533,7 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
               {Object.entries(selectedEntity.effectiveAttributes).map(([k, v]) => (
                 <span
                   key={k}
-                  className="rounded border border-border-subtle bg-canvas px-1.5 py-0.5 text-[10.5px] text-ink-primary"
+                  className="rounded border border-border-subtle bg-canvas px-1.5 py-0.5 text-xs text-ink-primary"
                 >
                   <span className="text-ink-muted">{k}：</span>
                   {String(v)}
@@ -544,6 +548,7 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
       {isFocused && criticFindings.length > 0 && !pendingDiff && (
         <div
           onClick={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
           className="mt-2 flex flex-col gap-1.5 rounded-lg border border-warn/35 bg-warn-soft/25 px-3.5 py-2.5 font-ui text-xs"
         >
           {criticFindings.map((cf) => {
@@ -552,17 +557,17 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
               <div key={cf.id} className="flex flex-col gap-0.5">
                 <div className="flex items-center gap-1.5 font-medium text-ink-primary">
                   <span
-                    className={`rounded border px-1.5 py-0.5 text-[10px] ${dimMeta.badgeClass}`}
+                    className={`rounded border px-1.5 py-0.5 text-[11px] ${dimMeta.badgeClass}`}
                   >
                     {dimMeta.label}
                   </span>
                   <span>{cf.title}</span>
                 </div>
                 {cf.detail && (
-                  <div className="text-[11.5px] text-ink-secondary">{cf.detail}</div>
+                  <div className="text-xs text-ink-secondary">{cf.detail}</div>
                 )}
                 {cf.suggestion && (
-                  <div className="text-[11.5px] text-accent">
+                  <div className="text-xs text-accent">
                     建议：{cf.suggestion}
                   </div>
                 )}
@@ -572,26 +577,27 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
         </div>
       )}
 
-      {/* In-Place Surgical Diff Floating Card (docs/04-ui-ux-design.md §3.2) */}
+      {/* In-Place Surgical Diff Floating Card */}
       {pendingDiff && (
         <div
           onClick={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
           className="mt-3 rounded-xl border border-accent/45 bg-elevated p-3.5 font-ui text-xs"
         >
           <div className="flex items-center justify-between gap-2 border-b border-border-subtle pb-2">
             <div className="flex min-w-0 items-center gap-1.5">
               <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" />
               <span className="truncate font-medium text-ink-primary">
-                手术润色建议：{pendingDiff.reason || "消除 AI 套话与灌水"}
+                局部润色建议：{pendingDiff.reason || "优化语句与节奏"}
               </span>
             </div>
             <button
               type="button"
               onClick={() => setEditingDiff((v) => !v)}
-              className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-ink-secondary hover:bg-surface hover:text-ink-primary"
+              className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs text-ink-secondary hover:bg-surface hover:text-ink-primary"
             >
-              <Pencil className="h-2.5 w-2.5" />
-              <span>{editingDiff ? "完成微调" : "微调译文"}</span>
+              <Pencil className="h-3 w-3" />
+              <span>{editingDiff ? "完成微调" : "微调改写"}</span>
             </button>
           </div>
 
@@ -606,7 +612,7 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
                 autoFocus
                 value={customReplacement}
                 onChange={(e) => setCustomReplacement(e.target.value)}
-                className="w-full resize-y rounded-md border border-ok/50 bg-canvas px-3 py-2 font-prose text-[14.5px] leading-relaxed text-ink-primary focus:border-accent focus:outline-none"
+                className="w-full resize-y rounded-md border border-ok/50 bg-canvas px-3 py-2 font-prose text-[14.5px] leading-relaxed text-ink-primary focus:border-accent"
               />
             ) : (
               <div className="rounded-md border border-ok/35 bg-ok-soft/45 px-3 py-2 font-prose text-[14.5px] leading-relaxed text-ink-primary">
@@ -616,8 +622,8 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
           </div>
 
           <div className="mt-3 flex items-center justify-between gap-2">
-            <span className="text-[11px] text-ink-muted">
-              采纳前自动备份当前版本至历史快照
+            <span className="text-xs text-ink-muted">
+              采纳前自动保存历史快照（Alt+Enter 快速采纳）
             </span>
             <div className="flex items-center gap-2">
               <button
@@ -627,7 +633,7 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
                 className="flex items-center gap-1 rounded-md border border-border-subtle bg-surface px-3 py-1 text-xs text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary disabled:opacity-45"
               >
                 <X className="h-3.5 w-3.5" />
-                <span>忽略 (Esc)</span>
+                <span>忽略</span>
               </button>
               <button
                 type="button"
@@ -640,10 +646,10 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
                       : undefined;
                   onApplyDiff(pendingDiff.id, true, override);
                 }}
-                className="flex items-center gap-1 rounded-md bg-ok px-3.5 py-1 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-45"
+                className="flex items-center gap-1 rounded-md bg-ok px-3.5 py-1 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-45"
               >
                 <Check className="h-3.5 w-3.5" />
-                <span>采纳替换 (Tab)</span>
+                <span>采纳替换</span>
               </button>
             </div>
           </div>

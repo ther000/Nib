@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Sparkles } from "lucide-react";
+import { AlertTriangle, Plus, Sparkles } from "lucide-react";
 import {
   LibraryService,
   type Beat,
@@ -19,7 +19,6 @@ import {
   VolumeFormModal,
   type VolumeDialogState,
 } from "../components/architect/VolumeFormModal";
-import { DirtyRepairQueue } from "../components/architect/DirtyRepairQueue";
 import { ConfirmDialog, type ConfirmDialogState } from "../components/ui/ConfirmDialog";
 import { formatErrorMessage, formatSeq } from "../lib/constants";
 
@@ -218,9 +217,10 @@ export function ArchitectView() {
           });
       }
       if (beatsDirtyRef.current) {
-        const curBeats = beatsDraftRef.current;
-        if (curBeats.every((b) => b.summary.trim().length > 0)) {
-          const payload: Beat[] = curBeats.map((b, idx) => ({
+        // 切章时仅过滤掉意外留空的空白新节拍，避免整章其他节拍修改被静默丢弃
+        const validBeats = beatsDraftRef.current.filter((b) => b.summary.trim().length > 0);
+        if (validBeats.length > 0 || beatsDraftRef.current.length === 0) {
+          const payload: Beat[] = validBeats.map((b, idx) => ({
             id: b.id,
             chapterId: chap.id,
             seq: idx + 1,
@@ -321,7 +321,7 @@ export function ArchitectView() {
       setPacingRefreshKey((k) => k + 1);
       return true;
     } catch (err) {
-      notify({ tone: "danger", message: "保存章节元信息失败", detail: formatErrorMessage(err) });
+      notify({ tone: "danger", message: "保存章节信息失败", detail: formatErrorMessage(err) });
       return false;
     } finally {
       setSavingMeta(false);
@@ -390,13 +390,13 @@ export function ArchitectView() {
       savedSomething = true;
     }
     if (savedSomething) {
-      notify({ tone: "ok", message: "编排已保存" });
+      notify({ tone: "ok", message: "大纲已保存" });
       return true;
     }
     const okMeta = await handleSaveMeta();
     const okBeats = okMeta ? await handleSaveBeats() : false;
     if (okMeta && okBeats) {
-      notify({ tone: "ok", message: "编排已保存" });
+      notify({ tone: "ok", message: "大纲已保存" });
       return true;
     }
     return false;
@@ -416,7 +416,7 @@ export function ArchitectView() {
       mode: "create",
       id: 0,
       seq: 0,
-      title: `第${nextNum}卷 `,
+      title: `第${nextNum}卷`,
       goal: "",
       climaxPlan: "",
     });
@@ -463,15 +463,32 @@ export function ArchitectView() {
     }
   };
 
-  const handleDeleteVolume = async (volId: number) => {
+  const handleDeleteVolume = (volId: number) => {
     if (!activeBook) return;
-    try {
-      await LibraryService.deleteVolume(volId);
-      await refreshBookData(activeBook.id, null);
-      notify({ tone: "ok", message: "已删除该卷" });
-    } catch (err) {
-      notify({ tone: "danger", message: "删除卷失败", detail: formatErrorMessage(err) });
-    }
+    const vol = volumes.find((v) => v.id === volId);
+    const volChapCount = (chaptersByVolume.get(volId) ?? []).length;
+    setConfirmDialog({
+      title: `删除分卷「${vol?.title ?? "未命名"}」`,
+      message:
+        volChapCount > 0
+          ? `该卷下共有 ${volChapCount} 章，删除后分卷及其章节会移入回收站（30 天内可在设置中恢复）。确定删除吗？`
+          : "确定删除这个空分卷吗？",
+      confirmLabel: "确认删除",
+      danger: true,
+      onConfirm: async () => {
+        setBatchBusy(true);
+        try {
+          await LibraryService.deleteVolume(volId);
+          setConfirmDialog(null);
+          await refreshBookData(activeBook.id, null);
+          notify({ tone: "ok", message: "已删除该分卷" });
+        } catch (err) {
+          notify({ tone: "danger", message: "删除分卷失败", detail: formatErrorMessage(err) });
+        } finally {
+          setBatchBusy(false);
+        }
+      },
+    });
   };
 
   const handleMoveChapter = async (chapId: number, direction: "up" | "down") => {
@@ -488,17 +505,30 @@ export function ArchitectView() {
     }
   };
 
-  const handleDeleteChapter = async (chapId: number) => {
+  const handleDeleteChapter = (chapId: number) => {
     if (!activeBook) return;
-    try {
-      await LibraryService.deleteChapter(chapId);
-      const nextPreferred = activeChapterId === chapId ? null : activeChapterId;
-      await refreshBookData(activeBook.id, nextPreferred);
-      setPacingRefreshKey((k) => k + 1);
-      notify({ tone: "ok", message: "已删除章节并重排章序" });
-    } catch (err) {
-      notify({ tone: "danger", message: "删除章节失败", detail: formatErrorMessage(err) });
-    }
+    const chap = chapters.find((c) => c.id === chapId);
+    setConfirmDialog({
+      title: `删除第 ${chap ? formatSeq(chap.globalSeq) : ""} 章`,
+      message: `确定删除「${chap?.title ?? "该章节"}」吗？删除后可在设置里的回收站恢复，后续章号会自动重排。`,
+      confirmLabel: "确认删除",
+      danger: true,
+      onConfirm: async () => {
+        setBatchBusy(true);
+        try {
+          await LibraryService.deleteChapter(chapId);
+          setConfirmDialog(null);
+          const nextPreferred = activeChapterId === chapId ? null : activeChapterId;
+          await refreshBookData(activeBook.id, nextPreferred);
+          setPacingRefreshKey((k) => k + 1);
+          notify({ tone: "ok", message: "已删除章节并重排章序" });
+        } catch (err) {
+          notify({ tone: "danger", message: "删除章节失败", detail: formatErrorMessage(err) });
+        } finally {
+          setBatchBusy(false);
+        }
+      },
+    });
   };
 
   const handleMoveChapterToVolume = async (
@@ -850,16 +880,29 @@ export function ArchitectView() {
             )}
           </div>
         ) : (
-          <div className="flex-1 overflow-y-auto px-8 py-6">
-            <div className="mx-auto flex w-full max-w-[880px] flex-col gap-6">
-              {activeBook && (
-                <DirtyRepairQueue
-                  compact
-                  bookId={activeBook.id}
-                  onOpenFullAudit={() => openAtlasSubTab("audit")}
-                  onChanged={() => setPacingRefreshKey((k) => k + 1)}
-                />
-              )}
+          <div className="flex-1 overflow-y-auto px-8 py-5">
+            <div className="mx-auto flex w-full max-w-[880px] flex-col gap-4">
+              {(() => {
+                const dirtyCount = chapters.filter((c) => c.status === "upstream_dirty").length;
+                if (dirtyCount === 0) return null;
+                return (
+                  <div className="flex items-center justify-between gap-3 rounded-xl border border-warn/35 bg-warn-soft/50 px-4 py-2 text-xs text-warn">
+                    <span className="flex items-center gap-2">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                      <span>
+                        全书有 <strong className="nib-mono">{dirtyCount}</strong> 章因前文修改待核对
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => openAtlasSubTab("audit")}
+                      className="shrink-0 font-medium underline underline-offset-2 hover:opacity-80"
+                    >
+                      前往体检处理
+                    </button>
+                  </div>
+                );
+              })()}
               {activeVolume && (
                 <VolumePacingChart
                   volume={activeVolume}
@@ -923,8 +966,6 @@ export function ArchitectView() {
                 beatListRef={beatListRef}
                 beats={beats}
                 beatsLoading={beatsLoading}
-                beatsDirty={beatsDirty}
-                savingBeats={savingBeats}
                 totalBeatWords={totalBeatWords}
                 confirmFillBeats={confirmFillBeats}
                 activeGenreName={activeGenrePreset?.name ?? "当前题材"}
@@ -935,11 +976,6 @@ export function ArchitectView() {
                 onSetConfirmFillBeats={setConfirmFillBeats}
                 onApplyGenreBeatTemplates={applyGenreBeatTemplates}
                 onAddBeat={addBeat}
-                onSaveBeats={() =>
-                  void handleSaveBeats().then(
-                    (ok) => ok && notify({ tone: "ok", message: "节拍卡已保存" })
-                  )
-                }
                 onUpdateBeat={updateBeat}
                 onMoveBeat={moveBeat}
                 onRemoveBeat={removeBeat}
@@ -954,7 +990,8 @@ export function ArchitectView() {
         <BatchOutlineModal
           open={outlineModalOpen}
           bookId={activeBook.id}
-          volume={activeVolume}
+          volumes={volumes}
+          defaultVolumeId={activeVolume?.id ?? volumes[0]?.id ?? null}
           defaultStartSeq={nextGlobalSeq}
           onClose={() => setOutlineModalOpen(false)}
           onGenerated={async (created) => {

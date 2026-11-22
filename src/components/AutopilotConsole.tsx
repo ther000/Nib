@@ -134,7 +134,7 @@ export function AutopilotStatusBar() {
           )}
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           {isWaiting && autopilotState.gate ? (
             <>
               {autopilotState.gate.options.map((opt) => (
@@ -153,6 +153,30 @@ export function AutopilotStatusBar() {
                   {opt.label}
                 </button>
               ))}
+              {autopilotState.currentChapterId > 0 && (
+                <button
+                  type="button"
+                  onClick={() => void jumpToChapter(autopilotState.currentChapterId)}
+                  className="rounded-md px-2 py-1 text-xs text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+                >
+                  查看当前章
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => openDirector("autopilot")}
+                className="rounded-md border border-border-subtle bg-elevated px-2.5 py-1 text-xs text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary"
+              >
+                进度详情
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleStop()}
+                className="flex items-center gap-1 rounded-md border border-border-strong bg-elevated px-2.5 py-1 text-xs font-medium text-ink-primary transition-colors hover:bg-canvas"
+              >
+                <Square className="h-3 w-3" />
+                <span>停止</span>
+              </button>
             </>
           ) : (
             <>

@@ -28,8 +28,8 @@ import { AutopilotPanel } from "./AutopilotConsole";
 const QUICK_PROMPTS = [
   "检查当前书的设定和章纲，帮我补全不足之处",
   "帮我规划接下来 3 章的大纲与节拍",
-  "对当前章做一次质检并自动润色问题段落",
-  "帮我托管自动续写 3 章并同步设定更新",
+  "对当前章做一次剧情与节奏检查，并润色问题段落",
+  "把当前章结尾改得更有悬念和危机感",
 ];
 
 export function DirectorDrawer() {
@@ -423,7 +423,7 @@ export function DirectorDrawer() {
                 <div
                   className={`max-w-[92%] rounded-lg px-3 py-2 text-[13px] leading-relaxed whitespace-pre-wrap ${
                     msg.role === "user"
-                      ? "bg-accent text-white"
+                      ? "bg-accent font-medium text-canvas"
                       : "border border-border-subtle bg-canvas text-ink-primary"
                   }`}
                 >

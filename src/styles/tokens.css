@@ -54,7 +54,7 @@
 
   /* Layout Dimensions */
   --topbar-height: 44px;
-  --sidebar-tree-width: 240px;
+  --sidebar-tree-width: 256px;
   --studio-drawer-width: 360px;
 }
 
@@ -138,6 +138,22 @@
 
   ::selection {
     background: var(--selection-bg);
+  }
+
+  input,
+  textarea {
+    caret-color: var(--accent);
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  select:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  [role="button"]:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   * {

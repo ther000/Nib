@@ -40,6 +40,7 @@ interface RelationGraphCanvasProps {
   timelineSeq: number;
   onJumpToEntity: (entityId: number) => void;
   onJumpToChapter: (chapterId: number) => void;
+  onManageRelations?: (entityId: number) => void;
 }
 
 interface ViewportState {
@@ -179,6 +180,7 @@ export function RelationGraphCanvas({
   timelineSeq,
   onJumpToEntity,
   onJumpToChapter,
+  onManageRelations,
 }: RelationGraphCanvasProps) {
   const uid = useId().replace(/:/g, "");
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -625,11 +627,11 @@ export function RelationGraphCanvas({
                     y={-2}
                     textAnchor="middle"
                     dominantBaseline="central"
-                    fontSize={12}
+                    fontSize={node.entity.name.trim().length > 5 ? 10.5 : 12}
                     fontWeight={600}
                     fill="var(--text-primary)"
                   >
-                    {truncateNodeLabel(node.entity.name, 5)}
+                    {truncateNodeLabel(node.entity.name, 8)}
                   </text>
 
                   {/* Kind sub-label */}
@@ -707,13 +709,13 @@ export function RelationGraphCanvas({
 
         {/* Empty Node Guard */}
         {nodes.length === 0 && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-ink-muted">
-            当前筛选条件下暂无符合条件的实体节点，可尝试放宽筛选或取消勾选「仅显示有连线实体」
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-xs text-ink-muted">
+            当前筛选条件下暂无符合条件的节点，可放宽筛选或勾选「显示无连线设定」
           </div>
         )}
 
         {/* Top-Left Legend */}
-        <div className="pointer-events-none absolute top-3 left-3 flex flex-wrap items-center gap-2.5 rounded-lg border border-border-subtle bg-surface/90 px-2.5 py-1.5 text-[10.5px] text-ink-secondary backdrop-blur-xs">
+        <div className="pointer-events-none absolute top-3 left-3 flex flex-wrap items-center gap-2.5 rounded-lg border border-border-subtle bg-surface/90 px-2.5 py-1.5 text-[11px] text-ink-secondary backdrop-blur-xs">
           <span className="inline-flex items-center gap-1">
             <span className="h-2 w-2 rounded-full bg-ok" />
             同门 / 盟友
@@ -724,9 +726,9 @@ export function RelationGraphCanvas({
           </span>
           <span className="inline-flex items-center gap-1">
             <span className="h-2 w-2 rounded-full border border-dashed border-ink-muted" />
-            已终止历史边
+            历史关系
           </span>
-          <span className="text-ink-muted">节点右上角为出场章数 / 掉线预警</span>
+          <span className="text-ink-muted">右上角为出场章数 / 久未出场提醒</span>
         </div>
 
         {/* Top-Right Zoom / Fit Controls */}
@@ -771,8 +773,8 @@ export function RelationGraphCanvas({
         </div>
 
         {/* Bottom-Left Tip */}
-        <div className="pointer-events-none absolute bottom-3 left-3 rounded-md bg-surface/85 px-2.5 py-1 text-[10.5px] text-ink-muted">
-          拖拽空白平移 · 滚轮缩放 · 点击节点高亮 {highlightHops} 跳关系 · 拖动节点可微调位置
+        <div className="pointer-events-none absolute bottom-3 left-3 rounded-md bg-surface/85 px-2.5 py-1 text-[11px] text-ink-muted">
+          拖拽空白平移 · 滚轮缩放 · 点击节点高亮{highlightHops === 1 ? "直接" : "二度"}关系 · 拖动节点可微调位置
         </div>
       </div>
 
@@ -925,7 +927,7 @@ export function RelationGraphCanvas({
                 <span className="text-[10.5px] text-ink-muted">点击对方切换焦点</span>
               </div>
               {selectedNodeEdges.length === 0 ? (
-                <div className="text-[11px] text-ink-muted">当前时间点暂无关联边</div>
+                <div className="text-[11px] text-ink-muted">当前时间点暂无关系记录</div>
               ) : (
                 <div className="flex flex-col gap-1.5">
                   {selectedNodeEdges.map((edge) => {
@@ -991,16 +993,27 @@ export function RelationGraphCanvas({
               className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-ink-secondary hover:bg-elevated hover:text-ink-primary"
             >
               <Crosshair className="h-3.5 w-3.5" />
-              <span>取消选中</span>
+              <span>取消</span>
             </button>
-            <button
-              type="button"
-              onClick={() => onJumpToEntity(selectedNode.id)}
-              className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-canvas hover:opacity-90"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              <span>打开实体档案</span>
-            </button>
+            <div className="flex items-center gap-1.5">
+              {onManageRelations && (
+                <button
+                  type="button"
+                  onClick={() => onManageRelations(selectedNode.id)}
+                  className="rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs font-medium text-ink-primary transition-colors hover:border-border-strong"
+                >
+                  管理关系
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => onJumpToEntity(selectedNode.id)}
+                className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-canvas hover:opacity-90"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                <span>编辑档案</span>
+              </button>
+            </div>
           </div>
         </aside>
       )}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BookMarked, Loader2, Plus, Sparkles, X } from "lucide-react";
+import { BookMarked, Loader2, Plus, Sparkles } from "lucide-react";
 import {
   MemoryService,
   type ArcSummary,
@@ -12,6 +12,7 @@ import {
   formatSeq,
   getArcSummaryLevelLabel,
 } from "../../lib/constants";
+import { ModalShell } from "../ui/ModalShell";
 
 interface ArcSummaryEditorState {
   id: number;
@@ -61,15 +62,6 @@ export function ArcSummaryBoard({ latestChapterSeq }: { latestChapterSeq: number
   useEffect(() => {
     void fetchSummaries();
   }, [fetchSummaries, memoryRevision]);
-
-  useEffect(() => {
-    if (!editor) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setEditor(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [editor]);
 
   const openCreate = () => {
     const defaultLevel: ArcSummaryLevel =
@@ -233,19 +225,19 @@ export function ArcSummaryBoard({ latestChapterSeq }: { latestChapterSeq: number
         {/* Summary Cards */}
         {loading && items.length === 0 ? (
           <div className="py-16 text-center text-xs text-ink-muted">
-            正在加载弧线摘要…
+            正在加载阶段摘要…
           </div>
         ) : items.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border-strong bg-surface/35 py-16 text-center">
             <div className="text-xs text-ink-secondary">
-              暂无 10 章弧线摘要或卷级摘要（用于长篇 P5 记忆金字塔压缩注入）
+              暂无阶段摘要（用于长篇连载的前情回顾与 AI 上下文精简）
             </div>
             <button
               type="button"
               onClick={openCreate}
               className="rounded-md border border-accent/40 bg-accent-soft px-3.5 py-1.5 text-xs font-medium text-accent hover:border-accent"
             >
-              新建第一条弧线摘要
+              新建第一条阶段摘要
             </button>
           </div>
         ) : (
@@ -298,130 +290,119 @@ export function ArcSummaryBoard({ latestChapterSeq }: { latestChapterSeq: number
       </div>
 
       {/* Editor Modal */}
-      {editor && (
-        <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setEditor(null);
-          }}
-        >
-          <div className="w-full max-w-[520px] overflow-hidden rounded-xl border border-border-strong bg-elevated shadow-[var(--shadow-elevated)]">
-            <div className="flex items-center justify-between border-b border-border-subtle px-5 py-3.5">
-              <h3 className="text-sm font-medium text-ink-primary">
-                {editor.id > 0 ? "编辑弧线 / 卷摘要" : "新建弧线 / 卷摘要"}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setEditor(null)}
-                className="rounded p-1 text-ink-muted hover:bg-surface hover:text-ink-primary"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+      <ModalShell
+        open={Boolean(editor)}
+        onClose={() => setEditor(null)}
+        closeDisabled={saving}
+        title={editor && editor.id > 0 ? "编辑阶段 / 卷摘要" : "新建阶段 / 卷摘要"}
+        icon={<BookMarked className="h-4 w-4 text-accent" />}
+        maxWidthClass="max-w-[520px]"
+        footer={
+          <>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => setEditor(null)}
+              className="rounded-md px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface hover:text-ink-primary disabled:opacity-40"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void handleSave()}
+              className="rounded-md bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {saving ? "保存中…" : "保存"}
+            </button>
+          </>
+        }
+      >
+        {editor && (
+          <div className="flex flex-col gap-3.5 p-5">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs text-ink-secondary">
+                  摘要层级
+                </label>
+                <select
+                  value={editor.level}
+                  onChange={(e) => setEditor({ ...editor, level: e.target.value })}
+                  className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                >
+                  {ARC_SUMMARY_LEVELS.map((lvl) => (
+                    <option key={lvl.value} value={lvl.value}>
+                      {lvl.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-            <div className="flex flex-col gap-3.5 p-5">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {editor.level === "volume" && (
                 <div>
                   <label className="mb-1 block text-xs text-ink-secondary">
-                    摘要层级
+                    对应卷（可选）
                   </label>
                   <select
-                    value={editor.level}
-                    onChange={(e) => setEditor({ ...editor, level: e.target.value })}
+                    value={editor.volumeId}
+                    onChange={(e) =>
+                      setEditor({ ...editor, volumeId: e.target.value })
+                    }
                     className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
                   >
-                    {ARC_SUMMARY_LEVELS.map((lvl) => (
-                      <option key={lvl.value} value={lvl.value}>
-                        {lvl.label}
+                    <option value="">不指定</option>
+                    {volumes.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.title}
                       </option>
                     ))}
                   </select>
                 </div>
+              )}
+            </div>
 
-                {editor.level === "volume" && (
-                  <div>
-                    <label className="mb-1 block text-xs text-ink-secondary">
-                      对应卷（可选）
-                    </label>
-                    <select
-                      value={editor.volumeId}
-                      onChange={(e) =>
-                        setEditor({ ...editor, volumeId: e.target.value })
-                      }
-                      className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-                    >
-                      <option value="">不指定</option>
-                      {volumes.map((v) => (
-                        <option key={v.id} value={v.id}>
-                          {v.title}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="mb-1 block text-xs text-ink-secondary">
-                    起始章号
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={editor.startSeq}
-                    onChange={(e) => setEditor({ ...editor, startSeq: e.target.value })}
-                    className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-3 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs text-ink-secondary">
-                    结束章号
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={editor.endSeq}
-                    onChange={(e) => setEditor({ ...editor, endSeq: e.target.value })}
-                    className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-3 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-                  />
-                </div>
-              </div>
-
+            <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="mb-1 block text-xs text-ink-secondary">
-                  阶段因果摘要
+                  起始章号
                 </label>
-                <textarea
-                  rows={5}
-                  value={editor.summary}
-                  onChange={(e) => setEditor({ ...editor, summary: e.target.value })}
-                  placeholder="提炼本阶段主线因果推进、关键人物境界/资产变动与重大伏笔收束"
-                  className="w-full resize-y rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                <input
+                  type="number"
+                  min={1}
+                  value={editor.startSeq}
+                  onChange={(e) => setEditor({ ...editor, startSeq: e.target.value })}
+                  className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-3 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-ink-secondary">
+                  结束章号
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  value={editor.endSeq}
+                  onChange={(e) => setEditor({ ...editor, endSeq: e.target.value })}
+                  className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-3 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
                 />
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 border-t border-border-subtle bg-surface/50 px-5 py-3">
-              <button
-                type="button"
-                onClick={() => setEditor(null)}
-                className="rounded-md px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface hover:text-ink-primary"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() => void handleSave()}
-                className="rounded-md bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
-              >
-                {saving ? "保存中…" : "保存"}
-              </button>
+            <div>
+              <label className="mb-1 block text-xs text-ink-secondary">
+                阶段剧情摘要
+              </label>
+              <textarea
+                rows={5}
+                value={editor.summary}
+                onChange={(e) => setEditor({ ...editor, summary: e.target.value })}
+                placeholder="提炼本阶段主线推进、关键人物境界/资产变动与重大伏笔收束"
+                className="w-full resize-y rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+              />
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </ModalShell>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CalendarClock, CheckCircle2, Clock, Pencil, Plus, Trash2, X } from "lucide-react";
+import { AlertTriangle, CalendarClock, CheckCircle2, Clock, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import {
   MemoryService,
   type Foreshadowing,
@@ -17,6 +17,7 @@ import {
   isForeshadowingApproaching,
   isForeshadowingOverdue,
 } from "../../lib/constants";
+import { ConfirmDialog, type ConfirmDialogState } from "../ui/ConfirmDialog";
 
 const DISPLAY_GROUP_ORDER: ForeshadowingStatus[] = [
   "planted",
@@ -51,6 +52,8 @@ interface DeadlineEditorState {
   targetDay: string;
   targetLabel: string;
   startChapterSeq: string;
+  entityId?: number;
+  foreshadowingId?: number;
   status: StoryDeadlineStatus;
   note: string;
 }
@@ -74,8 +77,11 @@ export function ForeshadowingBoard({ latestChapterSeq }: { latestChapterSeq: num
   const [savingDeadline, setSavingDeadline] = useState(false);
 
   const [editor, setEditor] = useState<ForeshadowEditorState | null>(null);
+  const [entitySearch, setEntitySearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
 
   const latestStoryProgress = useMemo(() => {
     let best: { globalSeq: number; storyDay: number; storyTimeLabel: string } | null = null;
@@ -159,6 +165,8 @@ export function ForeshadowingBoard({ latestChapterSeq }: { latestChapterSeq: num
       targetDay: String(d.targetDay),
       targetLabel: d.targetLabel || "",
       startChapterSeq: String(d.startChapterSeq || 0),
+      entityId: d.entityId,
+      foreshadowingId: d.foreshadowingId,
       status: d.status,
       note: d.note || "",
     });
@@ -173,7 +181,7 @@ export function ForeshadowingBoard({ latestChapterSeq }: { latestChapterSeq: num
     }
     const targetDay = Number.parseInt(deadlineEditor.targetDay.trim(), 10);
     if (!Number.isSafeInteger(targetDay)) {
-      notify({ tone: "warn", message: "目标故事日序号必须为整数" });
+      notify({ tone: "warn", message: "目标天数必须为整数" });
       return;
     }
     const startSeq = Number.parseInt(deadlineEditor.startChapterSeq.trim() || "0", 10);
@@ -186,6 +194,8 @@ export function ForeshadowingBoard({ latestChapterSeq }: { latestChapterSeq: num
         startChapterSeq: Number.isFinite(startSeq) && startSeq > 0 ? startSeq : 0,
         targetDay,
         targetLabel: deadlineEditor.targetLabel.trim(),
+        entityId: deadlineEditor.entityId,
+        foreshadowingId: deadlineEditor.foreshadowingId,
         status: deadlineEditor.status,
         note: deadlineEditor.note.trim(),
       });
@@ -222,14 +232,27 @@ export function ForeshadowingBoard({ latestChapterSeq }: { latestChapterSeq: num
     }
   };
 
-  const handleDeleteDeadline = async (id: number) => {
-    try {
-      await MemoryService.deleteStoryDeadline(id);
-      if (deadlineEditor?.id === id) setDeadlineEditor(null);
-      await fetchDeadlines();
-    } catch (err) {
-      notify({ tone: "danger", message: "删除期限失败", detail: formatErrorMessage(err) });
-    }
+  const requestDeleteDeadline = (d: StoryDeadline) => {
+    setConfirmDialog({
+      title: "删除期限",
+      message: `确定删除故事期限「${d.title}」？删除后无法恢复。`,
+      confirmLabel: "删除",
+      danger: true,
+      onConfirm: async () => {
+        setConfirmBusy(true);
+        try {
+          await MemoryService.deleteStoryDeadline(d.id);
+          if (deadlineEditor?.id === d.id) setDeadlineEditor(null);
+          setConfirmDialog(null);
+          await fetchDeadlines();
+          notify({ tone: "ok", message: `已删除期限「${d.title}」` });
+        } catch (err) {
+          notify({ tone: "danger", message: "删除期限失败", detail: formatErrorMessage(err) });
+        } finally {
+          setConfirmBusy(false);
+        }
+      },
+    });
   };
 
   useEffect(() => {
@@ -275,6 +298,7 @@ export function ForeshadowingBoard({ latestChapterSeq }: { latestChapterSeq: num
       resolvedChapterSeq: "0",
       involvedEntityIds: [],
     });
+    setEntitySearch("");
     setConfirmDelete(false);
   };
 
@@ -292,8 +316,19 @@ export function ForeshadowingBoard({ latestChapterSeq }: { latestChapterSeq: num
         ? [...fs.involvedEntityIds]
         : [],
     });
+    setEntitySearch("");
     setConfirmDelete(false);
   };
+
+  const filteredPickerEntities = useMemo(() => {
+    const q = entitySearch.trim().toLowerCase();
+    if (!q) return entities;
+    return entities.filter(
+      (e) =>
+        e.name.toLowerCase().includes(q) ||
+        (e.aliases ?? []).some((a) => a.toLowerCase().includes(q))
+    );
+  }, [entities, entitySearch]);
 
   const toggleEntity = (eid: number) => {
     if (!editor) return;
@@ -372,16 +407,16 @@ export function ForeshadowingBoard({ latestChapterSeq }: { latestChapterSeq: num
                 故事内期限与倒计时
               </span>
               {latestStoryProgress ? (
-                <span className="nib-mono rounded bg-canvas px-2 py-0.5 text-[11px] text-ink-secondary">
-                  当前：第 {formatSeq(latestStoryProgress.globalSeq)} 章 · Day{" "}
-                  {latestStoryProgress.storyDay}
+                <span className="nib-mono rounded bg-canvas px-2 py-0.5 text-xs text-ink-secondary">
+                  当前：第 {formatSeq(latestStoryProgress.globalSeq)} 章 · 第{" "}
+                  {latestStoryProgress.storyDay} 天
                   {latestStoryProgress.storyTimeLabel
                     ? `（${latestStoryProgress.storyTimeLabel}）`
                     : ""}
                 </span>
               ) : (
-                <span className="text-[11px] text-ink-muted">
-                  在章节编排中填写「故事日序号」后可自动计算剩余天数
+                <span className="text-xs text-ink-muted">
+                  在章节编排中填写「故事天数」后自动计算倒计时
                 </span>
               )}
             </div>
@@ -398,74 +433,90 @@ export function ForeshadowingBoard({ latestChapterSeq }: { latestChapterSeq: num
 
           {deadlineEditor && (
             <div className="mt-3 rounded-lg border border-border-subtle bg-canvas p-3">
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1.4fr_100px_1fr_100px_120px]">
-                <input
-                  type="text"
-                  value={deadlineEditor.title}
-                  onChange={(e) =>
-                    setDeadlineEditor({ ...deadlineEditor, title: e.target.value })
-                  }
-                  placeholder="期限事项（如：幽冥秘境开启）"
-                  className="rounded-md border border-border-subtle bg-surface px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
-                />
-                <input
-                  type="number"
-                  value={deadlineEditor.targetDay}
-                  onChange={(e) =>
-                    setDeadlineEditor({ ...deadlineEditor, targetDay: e.target.value })
-                  }
-                  placeholder="目标Day"
-                  title="目标故事日序号"
-                  className="nib-mono rounded-md border border-border-subtle bg-surface px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
-                />
-                <input
-                  type="text"
-                  value={deadlineEditor.targetLabel}
-                  onChange={(e) =>
-                    setDeadlineEditor({ ...deadlineEditor, targetLabel: e.target.value })
-                  }
-                  placeholder="故事历法标注（可选，如 腊月十五）"
-                  className="rounded-md border border-border-subtle bg-surface px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
-                />
-                <input
-                  type="number"
-                  min={0}
-                  value={deadlineEditor.startChapterSeq}
-                  onChange={(e) =>
-                    setDeadlineEditor({ ...deadlineEditor, startChapterSeq: e.target.value })
-                  }
-                  placeholder="起始章"
-                  title="起始章号"
-                  className="nib-mono rounded-md border border-border-subtle bg-surface px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
-                />
-                <select
-                  value={deadlineEditor.status}
-                  onChange={(e) =>
-                    setDeadlineEditor({ ...deadlineEditor, status: e.target.value })
-                  }
-                  className="rounded-md border border-border-subtle bg-surface px-2 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-                >
-                  {DEADLINE_STATUS_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-[1.4fr_104px_1fr_96px_120px]">
+                <div>
+                  <label className="mb-1 block text-xs text-ink-secondary">期限事项</label>
+                  <input
+                    type="text"
+                    value={deadlineEditor.title}
+                    onChange={(e) =>
+                      setDeadlineEditor({ ...deadlineEditor, title: e.target.value })
+                    }
+                    placeholder="如：幽冥秘境开启"
+                    className="w-full rounded-md border border-border-subtle bg-surface px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-ink-secondary">目标天数</label>
+                  <input
+                    type="number"
+                    value={deadlineEditor.targetDay}
+                    onChange={(e) =>
+                      setDeadlineEditor({ ...deadlineEditor, targetDay: e.target.value })
+                    }
+                    placeholder="第几天"
+                    className="nib-mono w-full rounded-md border border-border-subtle bg-surface px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-ink-secondary">故事日期（可选）</label>
+                  <input
+                    type="text"
+                    value={deadlineEditor.targetLabel}
+                    onChange={(e) =>
+                      setDeadlineEditor({ ...deadlineEditor, targetLabel: e.target.value })
+                    }
+                    placeholder="如：腊月十五"
+                    className="w-full rounded-md border border-border-subtle bg-surface px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-ink-secondary">起始章</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={deadlineEditor.startChapterSeq}
+                    onChange={(e) =>
+                      setDeadlineEditor({ ...deadlineEditor, startChapterSeq: e.target.value })
+                    }
+                    placeholder="章号"
+                    className="nib-mono w-full rounded-md border border-border-subtle bg-surface px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-ink-secondary">状态</label>
+                  <select
+                    value={deadlineEditor.status}
+                    onChange={(e) =>
+                      setDeadlineEditor({ ...deadlineEditor, status: e.target.value })
+                    }
+                    className="w-full rounded-md border border-border-subtle bg-surface px-2 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                  >
+                    {DEADLINE_STATUS_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <input
-                  type="text"
-                  value={deadlineEditor.note}
-                  onChange={(e) =>
-                    setDeadlineEditor({ ...deadlineEditor, note: e.target.value })
-                  }
-                  placeholder="备注条件或违约后果（可选）"
-                  className="min-w-0 flex-1 rounded-md border border-border-subtle bg-surface px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
-                />
+              <div className="mt-2.5 flex flex-wrap items-end gap-2">
+                <div className="min-w-0 flex-1">
+                  <label className="mb-1 block text-xs text-ink-secondary">备注（可选）</label>
+                  <input
+                    type="text"
+                    value={deadlineEditor.note}
+                    onChange={(e) =>
+                      setDeadlineEditor({ ...deadlineEditor, note: e.target.value })
+                    }
+                    placeholder="触发条件或违约后果"
+                    className="w-full rounded-md border border-border-subtle bg-surface px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                  />
+                </div>
                 <button
                   type="button"
                   onClick={() => setDeadlineEditor(null)}
-                  className="rounded-md px-2.5 py-1 text-xs text-ink-secondary hover:bg-surface"
+                  className="rounded-md px-2.5 py-1.5 text-xs text-ink-secondary hover:bg-surface"
                 >
                   取消
                 </button>
@@ -473,7 +524,7 @@ export function ForeshadowingBoard({ latestChapterSeq }: { latestChapterSeq: num
                   type="button"
                   disabled={savingDeadline}
                   onClick={() => void handleSaveDeadline()}
-                  className="rounded-md bg-accent px-3 py-1 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
+                  className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
                 >
                   {savingDeadline ? "保存中…" : "保存期限"}
                 </button>
@@ -533,7 +584,7 @@ export function ForeshadowingBoard({ latestChapterSeq }: { latestChapterSeq: num
                         )}
                       </div>
                       <div className="nib-mono mt-1 flex flex-wrap items-center gap-2 text-[11px] text-ink-muted">
-                        <span>目标 Day {d.targetDay}</span>
+                        <span>第 {d.targetDay} 天</span>
                         {d.targetLabel && <span>· {d.targetLabel}</span>}
                         {d.startChapterSeq > 0 && (
                           <span>· 第 {formatSeq(d.startChapterSeq)} 章起</span>
@@ -567,7 +618,7 @@ export function ForeshadowingBoard({ latestChapterSeq }: { latestChapterSeq: num
                       </button>
                       <button
                         type="button"
-                        onClick={() => void handleDeleteDeadline(d.id)}
+                        onClick={() => requestDeleteDeadline(d)}
                         title="删除期限"
                         className="rounded p-1 text-ink-muted transition-colors hover:bg-surface hover:text-danger"
                       >
@@ -752,6 +803,7 @@ export function ForeshadowingBoard({ latestChapterSeq }: { latestChapterSeq: num
       {/* Slide-over Editor */}
       {editor && (
         <div
+          data-nib-modal="true"
           className="fixed inset-0 z-40 flex justify-end bg-black/50 backdrop-blur-[1px]"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) setEditor(null);
@@ -875,32 +927,61 @@ export function ForeshadowingBoard({ latestChapterSeq }: { latestChapterSeq: num
               {/* Involved Entities */}
               <div>
                 <label className="mb-1.5 block text-xs text-ink-secondary">
-                  关联设定实体
+                  关联角色与设定
                 </label>
                 {entities.length === 0 ? (
-                  <div className="text-[11px] text-ink-muted">账本暂无实体</div>
+                  <div className="text-xs text-ink-muted">设定库暂无档案</div>
                 ) : (
-                  <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto rounded-md border border-border-subtle bg-canvas p-2">
-                    {entities.map((ent) => {
-                      const active = editor.involvedEntityIds.includes(ent.id);
-                      return (
-                        <button
-                          key={ent.id}
-                          type="button"
-                          onClick={() => toggleEntity(ent.id)}
-                          className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] transition-colors ${
-                            active
-                              ? "border-accent bg-accent-soft text-accent"
-                              : "border-border-subtle bg-surface text-ink-secondary hover:text-ink-primary"
-                          }`}
-                        >
-                          <span>{ent.name}</span>
-                          <span className="text-[10px] opacity-65">
-                            {getEntityKindLabel(ent.kind)}
-                          </span>
-                        </button>
-                      );
-                    })}
+                  <div className="flex flex-col gap-1.5 rounded-md border border-border-subtle bg-canvas p-2">
+                    {entities.length > 8 && (
+                      <div className="relative">
+                        <Search className="pointer-events-none absolute top-1/2 left-2 h-3 w-3 -translate-y-1/2 text-ink-muted" />
+                        <input
+                          type="text"
+                          value={entitySearch}
+                          onChange={(e) => setEntitySearch(e.target.value)}
+                          placeholder="搜索角色或设定…"
+                          className="w-full rounded border border-border-subtle bg-surface py-1 pr-6 pl-6 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                        />
+                        {entitySearch && (
+                          <button
+                            type="button"
+                            onClick={() => setEntitySearch("")}
+                            aria-label="清空搜索"
+                            className="absolute top-1/2 right-1.5 -translate-y-1/2 text-ink-muted hover:text-ink-primary"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto">
+                      {filteredPickerEntities.map((ent) => {
+                        const active = editor.involvedEntityIds.includes(ent.id);
+                        return (
+                          <button
+                            key={ent.id}
+                            type="button"
+                            onClick={() => toggleEntity(ent.id)}
+                            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
+                              active
+                                ? "border-accent bg-accent-soft text-accent"
+                                : "border-border-subtle bg-surface text-ink-secondary hover:text-ink-primary"
+                            }`}
+                          >
+                            <span>{ent.name}</span>
+                            <span className="text-[11px] opacity-65">
+                              {getEntityKindLabel(ent.kind)}
+                            </span>
+                          </button>
+                        );
+                      })}
+                      {filteredPickerEntities.length === 0 && (
+                        <div className="w-full py-2 text-center text-xs text-ink-muted">
+                          未找到匹配项
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -914,7 +995,7 @@ export function ForeshadowingBoard({ latestChapterSeq }: { latestChapterSeq: num
                       type="button"
                       disabled={saving}
                       onClick={() => void handleDelete()}
-                      className="rounded-md bg-danger px-2.5 py-1 text-xs font-medium text-white"
+                      className="rounded-md bg-danger px-2.5 py-1 text-xs font-medium text-canvas"
                     >
                       确认删除
                     </button>
@@ -961,6 +1042,12 @@ export function ForeshadowingBoard({ latestChapterSeq }: { latestChapterSeq: num
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        dialog={confirmDialog}
+        busy={confirmBusy}
+        onClose={() => setConfirmDialog(null)}
+      />
     </div>
   );
 }

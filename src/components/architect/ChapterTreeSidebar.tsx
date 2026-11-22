@@ -8,12 +8,12 @@ import {
   ChevronRight,
   Copy,
   Download,
-  GripVertical,
   Layers,
   ListChecks,
   PenLine,
   Pencil,
   Plus,
+  Search,
   Sparkles,
   Trash2,
   X,
@@ -95,10 +95,9 @@ export function ChapterTreeSidebar({
   const { openContextMenu } = useContextMenu();
 
   const [collapsedVolIds, setCollapsedVolIds] = useState<Set<number>>(new Set());
+  const [searchQuery, setSearchQuery] = useState("");
   const [addingChapterVolId, setAddingChapterVolId] = useState<number | null>(null);
   const [newChapterTitle, setNewChapterTitle] = useState("");
-  const [confirmDeleteVolId, setConfirmDeleteVolId] = useState<number | null>(null);
-  const [confirmDeleteChapId, setConfirmDeleteChapId] = useState<number | null>(null);
   const [insertingAfterChap, setInsertingAfterChap] = useState<{
     volId: number;
     afterChapId: number;
@@ -107,11 +106,6 @@ export function ChapterTreeSidebar({
   const [draggingChapterId, setDraggingChapterId] = useState<number | null>(null);
   const [dragOverVolumeId, setDragOverVolumeId] = useState<number | null>(null);
   const [dragOverChapterId, setDragOverChapterId] = useState<number | null>(null);
-
-  useEffect(() => {
-    setConfirmDeleteVolId(null);
-    setConfirmDeleteChapId(null);
-  }, [volumes.length, chapters.length]);
 
   const toggleVolumeCollapse = (volId: number) => {
     setCollapsedVolIds((prev) => {
@@ -167,12 +161,12 @@ export function ChapterTreeSidebar({
           <span>目录</span>
           <span className="nib-mono text-xs text-ink-muted">{chapters.length}</span>
         </div>
-        <div className="flex items-center gap-1">
-          {activeVolume && (
+        <div className="flex items-center gap-0.5">
+          {volumes.length > 0 && (
             <button
               type="button"
               onClick={onOpenOutlineModal}
-              title="AI 批量生成章纲与节拍卡"
+              title="AI 批量生成章纲与节拍"
               className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-accent transition-colors hover:bg-accent-soft"
             >
               <Sparkles className="h-3.5 w-3.5" />
@@ -183,65 +177,61 @@ export function ChapterTreeSidebar({
             type="button"
             onClick={onToggleBatchMode}
             title="批量管理章节"
-            className={`flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium transition-colors ${
+            aria-label="批量管理章节"
+            className={`rounded-md p-1.5 transition-colors ${
               batchMode
                 ? "bg-accent-soft text-accent"
                 : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
             }`}
           >
             <ListChecks className="h-3.5 w-3.5" />
-            <span>批量</span>
           </button>
           <button
             type="button"
             onClick={onOpenCreateVolume}
-            title="新建卷"
-            className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+            title="新建分卷"
+            aria-label="新建分卷"
+            className="rounded-md p-1.5 text-ink-secondary transition-colors hover:bg-elevated hover:text-accent"
           >
-            <Plus className="h-3.5 w-3.5 text-accent" />
-            <span>新建卷</span>
+            <Plus className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
 
+      {chapters.length > 0 && (
+        <div className="border-b border-border-subtle px-2.5 py-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-ink-muted" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="筛选章号或标题…"
+              className="w-full rounded-lg border border-border-subtle bg-canvas py-1 pr-7 pl-8 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                aria-label="清空筛选"
+                className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-0.5 text-ink-muted hover:text-ink-primary"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {batchMode && (
         <div className="flex flex-col gap-1.5 border-b border-border-subtle bg-accent-soft/25 px-2.5 py-2">
-          <div className="flex items-center justify-between text-[11px] text-ink-secondary">
+          <div className="flex items-center justify-between text-xs text-ink-secondary">
             <span>已选 {selectedChapterIds.size} 章</span>
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
-                disabled={batchBusy || selectedChapterIds.size === 0}
-                onClick={onBatchFinalize}
-                className="rounded border border-border-subtle bg-surface px-2 py-0.5 text-[11px] text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
-              >
-                定稿
-              </button>
-              <button
-                type="button"
-                disabled={batchBusy || selectedChapterIds.size === 0}
-                onClick={onBatchExport}
-                className="flex items-center gap-1 rounded border border-border-subtle bg-surface px-2 py-0.5 text-[11px] text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
-              >
-                <Download className="h-3 w-3" />
-                导出
-              </button>
-              <button
-                type="button"
-                disabled={batchBusy || selectedChapterIds.size === 0}
-                onClick={onBatchDelete}
-                className="rounded border border-border-subtle bg-surface px-2 py-0.5 text-[11px] text-danger transition-colors hover:border-danger/40 disabled:opacity-40"
-              >
-                删除
-              </button>
-            </div>
-          </div>
-          {selectedChapterIds.size > 0 && (
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
                 onClick={onSelectAllChapters}
-                className="text-[11px] text-ink-muted hover:text-accent"
+                className="text-xs text-ink-secondary hover:text-accent"
               >
                 全选
               </button>
@@ -249,12 +239,39 @@ export function ChapterTreeSidebar({
               <button
                 type="button"
                 onClick={onClearSelectedChapters}
-                className="text-[11px] text-ink-muted hover:text-accent"
+                className="text-xs text-ink-secondary hover:text-accent"
               >
                 清空
               </button>
             </div>
-          )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled={batchBusy || selectedChapterIds.size === 0}
+              onClick={onBatchFinalize}
+              className="flex-1 rounded border border-border-subtle bg-surface px-2 py-1 text-xs text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
+            >
+              定稿
+            </button>
+            <button
+              type="button"
+              disabled={batchBusy || selectedChapterIds.size === 0}
+              onClick={onBatchExport}
+              className="flex flex-1 items-center justify-center gap-1 rounded border border-border-subtle bg-surface px-2 py-1 text-xs text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
+            >
+              <Download className="h-3 w-3" />
+              导出
+            </button>
+            <button
+              type="button"
+              disabled={batchBusy || selectedChapterIds.size === 0}
+              onClick={onBatchDelete}
+              className="flex-1 rounded border border-border-subtle bg-surface px-2 py-1 text-xs text-danger transition-colors hover:border-danger/40 disabled:opacity-40"
+            >
+              删除
+            </button>
+          </div>
         </div>
       )}
 
@@ -274,9 +291,18 @@ export function ChapterTreeSidebar({
         ) : (
           <div className="flex flex-col gap-1.5">
             {volumes.map((vol) => {
-              const collapsed = collapsedVolIds.has(vol.id);
-              const volChapters = chaptersByVolume.get(vol.id) ?? [];
-              const confirmingDel = confirmDeleteVolId === vol.id;
+              const normalizedSearch = searchQuery.trim().toLowerCase();
+              const collapsed = normalizedSearch ? false : collapsedVolIds.has(vol.id);
+              const allVolChapters = chaptersByVolume.get(vol.id) ?? [];
+              const volChapters = normalizedSearch
+                ? allVolChapters.filter(
+                    (c) =>
+                      c.title.toLowerCase().includes(normalizedSearch) ||
+                      String(c.globalSeq).includes(normalizedSearch) ||
+                      formatSeq(c.globalSeq).includes(normalizedSearch)
+                  )
+                : allVolChapters;
+              if (normalizedSearch && volChapters.length === 0) return null;
               return (
                 <div key={vol.id} className="select-none">
                   {/* Volume header */}
@@ -312,10 +338,10 @@ export function ChapterTreeSidebar({
                         },
                         { type: "separator" },
                         {
-                          label: "删除本卷",
+                          label: "删除本卷…",
                           icon: <Trash2 className="h-3.5 w-3.5" />,
                           danger: true,
-                          onSelect: () => setConfirmDeleteVolId(vol.id),
+                          onSelect: () => onDeleteVolume(vol.id),
                         },
                       ]);
                     }}
@@ -354,25 +380,6 @@ export function ChapterTreeSidebar({
                       </span>
                     </button>
 
-                    {confirmingDel ? (
-                      <div className="flex items-center gap-0.5">
-                        <button
-                          type="button"
-                          onClick={() => onDeleteVolume(vol.id)}
-                          title="确认删除卷及下属章节"
-                          className="rounded bg-danger-soft px-1.5 py-0.5 text-[10px] font-medium text-danger"
-                        >
-                          删除
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteVolId(null)}
-                          className="rounded p-0.5 text-ink-muted hover:text-ink-primary"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </div>
-                    ) : (
                       <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
                         <button
                           type="button"
@@ -385,7 +392,8 @@ export function ChapterTreeSidebar({
                             setAddingChapterVolId(vol.id);
                             setNewChapterTitle("");
                           }}
-                          title="新建章"
+                          title="在本卷新建章"
+                          aria-label="在本卷新建章"
                           className="rounded p-1 text-ink-muted hover:bg-surface hover:text-accent"
                         >
                           <Plus className="h-3 w-3" />
@@ -393,30 +401,30 @@ export function ChapterTreeSidebar({
                         <button
                           type="button"
                           onClick={() => onOpenEditVolume(vol)}
-                          title="编辑卷"
+                          title="编辑卷信息"
+                          aria-label="编辑卷信息"
                           className="rounded p-1 text-ink-muted hover:bg-surface hover:text-ink-primary"
                         >
                           <Pencil className="h-3 w-3" />
                         </button>
                         <button
                           type="button"
-                          onClick={() => setConfirmDeleteVolId(vol.id)}
-                          title="删除卷"
+                          onClick={() => onDeleteVolume(vol.id)}
+                          title="删除分卷"
+                          aria-label="删除分卷"
                           className="rounded p-1 text-ink-muted hover:bg-surface hover:text-danger"
                         >
                           <Trash2 className="h-3 w-3" />
                         </button>
                       </div>
-                    )}
                   </div>
 
                   {/* Volume chapters */}
                   {!collapsed && (
-                    <div className="mt-0.5 flex flex-col gap-0.5 pl-3">
+                    <div className="mt-0.5 flex flex-col gap-0.5 pl-2">
                       {volChapters.map((chap, chapIdx) => {
                         const selected = chap.id === activeChapterId;
                         const st = getChapterStatusMeta(chap.status);
-                        const confirmingChapDel = confirmDeleteChapId === chap.id;
                         const isInsertingAfter =
                           insertingAfterChap?.volId === vol.id &&
                           insertingAfterChap.afterChapId === chap.id;
@@ -487,10 +495,10 @@ export function ChapterTreeSidebar({
                                   },
                                   { type: "separator" },
                                   {
-                                    label: "删除本章",
+                                    label: "删除本章…",
                                     icon: <Trash2 className="h-3.5 w-3.5" />,
                                     danger: true,
-                                    onSelect: () => setConfirmDeleteChapId(chap.id),
+                                    onSelect: () => onDeleteChapter(chap.id),
                                   },
                                 ]);
                               }}
@@ -549,9 +557,6 @@ export function ChapterTreeSidebar({
                                   )}
                                 </button>
                               )}
-                              {!batchMode && (
-                                <GripVertical className="h-3 w-3 shrink-0 cursor-grab text-ink-muted opacity-0 group-hover:opacity-100" />
-                              )}
                               <button
                                 type="button"
                                 onClick={() =>
@@ -559,6 +564,10 @@ export function ChapterTreeSidebar({
                                     ? onToggleChapterSelection(chap.id)
                                     : onSelectChapter(chap.id)
                                 }
+                                onDoubleClick={() => {
+                                  if (!batchMode) onJumpToChapter(chap.id);
+                                }}
+                                title={`${chap.title}（双击进入写作，右键更多操作）`}
                                 className="flex min-w-0 flex-1 items-center gap-2 text-left"
                               >
                                 <span
@@ -573,88 +582,47 @@ export function ChapterTreeSidebar({
                                 </span>
                               </button>
 
-                              {confirmingChapDel ? (
-                                <div className="flex shrink-0 items-center gap-0.5">
-                                  <button
-                                    type="button"
-                                    onClick={() => onDeleteChapter(chap.id)}
-                                    title="确认删除本章"
-                                    className="rounded bg-danger-soft px-1.5 py-0.5 text-xs font-medium text-danger"
+                              <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setInsertingAfterChap({
+                                      volId: vol.id,
+                                      afterChapId: chap.id,
+                                    });
+                                    setInsertChapterTitle("");
+                                  }}
+                                  title="在此章后插入新章"
+                                  aria-label="在此章后插入新章"
+                                  className="rounded p-0.5 text-ink-muted hover:bg-surface hover:text-accent"
+                                >
+                                  <Plus className="h-3 w-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => onDeleteChapter(chap.id)}
+                                  title="删除本章"
+                                  aria-label="删除本章"
+                                  className="rounded p-0.5 text-ink-muted hover:bg-surface hover:text-danger"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </button>
+                              </div>
+                              <div className="flex shrink-0 items-center group-hover:hidden">
+                                {chap.status === "upstream_dirty" ? (
+                                  <span
+                                    title="前文设定有变动，建议核对"
+                                    className="shrink-0 rounded border border-warn/40 bg-warn-soft px-1 text-[11px] font-medium text-warn"
                                   >
-                                    删除
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setConfirmDeleteChapId(null)}
-                                    className="rounded p-0.5 text-ink-muted hover:text-ink-primary"
-                                  >
-                                    <X className="h-3 w-3" />
-                                  </button>
-                                </div>
-                              ) : (
-                                <>
-                                  <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
-                                    <button
-                                      type="button"
-                                      disabled={chapIdx === 0 || movingChapterId !== null}
-                                      onClick={() => onMoveChapter(chap.id, "up")}
-                                      title="上移一章"
-                                      className="rounded p-0.5 text-ink-muted hover:bg-surface hover:text-ink-primary disabled:opacity-30"
-                                    >
-                                      <ArrowUp className="h-3 w-3" />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      disabled={
-                                        chapIdx === volChapters.length - 1 ||
-                                        movingChapterId !== null
-                                      }
-                                      onClick={() => onMoveChapter(chap.id, "down")}
-                                      title="下移一章"
-                                      className="rounded p-0.5 text-ink-muted hover:bg-surface hover:text-ink-primary disabled:opacity-30"
-                                    >
-                                      <ArrowDown className="h-3 w-3" />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setInsertingAfterChap({
-                                          volId: vol.id,
-                                          afterChapId: chap.id,
-                                        });
-                                        setInsertChapterTitle("");
-                                      }}
-                                      title="在此章后插入新章"
-                                      className="rounded p-0.5 text-ink-muted hover:bg-surface hover:text-accent"
-                                    >
-                                      <Plus className="h-3 w-3" />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => setConfirmDeleteChapId(chap.id)}
-                                      title="删除本章"
-                                      className="rounded p-0.5 text-ink-muted hover:bg-surface hover:text-danger"
-                                    >
-                                      <Trash2 className="h-3 w-3" />
-                                    </button>
-                                  </div>
-                                  <div className="flex shrink-0 items-center group-hover:hidden">
-                                    {chap.status === "upstream_dirty" ? (
-                                      <span
-                                        title="上游章节设定变更，建议复核"
-                                        className="shrink-0 rounded border border-danger/40 bg-danger-soft px-1 text-xs font-medium text-danger"
-                                      >
-                                        变更
-                                      </span>
-                                    ) : (
-                                      <span
-                                        title={st.label}
-                                        className={`h-1.5 w-1.5 shrink-0 rounded-full ${st.dotClass}`}
-                                      />
-                                    )}
-                                  </div>
-                                </>
-                              )}
+                                    待核
+                                  </span>
+                                ) : (
+                                  <span
+                                    title={st.label}
+                                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${st.dotClass}`}
+                                  />
+                                )}
+                              </div>
                             </div>
 
                             {isInsertingAfter && (

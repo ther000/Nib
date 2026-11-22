@@ -12,6 +12,7 @@ import {
   Plus,
   Search,
   Settings,
+  ShieldCheck,
   Sparkles,
   Sun,
 } from "lucide-react";
@@ -34,6 +35,8 @@ export function TopBar() {
     openBook,
     activeTab,
     setActiveTab,
+    atlasSubTab,
+    openAtlasSubTab,
     books,
     activeBook,
     activeChapter,
@@ -44,6 +47,8 @@ export function TopBar() {
     directorOpen,
     openDirector,
     toggleDirector,
+    notesOpen,
+    toggleNotes,
     toggleFocusMode,
     openCommandPalette,
   } = useApp();
@@ -219,7 +224,7 @@ export function TopBar() {
         <div className="flex-1" />
       )}
 
-      {/* Right: Notes + AI Director (incl. Autopilot) + Memory Search + Command + Focus + Theme + Settings */}
+      {/* Right: Workspace utilities + System controls */}
       <div className="flex items-center gap-1">
         {inWorkspace && activeBook && (() => {
           const isAutopilotWaiting =
@@ -228,14 +233,33 @@ export function TopBar() {
           const isAutopilotRunning =
             autopilotState?.bookId === activeBook.id &&
             autopilotState.status === "running";
+          const isAuditActive = activeTab === "atlas" && atlasSubTab === "audit";
           return (
             <>
               <button
                 type="button"
-                onClick={() => window.dispatchEvent(new Event("nib:toggle-notes"))}
+                onClick={() => openAtlasSubTab("audit")}
+                title="全书体检"
+                aria-label="全书体检"
+                className={`flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium transition-colors ${
+                  isAuditActive
+                    ? "bg-accent-soft text-accent"
+                    : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                }`}
+              >
+                <ShieldCheck className="h-3.5 w-3.5" />
+                <span className="hidden md:inline">体检</span>
+              </button>
+              <button
+                type="button"
+                onClick={toggleNotes}
                 title="灵感便签"
                 aria-label="灵感便签"
-                className="mr-0.5 flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+                className={`flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
+                  notesOpen
+                    ? "bg-accent-soft text-accent"
+                    : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                }`}
               >
                 <Lightbulb className="h-3.5 w-3.5" />
               </button>
@@ -249,7 +273,7 @@ export function TopBar() {
                   }
                 }}
                 title="AI 导演与自动托管 (Ctrl+K)"
-                className={`mr-0.5 flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors ${
+                className={`flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors ${
                   isAutopilotWaiting
                     ? "border-warn/50 bg-warn-soft text-warn"
                     : directorOpen || isAutopilotRunning
@@ -266,28 +290,27 @@ export function TopBar() {
                   {isAutopilotWaiting
                     ? "托管待确认"
                     : isAutopilotRunning
-                      ? `AI 导演 · ${autopilotState.completedChapters}/${autopilotState.targetChapters}`
+                      ? `托管 ${autopilotState.completedChapters}/${autopilotState.targetChapters}`
                       : "AI 导演"}
                 </span>
               </button>
+              <button
+                type="button"
+                onClick={openMemorySearch}
+                title="全书检索 (Ctrl+Shift+F)"
+                aria-label="全书检索"
+                className="flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+              >
+                <Search className="h-3.5 w-3.5" />
+              </button>
+              <span className="mx-0.5 h-3.5 w-px bg-border-subtle" aria-hidden="true" />
             </>
           );
         })()}
-        {inWorkspace && (
-          <button
-            type="button"
-            onClick={openMemorySearch}
-            title="全局记忆检索 (Ctrl+Shift+F)"
-            aria-label="全局记忆检索"
-            className="flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
-          >
-            <Search className="h-3.5 w-3.5" />
-          </button>
-        )}
         <button
           type="button"
           onClick={openCommandPalette}
-          title="命令面板与快捷键速查 (Ctrl+Shift+P)"
+          title="命令面板与快捷键 (Ctrl+Shift+P)"
           aria-label="命令面板与快捷键"
           className="flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
         >

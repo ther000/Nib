@@ -47,7 +47,7 @@ import { AutopilotProvider } from "./AutopilotContext";
 
 export type { ToastItem, ToastTone };
 
-export type SettingsTab = "providers" | "routes" | "workspace";
+export type SettingsTab = "providers" | "routes" | "workspace" | "usage";
 export type AppViewMode = "home" | "workspace";
 export type DirectorTab = "chat" | "autopilot";
 
@@ -109,6 +109,10 @@ interface AppContextValue {
   openDirector: (tab?: DirectorTab) => void;
   closeDirector: () => void;
   toggleDirector: () => void;
+  notesOpen: boolean;
+  openNotes: () => void;
+  closeNotes: () => void;
+  toggleNotes: () => void;
 
   // Toasts (stable actions only; state lives in ToastContext to prevent full-tree re-renders)
   notify: (input: NotifyInput) => void;
@@ -192,6 +196,7 @@ function AppProviderInner({ children }: { children: ReactNode }) {
   const [memorySearchOpen, setMemorySearchOpen] = useState(false);
   const [directorOpen, setDirectorOpen] = useState(false);
   const [directorTab, setDirectorTab] = useState<DirectorTab>("chat");
+  const [notesOpen, setNotesOpen] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
@@ -368,6 +373,8 @@ function AppProviderInner({ children }: { children: ReactNode }) {
   );
 
   const openHome = useCallback(() => {
+    setDirectorOpen(false);
+    setNotesOpen(false);
     setViewMode("home");
   }, []);
 
@@ -607,18 +614,47 @@ function AppProviderInner({ children }: { children: ReactNode }) {
       })),
     [updatePrefs]
   );
-  const toggleFocusMode = useCallback(() => setFocusMode((v) => !v), []);
-  const openCommandPalette = useCallback(() => setCommandPaletteOpen(true), []);
+  const toggleFocusMode = useCallback(() => {
+    setFocusMode((v) => {
+      const next = !v;
+      if (next) {
+        setDirectorOpen(false);
+        setNotesOpen(false);
+      }
+      return next;
+    });
+  }, []);
+  const openCommandPalette = useCallback(() => {
+    setMemorySearchOpen(false);
+    setCommandPaletteOpen(true);
+  }, []);
   const closeCommandPalette = useCallback(() => setCommandPaletteOpen(false), []);
-  const toggleCommandPalette = useCallback(() => setCommandPaletteOpen((v) => !v), []);
+  const toggleCommandPalette = useCallback(() => {
+    setCommandPaletteOpen((v) => {
+      if (!v) setMemorySearchOpen(false);
+      return !v;
+    });
+  }, []);
   const setStudioDrawerOpen = useCallback(
-    (studioDrawerOpen: boolean) => updatePrefs((p) => ({ ...p, studioDrawerOpen })),
+    (studioDrawerOpen: boolean) => {
+      if (studioDrawerOpen) {
+        setDirectorOpen(false);
+        setNotesOpen(false);
+      }
+      updatePrefs((p) => ({ ...p, studioDrawerOpen }));
+    },
     [updatePrefs]
   );
-  const toggleStudioDrawer = useCallback(
-    () => updatePrefs((p) => ({ ...p, studioDrawerOpen: !p.studioDrawerOpen })),
-    [updatePrefs]
-  );
+  const toggleStudioDrawer = useCallback(() => {
+    updatePrefs((p) => {
+      const next = !p.studioDrawerOpen;
+      if (next) {
+        setDirectorOpen(false);
+        setNotesOpen(false);
+      }
+      return { ...p, studioDrawerOpen: next };
+    });
+  }, [updatePrefs]);
 
   const openAtlasSubTab = useCallback((sub: AtlasSubTab) => {
     setAtlasSubTab(sub);
@@ -644,15 +680,29 @@ function AppProviderInner({ children }: { children: ReactNode }) {
   }, []);
 
   const openSettings = useCallback((tab: SettingsTab = "providers") => {
+    setCommandPaletteOpen(false);
+    setMemorySearchOpen(false);
     setSettingsTab(tab);
     setSettingsOpen(true);
   }, []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
-  const openCreateBook = useCallback(() => setCreateBookOpen(true), []);
+  const openCreateBook = useCallback(() => {
+    setCommandPaletteOpen(false);
+    setMemorySearchOpen(false);
+    setCreateBookOpen(true);
+  }, []);
   const closeCreateBook = useCallback(() => setCreateBookOpen(false), []);
-  const openMemorySearch = useCallback(() => setMemorySearchOpen(true), []);
+  const openMemorySearch = useCallback(() => {
+    setCommandPaletteOpen(false);
+    setMemorySearchOpen(true);
+  }, []);
   const closeMemorySearch = useCallback(() => setMemorySearchOpen(false), []);
-  const toggleMemorySearch = useCallback(() => setMemorySearchOpen((v) => !v), []);
+  const toggleMemorySearch = useCallback(() => {
+    setMemorySearchOpen((v) => {
+      if (!v) setCommandPaletteOpen(false);
+      return !v;
+    });
+  }, []);
 
   const registerSaveHandler = useCallback(
     (handler: (() => void | Promise<void>) | null) => {
@@ -675,12 +725,43 @@ function AppProviderInner({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const openDirector = useCallback((tab?: DirectorTab) => {
-    if (tab) setDirectorTab(tab);
-    setDirectorOpen(true);
-  }, []);
+  const openDirector = useCallback(
+    (tab?: DirectorTab) => {
+      if (tab) setDirectorTab(tab);
+      setNotesOpen(false);
+      updatePrefs((p) => (p.studioDrawerOpen ? { ...p, studioDrawerOpen: false } : p));
+      setDirectorOpen(true);
+    },
+    [updatePrefs]
+  );
   const closeDirector = useCallback(() => setDirectorOpen(false), []);
-  const toggleDirector = useCallback(() => setDirectorOpen((v) => !v), []);
+  const toggleDirector = useCallback(() => {
+    setDirectorOpen((v) => {
+      const next = !v;
+      if (next) {
+        setNotesOpen(false);
+        updatePrefs((p) => (p.studioDrawerOpen ? { ...p, studioDrawerOpen: false } : p));
+      }
+      return next;
+    });
+  }, [updatePrefs]);
+
+  const openNotes = useCallback(() => {
+    setDirectorOpen(false);
+    updatePrefs((p) => (p.studioDrawerOpen ? { ...p, studioDrawerOpen: false } : p));
+    setNotesOpen(true);
+  }, [updatePrefs]);
+  const closeNotes = useCallback(() => setNotesOpen(false), []);
+  const toggleNotes = useCallback(() => {
+    setNotesOpen((v) => {
+      const next = !v;
+      if (next) {
+        setDirectorOpen(false);
+        updatePrefs((p) => (p.studioDrawerOpen ? { ...p, studioDrawerOpen: false } : p));
+      }
+      return next;
+    });
+  }, [updatePrefs]);
 
   const refreshBookDataRef = useRef(refreshBookData);
   refreshBookDataRef.current = refreshBookData;
@@ -748,6 +829,10 @@ function AppProviderInner({ children }: { children: ReactNode }) {
       openDirector,
       closeDirector,
       toggleDirector,
+      notesOpen,
+      openNotes,
+      closeNotes,
+      toggleNotes,
       notify,
       dismissToast,
       bootstrapping,
@@ -837,6 +922,10 @@ function AppProviderInner({ children }: { children: ReactNode }) {
       openDirector,
       closeDirector,
       toggleDirector,
+      notesOpen,
+      openNotes,
+      closeNotes,
+      toggleNotes,
       notify,
       dismissToast,
       bootstrapping,

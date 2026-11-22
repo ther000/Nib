@@ -115,7 +115,7 @@ export function DirtyRepairQueue({
 
   const handleRunCritic = async (item: DirtyChapterItem) => {
     if (!item.hasContent) {
-      notify({ tone: "warn", message: `第 ${formatSeq(item.globalSeq)} 章暂无正文，无法执行 Critic 复核` });
+      notify({ tone: "warn", message: `第 ${formatSeq(item.globalSeq)} 章暂无正文，无法执行剧情复核` });
       return;
     }
     setBusyAction(`critic:${item.chapterId}`);
@@ -124,12 +124,12 @@ export function DirtyRepairQueue({
       await syncAfterMutation(item.chapterId);
       notify({
         tone: audit.criticFindings.length > 0 ? "warn" : "ok",
-        message: `第 ${formatSeq(item.globalSeq)} 章 Critic 复核完成：检出 ${audit.criticFindings.length} 项建议`,
+        message: `第 ${formatSeq(item.globalSeq)} 章剧情复核完成：检出 ${audit.criticFindings.length} 项建议`,
       });
     } catch (err) {
       notify({
         tone: "danger",
-        message: "Critic 复核失败",
+        message: "剧情复核失败",
         detail: formatErrorMessage(err),
       });
     } finally {
@@ -144,12 +144,12 @@ export function DirtyRepairQueue({
       await syncAfterMutation(ids.length === 1 ? ids[0] : undefined);
       notify({
         tone: "ok",
-        message: `已清除 ${res.clearedCount} 个章节的「前文有变动」标记`,
+        message: `已将 ${res.clearedCount} 个章节标记为已核对`,
       });
     } catch (err) {
       notify({
         tone: "danger",
-        message: "清除脏标失败",
+        message: "标记已核对失败",
         detail: formatErrorMessage(err),
       });
     } finally {
@@ -183,9 +183,9 @@ export function DirtyRepairQueue({
         >
           <AlertTriangle className="h-4 w-4 shrink-0 text-warn" />
           <span className="font-semibold text-ink-primary">
-            下游脏标（upstream_dirty）修复队列
+            前文改动待核对列表
           </span>
-          <span className="nib-mono rounded-full bg-warn-soft px-2 py-0.5 text-[10.5px] font-semibold text-warn">
+          <span className="nib-mono rounded-full bg-warn-soft px-2 py-0.5 text-[11px] font-semibold text-warn">
             {items.length} 章待核对
           </span>
           {compact &&
@@ -202,10 +202,10 @@ export function DirtyRepairQueue({
               type="button"
               disabled={busyAction !== null}
               onClick={() => void handleClear(Array.from(selectedIds))}
-              className="flex items-center gap-1 rounded-md border border-accent/40 bg-accent-soft px-2.5 py-1 text-[11px] font-medium text-accent hover:border-accent disabled:opacity-45"
+              className="flex items-center gap-1 rounded-md border border-accent/40 bg-accent-soft px-2.5 py-1 text-xs font-medium text-accent hover:border-accent disabled:opacity-45"
             >
               <CheckCheck className="h-3 w-3" />
-              <span>清除已选 ({selectedIds.size})</span>
+              <span>标记已核对 ({selectedIds.size})</span>
             </button>
           )}
           {items.length > 0 && (
@@ -213,17 +213,17 @@ export function DirtyRepairQueue({
               type="button"
               disabled={busyAction !== null}
               onClick={() => void handleClear([])}
-              className="flex items-center gap-1 rounded-md border border-border-subtle bg-surface px-2.5 py-1 text-[11px] text-ink-secondary hover:border-border-strong hover:text-ink-primary disabled:opacity-45"
+              className="flex items-center gap-1 rounded-md border border-border-subtle bg-surface px-2.5 py-1 text-xs text-ink-secondary hover:border-border-strong hover:text-ink-primary disabled:opacity-45"
             >
               <ShieldCheck className="h-3 w-3 text-ok" />
-              <span>全部消标</span>
+              <span>全部标记已核对</span>
             </button>
           )}
           {compact && onOpenFullAudit && (
             <button
               type="button"
               onClick={onOpenFullAudit}
-              className="rounded-md px-2 py-1 text-[11px] text-accent hover:bg-surface"
+              className="rounded-md px-2 py-1 text-xs text-accent hover:bg-surface"
             >
               全书体检
             </button>
@@ -236,11 +236,11 @@ export function DirtyRepairQueue({
         <div className="flex flex-col gap-2 border-t border-warn/25 px-4 py-3">
           {loading && items.length === 0 ? (
             <div className="py-6 text-center text-xs text-ink-muted">
-              正在检查受上游变动影响的章节…
+              正在检查受前文改动影响的章节…
             </div>
           ) : items.length === 0 ? (
             <div className="py-8 text-center text-xs text-ink-secondary">
-              全书当前没有标记为「前文有变动」的脏标章节
+              当前没有受前文改动影响的待核对章节
             </div>
           ) : (
             items.map((item) => {
@@ -318,7 +318,7 @@ export function DirtyRepairQueue({
                             critiquing ? "animate-pulse" : ""
                           }`}
                         />
-                        <span>{critiquing ? "复核中…" : "Critic 复核"}</span>
+                        <span>{critiquing ? "复核中…" : "剧情复核"}</span>
                       </button>
                       <button
                         type="button"
@@ -327,7 +327,7 @@ export function DirtyRepairQueue({
                         className="flex items-center gap-1 rounded bg-ok-soft px-2 py-1 text-[11px] font-medium text-ok hover:opacity-85 disabled:opacity-40"
                       >
                         <ShieldCheck className="h-3 w-3" />
-                        <span>{clearing ? "消标中…" : "清除脏标"}</span>
+                        <span>{clearing ? "处理中…" : "标记已核对"}</span>
                       </button>
                     </div>
                   </div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Flag, RefreshCw, TrendingUp } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Flag, RefreshCw, TrendingUp } from "lucide-react";
 import {
   LibraryService,
   type Volume,
@@ -51,6 +51,7 @@ export function VolumePacingChart({
 }: VolumePacingChartProps) {
   const [report, setReport] = useState<VolumePacingReport | null>(null);
   const [loading, setLoading] = useState(false);
+  const [chartExpanded, setChartExpanded] = useState(false);
   const reqIdRef = useRef(0);
 
   const loadPacing = useCallback(async () => {
@@ -110,34 +111,62 @@ export function VolumePacingChart({
   }, [points]);
 
   return (
-    <section className="flex flex-col gap-2.5 rounded-xl border border-border-subtle bg-surface/75 px-4 py-3">
-      {/* Header */}
+    <section className="flex flex-col gap-2 rounded-xl border border-border-subtle bg-surface/75 px-4 py-2.5">
+      {/* Compact Header: Volume Goal + Climax Plan + Toggle Curve */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2 text-xs">
-          <TrendingUp className="h-3.5 w-3.5 shrink-0 text-accent" />
-          <span className="truncate font-medium text-ink-primary">
-            {volume.title} · 情绪节奏曲线
-          </span>
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2.5 gap-y-1 text-xs">
+          <button
+            type="button"
+            onClick={() => setChartExpanded((v) => !v)}
+            className="flex items-center gap-1.5 font-medium text-ink-primary transition-colors hover:text-accent"
+          >
+            {chartExpanded ? (
+              <ChevronDown className="h-3.5 w-3.5 text-ink-muted" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 text-ink-muted" />
+            )}
+            <TrendingUp className="h-3.5 w-3.5 shrink-0 text-accent" />
+            <span className="truncate">{volume.title}</span>
+          </button>
+
           {volume.goal && (
-            <span className="hidden truncate text-[11px] text-ink-muted md:inline">
-              · {volume.goal}
+            <span className="truncate text-xs text-ink-secondary" title={volume.goal}>
+              目标：{volume.goal}
+            </span>
+          )}
+          {volume.climaxPlan && (
+            <span
+              className="hidden truncate text-xs text-ink-muted lg:inline"
+              title={`卷末高潮：${volume.climaxPlan}`}
+            >
+              · 高潮：{volume.climaxPlan}
             </span>
           )}
         </div>
 
-        <button
-          type="button"
-          onClick={() => void loadPacing()}
-          title="刷新节奏诊断"
-          className="rounded p-1 text-ink-muted transition-colors hover:bg-elevated hover:text-ink-primary"
-        >
-          <RefreshCw
-            className={`h-3 w-3 ${loading ? "animate-spin text-accent" : ""}`}
-          />
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setChartExpanded((v) => !v)}
+            className="rounded-md px-2 py-0.5 text-xs text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+          >
+            {chartExpanded ? "收起节奏图" : `节奏图 (${points.length})`}
+          </button>
+          <button
+            type="button"
+            onClick={() => void loadPacing()}
+            title="刷新节奏诊断"
+            aria-label="刷新节奏诊断"
+            className="rounded p-1 text-ink-muted transition-colors hover:bg-elevated hover:text-ink-primary"
+          >
+            <RefreshCw
+              className={`h-3 w-3 ${loading ? "animate-spin text-accent" : ""}`}
+            />
+          </button>
+        </div>
       </div>
 
-      {/* Diagnostic Alert Pills */}
+      {/* Diagnostic Alert Pills (always visible when alerts exist) */}
       {alerts.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
           {alerts.map((al, idx) => {
@@ -154,7 +183,7 @@ export function VolumePacingChart({
                     onSelectChapter(al.chapterIds[0]);
                   }
                 }}
-                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-opacity hover:opacity-85 ${
+                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-opacity hover:opacity-85 ${
                   isDanger
                     ? "border-danger/35 bg-danger-soft text-danger"
                     : "border-warn/35 bg-warn-soft text-warn"
@@ -172,114 +201,113 @@ export function VolumePacingChart({
         </div>
       )}
 
-      {/* Interactive SVG Line Chart */}
-      {points.length > 0 ? (
-        <div className="overflow-x-auto pb-0.5">
-          <svg
-            width={chart.width}
-            height={chart.height}
-            viewBox={`0 0 ${chart.width} ${chart.height}`}
-            className="block select-none"
-          >
-            {/* Horizontal grid lines & Y axis labels */}
-            {Y_LABELS.map((item) => {
-              const y = chart.yForWeight(item.weight);
-              return (
-                <g key={item.weight}>
-                  <line
-                    x1={chart.padLeft}
-                    y1={y}
-                    x2={chart.width - chart.padRight}
-                    y2={y}
-                    stroke="var(--border-subtle)"
-                    strokeDasharray={item.weight === 4 ? undefined : "2 3"}
-                  />
-                  <text
-                    x={chart.padLeft - 6}
-                    y={y + 3}
-                    textAnchor="end"
-                    fill="var(--text-muted)"
-                    fontSize={9.5}
+      {/* Collapsible Interactive SVG Line Chart */}
+      {chartExpanded && (
+        points.length > 0 ? (
+          <div className="overflow-x-auto border-t border-border-subtle pt-2 pb-0.5">
+            <svg
+              width={chart.width}
+              height={chart.height}
+              viewBox={`0 0 ${chart.width} ${chart.height}`}
+              className="block select-none"
+            >
+              {Y_LABELS.map((item) => {
+                const y = chart.yForWeight(item.weight);
+                return (
+                  <g key={item.weight}>
+                    <line
+                      x1={chart.padLeft}
+                      y1={y}
+                      x2={chart.width - chart.padRight}
+                      y2={y}
+                      stroke="var(--border-subtle)"
+                      strokeDasharray={item.weight === 4 ? undefined : "2 3"}
+                    />
+                    <text
+                      x={chart.padLeft - 6}
+                      y={y + 3}
+                      textAnchor="end"
+                      fill="var(--text-muted)"
+                      fontSize={10}
+                    >
+                      {item.label}
+                    </text>
+                  </g>
+                );
+              })}
+
+              {chart.coords.length > 1 && (
+                <polyline
+                  fill="none"
+                  stroke="var(--accent)"
+                  strokeOpacity={0.55}
+                  strokeWidth={1.75}
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  points={chart.polylinePoints}
+                />
+              )}
+
+              {chart.coords.map(({ pt, x, y }) => {
+                const selected = pt.chapterId === activeChapterId;
+                const em = getEmotionMeta(pt.emotionTag);
+                const hk = getHookMeta(pt.hookType);
+                return (
+                  <g
+                    key={pt.chapterId}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onSelectChapter(pt.chapterId)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onSelectChapter(pt.chapterId);
+                      }
+                    }}
+                    className="cursor-pointer focus:outline-none"
                   >
-                    {item.label}
-                  </text>
-                </g>
-              );
-            })}
-
-            {/* Connecting curve polyline */}
-            {chart.coords.length > 1 && (
-              <polyline
-                fill="none"
-                stroke="var(--accent)"
-                strokeOpacity={0.55}
-                strokeWidth={1.75}
-                strokeLinejoin="round"
-                strokeLinecap="round"
-                points={chart.polylinePoints}
-              />
-            )}
-
-            {/* Clickable chapter nodes */}
-            {chart.coords.map(({ pt, x, y }) => {
-              const selected = pt.chapterId === activeChapterId;
-              const em = getEmotionMeta(pt.emotionTag);
-              const hk = getHookMeta(pt.hookType);
-              return (
-                <g
-                  key={pt.chapterId}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => onSelectChapter(pt.chapterId)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      onSelectChapter(pt.chapterId);
-                    }
-                  }}
-                  className="cursor-pointer focus:outline-none"
-                >
-                  <title>
-                    {`第${pt.globalSeq}章 ${pt.title} · ${em.label} · ${hk.label}`}
-                  </title>
-                  {selected && (
+                    <title>
+                      {`第${pt.globalSeq}章 ${pt.title} · ${em.label} · ${hk.label}`}
+                    </title>
+                    {selected && (
+                      <circle
+                        cx={x}
+                        cy={y}
+                        r={8.5}
+                        fill="var(--accent-soft)"
+                        stroke="var(--accent)"
+                        strokeWidth={1.2}
+                      />
+                    )}
                     <circle
                       cx={x}
                       cy={y}
-                      r={8.5}
-                      fill="var(--accent-soft)"
-                      stroke="var(--accent)"
-                      strokeWidth={1.2}
+                      r={selected ? 4.5 : 3.8}
+                      fill={nodeFill(pt.emotionTag)}
+                      stroke="var(--bg-surface)"
+                      strokeWidth={1.5}
                     />
-                  )}
-                  <circle
-                    cx={x}
-                    cy={y}
-                    r={selected ? 4.5 : 3.8}
-                    fill={nodeFill(pt.emotionTag)}
-                    stroke="var(--bg-surface)"
-                    strokeWidth={1.5}
-                  />
-                  <text
-                    x={x}
-                    y={chart.height - 6}
-                    textAnchor="middle"
-                    fill={selected ? "var(--accent)" : "var(--text-muted)"}
-                    fontSize={10}
-                    fontWeight={selected ? 600 : 400}
-                    className="nib-mono"
-                  >
-                    {formatSeq(pt.globalSeq)}
-                  </text>
-                </g>
-              );
-            })}
-          </svg>
-        </div>
-      ) : (
-        <div className="py-2 text-xs text-ink-muted">
-          本卷尚无章节，可手动新建或使用上方「批量生成章纲」。
-        </div>
+                    <text
+                      x={x}
+                      y={chart.height - 6}
+                      textAnchor="middle"
+                      fill={selected ? "var(--accent)" : "var(--text-muted)"}
+                      fontSize={10}
+                      fontWeight={selected ? 600 : 400}
+                      className="nib-mono"
+                    >
+                      {formatSeq(pt.globalSeq)}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
+        ) : (
+          <div className="border-t border-border-subtle pt-2 text-xs text-ink-muted">
+            本卷尚无章节，可在左侧目录手动新建或点击「AI 章纲」批量生成。
+          </div>
+        )
       )}
     </section>
   );

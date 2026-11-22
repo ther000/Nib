@@ -105,7 +105,13 @@ function NibShell() {
       const mod = e.ctrlKey || e.metaKey;
       if (!mod) return;
 
-      if ((e.key.toLowerCase() === "p" || e.code === "KeyP") && e.shiftKey && !settingsOpen && !createBookOpen) {
+      if (
+        (e.key.toLowerCase() === "p" || e.code === "KeyP") &&
+        e.shiftKey &&
+        !settingsOpen &&
+        !createBookOpen &&
+        (!domModalOpen || commandPaletteOpen || memorySearchOpen)
+      ) {
         e.preventDefault();
         toggleCommandPalette();
         return;
@@ -128,6 +134,7 @@ function NibShell() {
         e.shiftKey &&
         !settingsOpen &&
         !createBookOpen &&
+        (!domModalOpen || memorySearchOpen || commandPaletteOpen) &&
         inWorkspace
       ) {
         e.preventDefault();
@@ -247,11 +254,11 @@ function NibShell() {
             </Suspense>
           </div>
           {!effectiveFocusMode && <DirectorDrawer />}
+          {!effectiveFocusMode && <ScratchNotesDrawer />}
         </div>
       )}
 
       <CreateBookModal />
-      <ScratchNotesDrawer />
       <ReverseExtractModal />
       <MemorySearchModal />
       <CommandPalette />

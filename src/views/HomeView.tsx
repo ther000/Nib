@@ -5,6 +5,7 @@ import {
   BookMarked,
   BookOpen,
   BookPlus,
+  CheckCircle2,
   Download,
   FileText,
   PenLine,
@@ -14,17 +15,14 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { LibraryService, SettingsService, type Book, type UsageSummary, type WritingStatsSummary } from "../mygo";
+import { LibraryService, type Book, type WritingStatsSummary } from "../mygo";
 import { useApp } from "../stores/AppContext";
 import { useContextMenu } from "../components/ContextMenu";
-import { UsageHeatmap } from "../components/UsageHeatmap";
+import { ConfirmDialog, type ConfirmDialogState } from "../components/ui/ConfirmDialog";
 import { exportBookWithNotify } from "../lib/bookExport";
 import { hasAnyEnabledModel, hasReadyModelRoute } from "../lib/modelReady";
 import {
-  PIPELINE_STAGES,
-  formatCompactTokens,
   formatErrorMessage,
-  formatLatency,
   formatNumber,
   formatTimestamp,
 } from "../lib/constants";
@@ -45,8 +43,8 @@ export function HomeView() {
   } = useApp();
   const { openContextMenu } = useContextMenu();
 
-  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
-  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [importingBook, setImportingBook] = useState(false);
 
   const handleImportBook = async () => {
@@ -56,7 +54,7 @@ export function HomeView() {
       const res = await LibraryService.importBookFromFile("general");
       if (!res) return;
       await refreshBooks(res.book.id);
-      await openBook(res.book.id);
+      await openBook(res.book.id, "studio");
       notify({
         tone: "ok",
         message: `已导入《${res.book.title}》（${res.chapterCount} 章，${formatNumber(res.totalWords)} 字）`,
@@ -72,16 +70,10 @@ export function HomeView() {
     }
   };
 
-  // Writing output stats state
+  // Writing output stats state (only loaded when books exist)
   const [statsBookId, setStatsBookId] = useState<number>(0);
   const [writingStats, setWritingStats] = useState<WritingStatsSummary | null>(null);
   const [writingStatsLoading, setWritingStatsLoading] = useState(false);
-
-  // Usage analytics state
-  const [usageBookId, setUsageBookId] = useState<number>(0);
-  const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
-  const [usageLoading, setUsageLoading] = useState(false);
-  const [usageDetailTab, setUsageDetailTab] = useState<"stage" | "model">("stage");
 
   const hasEnabledProvider = providers.some((p) => p.enabled);
   const hasEnabledModel = hasAnyEnabledModel(providers);
@@ -89,31 +81,12 @@ export function HomeView() {
   const modelReady = hasEnabledProvider && hasEnabledModel && hasDraftRoute;
 
   const modelStatusHint = useMemo(() => {
-    if (!hasEnabledProvider) return "连接 DeepSeek、Claude、Gemini 等模型";
-    if (!hasEnabledModel) return "已添加模型服务，请勾选要启用的模型";
+    if (!hasEnabledProvider) return "连接 DeepSeek、Claude、Gemini 或本地 Ollama";
+    if (!hasEnabledModel) return "已添加模型服务，请启用至少一个模型";
     if (!hasDraftRoute) return "已启用模型，请指定默认写作模型";
     const draftRoute = modelRoutes.find((r) => r.stage === "draft");
-    return draftRoute?.modelName ? `默认写作模型：${draftRoute.modelName}` : "模型已就绪";
+    return draftRoute?.modelName ? `当前写作模型：${draftRoute.modelName}` : "模型已就绪";
   }, [hasEnabledProvider, hasEnabledModel, hasDraftRoute, modelRoutes]);
-
-  const loadUsage = useCallback(
-    async (bookId: number) => {
-      setUsageLoading(true);
-      try {
-        const res = await SettingsService.getUsageSummary(bookId);
-        setUsageSummary(res);
-      } catch (err) {
-        notify({
-          tone: "danger",
-          message: "加载用量统计失败",
-          detail: formatErrorMessage(err),
-        });
-      } finally {
-        setUsageLoading(false);
-      }
-    },
-    [notify]
-  );
 
   const loadWritingStats = useCallback(
     async (bookId: number) => {
@@ -135,20 +108,10 @@ export function HomeView() {
   );
 
   useEffect(() => {
-    if (usageBookId > 0 && !books.some((b) => b.id === usageBookId)) {
-      setUsageBookId(0);
-    }
-  }, [books, usageBookId]);
-
-  useEffect(() => {
     if (statsBookId > 0 && !books.some((b) => b.id === statsBookId)) {
       setStatsBookId(0);
     }
   }, [books, statsBookId]);
-
-  useEffect(() => {
-    void loadUsage(usageBookId);
-  }, [usageBookId, loadUsage]);
 
   const getGenreName = (genreId: string) =>
     genrePresets.find((g) => g.id === genreId)?.name ?? genreId;
@@ -161,10 +124,18 @@ export function HomeView() {
     return books[0] ?? null;
   }, [books, activeBook]);
 
+  const otherBooks = useMemo(() => {
+    if (!featuredBook) return books;
+    return books.filter((b) => b.id !== featuredBook.id);
+  }, [books, featuredBook]);
+
   const statsBookInitializedRef = useRef(false);
 
   useEffect(() => {
-    // 首次加载有书籍时，默认展示最近写作书籍的码字进度；之后允许用户手动切到「全部作品」(0)。
+    if (books.length === 0) {
+      setWritingStats(null);
+      return;
+    }
     if (!statsBookInitializedRef.current && featuredBook) {
       statsBookInitializedRef.current = true;
       if (statsBookId === 0) {
@@ -173,17 +144,28 @@ export function HomeView() {
       }
     }
     void loadWritingStats(statsBookId);
-  }, [statsBookId, featuredBook, loadWritingStats]);
+  }, [books.length, statsBookId, featuredBook, loadWritingStats]);
 
-  const handleConfirmDelete = async (bookId: number) => {
-    setDeletingId(bookId);
-    try {
-      await deleteBook(bookId);
-      setConfirmDeleteId(null);
-    } finally {
-      setDeletingId(null);
-    }
-  };
+  const requestDeleteBook = useCallback(
+    (book: Book) => {
+      setConfirmDialog({
+        title: `删除《${book.title}》`,
+        message: "删除后将移入回收站（保留 30 天，可在设置中恢复）。确定删除吗？",
+        confirmLabel: "移入回收站",
+        danger: true,
+        onConfirm: async () => {
+          setDeleting(true);
+          try {
+            await deleteBook(book.id);
+            setConfirmDialog(null);
+          } finally {
+            setDeleting(false);
+          }
+        },
+      });
+    },
+    [deleteBook]
+  );
 
   const openBookContextMenu = useCallback(
     (e: ReactMouseEvent, book: Book) => {
@@ -194,12 +176,12 @@ export function HomeView() {
           onSelect: () => void openBook(book.id, "studio"),
         },
         {
-          label: "打开编排大纲",
+          label: "打开大纲",
           icon: <BookOpen className="h-3.5 w-3.5" />,
           onSelect: () => void openBook(book.id, "architect"),
         },
         {
-          label: "打开设定账本",
+          label: "打开设定",
           icon: <BookMarked className="h-3.5 w-3.5" />,
           onSelect: () => void openBook(book.id, "atlas"),
         },
@@ -219,16 +201,105 @@ export function HomeView() {
           label: "删除书籍…",
           icon: <Trash2 className="h-3.5 w-3.5" />,
           danger: true,
-          onSelect: () => setConfirmDeleteId(book.id),
+          onSelect: () => requestDeleteBook(book),
         },
       ]);
     },
-    [openContextMenu, openBook, notify]
+    [openContextMenu, openBook, notify, requestDeleteBook]
   );
 
+  // Clean 2-step first-run onboarding when shelf is empty
+  if (books.length === 0) {
+    return (
+      <main className="flex flex-1 items-center justify-center overflow-y-auto px-6 py-12">
+        <div className="w-full max-w-[520px]">
+          <h1 className="text-2xl font-medium tracking-tight text-ink-primary">
+            开始你的第一部长篇
+          </h1>
+          <p className="mt-2 text-[13px] leading-relaxed text-ink-secondary">
+            先连好一个 AI 模型，再建书即可直接开始写第一章；也可以直接手动建书或导入旧稿。
+          </p>
+
+          <div className="mt-6 flex flex-col gap-3">
+            {/* Step 1: Connect Model */}
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-border-subtle bg-surface px-5 py-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  {modelReady ? (
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-ok" />
+                  ) : (
+                    <span className="nib-mono flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-soft text-xs font-semibold text-accent">
+                      1
+                    </span>
+                  )}
+                  <span className="text-sm font-medium text-ink-primary">
+                    {modelReady ? "AI 模型已就绪" : "连接写作模型"}
+                  </span>
+                </div>
+                <p className="mt-1 pl-7 text-xs text-ink-secondary">{modelStatusHint}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => openSettings(hasEnabledModel && !hasDraftRoute ? "routes" : "providers")}
+                className={`shrink-0 rounded-lg px-3.5 py-1.5 text-xs font-medium transition-colors ${
+                  modelReady
+                    ? "border border-border-subtle bg-canvas text-ink-secondary hover:border-border-strong hover:text-ink-primary"
+                    : "bg-accent font-semibold text-canvas hover:opacity-90"
+                }`}
+              >
+                {modelReady ? "调整" : "去连接"}
+              </button>
+            </div>
+
+            {/* Step 2: Create First Book */}
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-border-subtle bg-surface px-5 py-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="nib-mono flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-elevated text-xs font-semibold text-ink-secondary">
+                    2
+                  </span>
+                  <span className="text-sm font-medium text-ink-primary">创建第一本书</span>
+                </div>
+                <p className="mt-1 pl-7 text-xs text-ink-secondary">
+                  {modelReady
+                    ? "一句话生成书名、角色与前几章大纲，或手动开写"
+                    : "不连模型也可以直接手动建书并开始码字"}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={openCreateBook}
+                className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-opacity hover:opacity-90 ${
+                  modelReady
+                    ? "bg-accent text-canvas"
+                    : "border border-border-strong bg-elevated text-ink-primary hover:border-accent/50"
+                }`}
+              >
+                <BookPlus className="h-3.5 w-3.5" />
+                <span>新建书籍</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-5 flex items-center justify-between text-xs text-ink-muted">
+            <button
+              type="button"
+              disabled={importingBook}
+              onClick={() => void handleImportBook()}
+              className="flex items-center gap-1.5 text-ink-secondary transition-colors hover:text-ink-primary disabled:opacity-40"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              <span>{importingBook ? "正在导入…" : "已有存稿？导入本地 TXT / Markdown"}</span>
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
   return (
-    <main className="flex-1 overflow-y-auto px-8 py-10">
-      <div className="mx-auto flex w-full max-w-[940px] flex-col gap-8">
+    <main className="flex-1 overflow-y-auto px-8 py-9">
+      <div className="mx-auto flex w-full max-w-[920px] flex-col gap-7">
         {/* Header Row */}
         <header className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-2.5">
@@ -244,6 +315,7 @@ export function HomeView() {
             <button
               type="button"
               onClick={() => openSettings(hasEnabledModel && !hasDraftRoute ? "routes" : "providers")}
+              title={modelStatusHint}
               className="flex items-center gap-2 rounded-lg border border-border-subtle bg-surface px-3 py-1.5 text-[13px] font-medium text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary"
             >
               <span
@@ -251,7 +323,7 @@ export function HomeView() {
                   modelReady ? "bg-ok" : "bg-warn"
                 }`}
               />
-              <span>{modelReady ? "模型设置" : "连接模型"}</span>
+              <span>{modelReady ? "模型就绪" : "连接模型"}</span>
             </button>
 
             <button
@@ -275,44 +347,6 @@ export function HomeView() {
           </div>
         </header>
 
-        {/* Empty Shelf Placeholder */}
-        {books.length === 0 && (
-          <section className="flex flex-col items-start justify-between gap-5 rounded-xl border border-border-subtle bg-surface px-6 py-7 sm:flex-row sm:items-center">
-            <div className="min-w-0">
-              <h2 className="text-base font-medium text-ink-primary">
-                还没有作品
-              </h2>
-              <p className="mt-1 text-[13px] text-ink-secondary">
-                {modelReady
-                  ? "写一句故事灵感，或手动创建第一本书。"
-                  : modelStatusHint}
-              </p>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              {!modelReady && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    openSettings(hasEnabledModel && !hasDraftRoute ? "routes" : "providers")
-                  }
-                  className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-elevated px-3.5 py-2 text-[13px] font-medium text-ink-primary transition-colors hover:border-accent/50"
-                >
-                  <SlidersHorizontal className="h-3.5 w-3.5 text-ink-secondary" />
-                  <span>连接模型</span>
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={openCreateBook}
-                className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-[13px] font-semibold text-canvas transition-opacity hover:opacity-90"
-              >
-                <BookPlus className="h-3.5 w-3.5" />
-                <span>新建书籍</span>
-              </button>
-            </div>
-          </section>
-        )}
-
         {/* Continue Writing Hero */}
         {featuredBook && (
           <section
@@ -321,7 +355,7 @@ export function HomeView() {
           >
             <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
               <div className="min-w-0 flex-1">
-                <div className="mb-2.5 flex flex-wrap items-center gap-2.5 text-xs">
+                <div className="mb-2 flex flex-wrap items-center gap-2.5 text-xs">
                   <span className="rounded-md bg-accent-soft px-2 py-0.5 font-medium text-accent">
                     最近写作
                   </span>
@@ -329,7 +363,10 @@ export function HomeView() {
                     {getGenreName(featuredBook.genre)}
                   </span>
                   <span className="nib-mono text-ink-muted">
-                    {formatNumber(featuredBook.targetChapterWords)} 字/章
+                    {formatNumber(featuredBook.chapterCount)} 章 ·{" "}
+                    {featuredBook.totalWords >= 10000
+                      ? `${(featuredBook.totalWords / 10000).toFixed(1)} 万字`
+                      : `${formatNumber(featuredBook.totalWords)} 字`}
                   </span>
                   {featuredBook.updatedAt && (
                     <span className="nib-mono text-ink-muted">
@@ -372,118 +409,89 @@ export function HomeView() {
           </section>
         )}
 
-        {/* All Books Grid */}
-        {books.length > 0 && (
+        {/* Other Books Grid (deduplicated from featuredBook) */}
+        {otherBooks.length > 0 && (
           <section>
-            <h2 className="mb-3 text-[13px] font-medium text-ink-secondary">全部作品</h2>
+            <h2 className="mb-3 text-[13px] font-medium text-ink-secondary">其他作品</h2>
 
             <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
-              {books.map((book) => {
-                const isConfirming = confirmDeleteId === book.id;
-                const isDeleting = deletingId === book.id;
-                const isFeatured = featuredBook?.id === book.id;
-
-                return (
-                  <div
-                    key={book.id}
-                    onContextMenu={(e) => openBookContextMenu(e, book)}
-                    className={`group relative flex flex-col justify-between rounded-xl border bg-surface p-4 transition-colors ${
-                      isFeatured
-                        ? "border-border-strong"
-                        : "border-border-subtle hover:border-border-strong"
-                    }`}
+              {otherBooks.map((book) => (
+                <div
+                  key={book.id}
+                  onContextMenu={(e) => openBookContextMenu(e, book)}
+                  className="group relative flex flex-col justify-between rounded-xl border border-border-subtle bg-surface p-4 transition-colors hover:border-border-strong"
+                >
+                  <button
+                    type="button"
+                    onClick={() => void openBook(book.id, "studio")}
+                    className="flex flex-1 flex-col text-left"
                   >
-                    <button
-                      type="button"
-                      onClick={() => void openBook(book.id, "architect")}
-                      className="flex flex-1 flex-col text-left"
-                    >
-                      <div className="mb-2 pr-6">
-                        <h3 className="line-clamp-1 text-base font-medium text-ink-primary transition-colors group-hover:text-accent">
-                          《{book.title}》
-                        </h3>
-                      </div>
-
-                      <div className="mb-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs">
-                        <span className="text-ink-secondary">
-                          {getGenreName(book.genre)}
-                        </span>
-                        <span className="nib-mono text-ink-muted">
-                          {formatNumber(book.chapterCount)} 章 ·{" "}
-                          {book.totalWords >= 10000
-                            ? `${(book.totalWords / 10000).toFixed(1)} 万字`
-                            : `${formatNumber(book.totalWords)} 字`}
-                        </span>
-                        {book.finalizedCount > 0 && (
-                          <span className="nib-mono text-ink-muted">
-                            定稿 {formatNumber(book.finalizedCount)} 章
-                          </span>
-                        )}
-                      </div>
-
-                      <p className="line-clamp-2 min-h-[38px] text-[13px] leading-relaxed text-ink-secondary">
-                        {book.premise || book.goldenFinger || "暂无简介"}
-                      </p>
-                    </button>
-
-                    <div className="mt-4 flex items-center justify-between border-t border-border-subtle pt-2.5 text-xs text-ink-muted">
-                      <span className="nib-mono">
-                        {book.updatedAt ? formatTimestamp(book.updatedAt) : ""}
-                      </span>
-
-                      {isConfirming ? (
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            disabled={isDeleting}
-                            onClick={() => void handleConfirmDelete(book.id)}
-                            className="rounded-md border border-danger/40 bg-danger-soft px-2 py-0.5 text-xs font-medium text-danger transition-colors hover:bg-danger/20 disabled:opacity-50"
-                          >
-                            {isDeleting ? "删除中…" : "确认删除"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteId(null)}
-                            className="text-ink-secondary hover:text-ink-primary"
-                          >
-                            取消
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => void openBook(book.id, "architect")}
-                          className="flex items-center gap-1 text-ink-secondary transition-colors group-hover:text-accent"
-                        >
-                          <span>打开</span>
-                          <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
-                        </button>
-                      )}
+                    <div className="mb-2 pr-6">
+                      <h3 className="line-clamp-1 text-base font-medium text-ink-primary transition-colors group-hover:text-accent">
+                        《{book.title}》
+                      </h3>
                     </div>
 
-                    {!isConfirming && (
+                    <div className="mb-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs">
+                      <span className="text-ink-secondary">
+                        {getGenreName(book.genre)}
+                      </span>
+                      <span className="nib-mono text-ink-muted">
+                        {formatNumber(book.chapterCount)} 章 ·{" "}
+                        {book.totalWords >= 10000
+                          ? `${(book.totalWords / 10000).toFixed(1)} 万字`
+                          : `${formatNumber(book.totalWords)} 字`}
+                      </span>
+                    </div>
+
+                    <p className="line-clamp-2 min-h-[38px] text-[13px] leading-relaxed text-ink-secondary">
+                      {book.premise || book.goldenFinger || "暂无简介"}
+                    </p>
+                  </button>
+
+                  <div className="mt-4 flex items-center justify-between border-t border-border-subtle pt-2.5 text-xs text-ink-muted">
+                    <span className="nib-mono">
+                      {book.updatedAt ? formatTimestamp(book.updatedAt) : ""}
+                    </span>
+                    <div className="flex items-center gap-3">
                       <button
                         type="button"
-                        title="删除书籍"
-                        aria-label={`删除《${book.title}》`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setConfirmDeleteId(book.id);
-                        }}
-                        className="absolute top-3.5 right-3 rounded-lg p-1 text-ink-muted opacity-0 transition-all hover:bg-danger-soft hover:text-danger group-hover:opacity-100 focus:opacity-100"
+                        onClick={() => void openBook(book.id, "architect")}
+                        className="text-ink-muted transition-colors hover:text-ink-primary"
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
+                        大纲
                       </button>
-                    )}
+                      <button
+                        type="button"
+                        onClick={() => void openBook(book.id, "studio")}
+                        className="flex items-center gap-1 text-ink-secondary transition-colors group-hover:text-accent"
+                      >
+                        <span>写作</span>
+                        <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+                      </button>
+                    </div>
                   </div>
-                );
-              })}
+
+                  <button
+                    type="button"
+                    title="删除书籍"
+                    aria-label={`删除《${book.title}》`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      requestDeleteBook(book);
+                    }}
+                    className="absolute top-3.5 right-3 rounded-lg p-1 text-ink-muted opacity-0 transition-all hover:bg-danger-soft hover:text-danger group-hover:opacity-100 focus:opacity-100"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
             </div>
           </section>
         )}
 
         {/* Writing Output Section */}
-        <section className="flex flex-col gap-4 border-t border-border-subtle pt-6">
+        <section className="flex flex-col gap-3.5 border-t border-border-subtle pt-6">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <PenLine className="h-4 w-4 text-accent" />
@@ -493,19 +501,21 @@ export function HomeView() {
             </div>
 
             <div className="flex items-center gap-2">
-              <select
-                aria-label="码字统计范围"
-                value={statsBookId}
-                onChange={(e) => setStatsBookId(Number(e.target.value) || 0)}
-                className="rounded-lg border border-border-subtle bg-surface px-2.5 py-1 text-xs text-ink-primary focus:border-accent focus:outline-none"
-              >
-                <option value={0}>全部作品</option>
-                {books.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    《{b.title}》
-                  </option>
-                ))}
-              </select>
+              {books.length > 1 && (
+                <select
+                  aria-label="码字统计范围"
+                  value={statsBookId}
+                  onChange={(e) => setStatsBookId(Number(e.target.value) || 0)}
+                  className="rounded-lg border border-border-subtle bg-surface px-2.5 py-1 text-xs text-ink-primary focus:border-accent"
+                >
+                  <option value={0}>全部作品</option>
+                  {books.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      《{b.title}》
+                    </option>
+                  ))}
+                </select>
+              )}
 
               <button
                 type="button"
@@ -519,6 +529,15 @@ export function HomeView() {
                   }`}
                 />
                 <span>刷新</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openSettings("usage")}
+                className="flex items-center gap-1 rounded-lg border border-border-subtle bg-surface px-2.5 py-1 text-xs text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary"
+              >
+                <BarChart3 className="h-3 w-3" />
+                <span>AI 用量</span>
               </button>
             </div>
           </div>
@@ -570,271 +589,57 @@ export function HomeView() {
               />
             </div>
 
-            <div className="mt-5 flex h-20 items-end gap-1">
+            {/* Fixed-height track + separate date row prevents vertical overflow */}
+            <div className="mt-5 flex items-end gap-1">
               {(writingStats?.daily ?? []).map((d) => {
                 const max = Math.max(
                   1,
                   ...(writingStats?.daily ?? []).map((item) => item.wordsDelta)
                 );
-                const height = Math.max(4, Math.round((d.wordsDelta / max) * 76));
+                const height = Math.max(4, Math.round((d.wordsDelta / max) * 56));
                 return (
                   <div
                     key={d.date}
                     title={`${d.date}：${formatNumber(d.wordsDelta)} 字`}
-                    className="group flex h-full flex-1 flex-col items-center justify-end gap-1"
+                    className="group flex flex-1 flex-col items-center gap-1.5"
                   >
-                    <div
-                      className={`w-full rounded-sm transition-colors ${
-                        d.wordsDelta > 0
-                          ? "bg-accent/70 group-hover:bg-accent"
-                          : "bg-border-subtle"
-                      }`}
-                      style={{ height }}
-                    />
-                    <span className="nib-mono text-[10px] text-ink-muted">
+                    <div className="flex h-14 w-full items-end">
+                      <div
+                        className={`w-full rounded-sm transition-colors ${
+                          d.wordsDelta > 0
+                            ? "bg-accent/70 group-hover:bg-accent"
+                            : "bg-border-subtle"
+                        }`}
+                        style={{ height }}
+                      />
+                    </div>
+                    <span className="nib-mono text-[11px] leading-none text-ink-muted">
                       {d.date.slice(8)}
                     </span>
                   </div>
                 );
               })}
             </div>
-            <div className="mt-1.5 flex justify-between text-[11px] text-ink-muted">
-              <span>近 14 天</span>
-              <span>单位：字</span>
-            </div>
-          </div>
-        </section>
-
-        {/* Usage Analytics Section */}
-        <section className="flex flex-col gap-4 border-t border-border-subtle pt-6">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <BarChart3 className="h-4 w-4 text-accent" />
-              <h2 className="text-[13px] font-medium text-ink-secondary">
-                用量统计
-              </h2>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <select
-                aria-label="统计范围"
-                value={usageBookId}
-                onChange={(e) => setUsageBookId(Number(e.target.value) || 0)}
-                className="rounded-lg border border-border-subtle bg-surface px-2.5 py-1 text-xs text-ink-primary focus:border-accent focus:outline-none"
-              >
-                <option value={0}>全部作品</option>
-                {books.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    《{b.title}》
-                  </option>
-                ))}
-              </select>
-
+            <div className="mt-2 flex justify-between text-xs text-ink-muted">
+              <span>近 14 天码字趋势</span>
               <button
                 type="button"
-                disabled={usageLoading}
-                onClick={() => void loadUsage(usageBookId)}
-                className="flex items-center gap-1 rounded-lg border border-border-subtle bg-surface px-2.5 py-1 text-xs text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary disabled:opacity-50"
+                onClick={() => openSettings("workspace")}
+                className="flex items-center gap-1 text-ink-secondary transition-colors hover:text-ink-primary"
               >
-                <RefreshCw
-                  className={`h-3 w-3 ${
-                    usageLoading ? "animate-spin text-accent" : ""
-                  }`}
-                />
-                <span>刷新</span>
+                <SlidersHorizontal className="h-3 w-3" />
+                <span>调整日更目标</span>
               </button>
             </div>
           </div>
-
-          {/* KPI Strip */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div className="rounded-xl border border-border-subtle bg-surface p-4">
-              <div className="text-xs text-ink-muted">调用次数</div>
-              <div className="nib-mono mt-1.5 text-xl font-medium text-ink-primary">
-                {formatNumber(usageSummary?.totalCalls ?? 0)}
-                <span className="ml-1 font-ui text-xs font-normal text-ink-muted">
-                  次
-                </span>
-              </div>
-            </div>
-            <div
-              title={`输入 ${formatNumber(usageSummary?.totalPromptTokens ?? 0)} Token`}
-              className="rounded-xl border border-border-subtle bg-surface p-4"
-            >
-              <div className="text-xs text-ink-muted">输入 Token</div>
-              <div className="nib-mono mt-1.5 text-xl font-medium text-ink-primary">
-                {formatCompactTokens(usageSummary?.totalPromptTokens ?? 0)}
-              </div>
-            </div>
-            <div
-              title={`输出 ${formatNumber(usageSummary?.totalCompletionTokens ?? 0)} Token`}
-              className="rounded-xl border border-border-subtle bg-surface p-4"
-            >
-              <div className="text-xs text-ink-muted">输出 Token</div>
-              <div className="nib-mono mt-1.5 text-xl font-medium text-ink-primary">
-                {formatCompactTokens(usageSummary?.totalCompletionTokens ?? 0)}
-              </div>
-            </div>
-            <div
-              title={`总计 ${formatNumber(usageSummary?.totalTokens ?? 0)} Token`}
-              className="rounded-xl border border-accent/30 bg-accent-soft/45 p-4"
-            >
-              <div className="text-xs text-accent">总用量 Token</div>
-              <div className="nib-mono mt-1.5 text-xl font-medium text-accent">
-                {formatCompactTokens(usageSummary?.totalTokens ?? 0)}
-              </div>
-              {((usageSummary?.estimatedCostCny ?? 0) > 0 || (usageSummary?.estimatedCostUsd ?? 0) > 0) && (
-                <div className="nib-mono mt-1 text-xs text-ink-secondary">
-                  估算花费：
-                  {(usageSummary?.estimatedCostCny ?? 0) > 0 && `¥${(usageSummary?.estimatedCostCny ?? 0).toFixed(2)} `}
-                  {(usageSummary?.estimatedCostUsd ?? 0) > 0 && `$${(usageSummary?.estimatedCostUsd ?? 0).toFixed(3)}`}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Annual Daily Token Heatmap */}
-          <UsageHeatmap daily={usageSummary?.daily ?? []} />
-
-          {/* Breakdown Table (shown when there is usage data) */}
-          {(usageSummary?.totalCalls ?? 0) > 0 && (
-            <div className="overflow-hidden rounded-xl border border-border-subtle bg-surface">
-              <div className="flex items-center justify-between border-b border-border-subtle px-4 py-2.5">
-                <div className="flex items-center gap-1 rounded-lg border border-border-subtle bg-canvas p-0.5 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => setUsageDetailTab("stage")}
-                    className={`rounded-[6px] px-2.5 py-1 transition-colors ${
-                      usageDetailTab === "stage"
-                        ? "bg-accent-soft font-medium text-accent"
-                        : "text-ink-secondary hover:text-ink-primary"
-                    }`}
-                  >
-                    按写作环节
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setUsageDetailTab("model")}
-                    className={`rounded-[6px] px-2.5 py-1 transition-colors ${
-                      usageDetailTab === "model"
-                        ? "bg-accent-soft font-medium text-accent"
-                        : "text-ink-secondary hover:text-ink-primary"
-                    }`}
-                  >
-                    按模型服务
-                  </button>
-                </div>
-                <span className="text-xs text-ink-muted">单位：Token</span>
-              </div>
-
-              {usageDetailTab === "stage" ? (
-                <table className="w-full text-left text-xs">
-                  <thead className="border-b border-border-subtle bg-canvas/50 text-ink-muted">
-                    <tr>
-                      <th className="px-4 py-2.5 font-medium">环节</th>
-                      <th className="px-4 py-2.5 text-right font-medium">调用</th>
-                      <th className="px-4 py-2.5 text-right font-medium">输入</th>
-                      <th className="px-4 py-2.5 text-right font-medium">输出</th>
-                      <th className="px-4 py-2.5 text-right font-medium">合计</th>
-                      <th className="px-4 py-2.5 text-right font-medium">平均耗时</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border-subtle">
-                    {(usageSummary?.byStage ?? []).map((row) => {
-                      const label =
-                        PIPELINE_STAGES.find((s) => s.stage === row.stage)?.label ??
-                        (row.stage === "style" ? "文风分析" : row.stage);
-                      return (
-                        <tr key={row.stage}>
-                          <td className="px-4 py-2.5 text-[13px] font-medium text-ink-primary">
-                            {label}
-                          </td>
-                          <td className="nib-mono px-4 py-2.5 text-right text-ink-secondary">
-                            {formatNumber(row.calls)}
-                          </td>
-                          <td
-                            title={formatNumber(row.promptTokens)}
-                            className="nib-mono px-4 py-2.5 text-right text-ink-secondary"
-                          >
-                            {formatCompactTokens(row.promptTokens)}
-                          </td>
-                          <td
-                            title={formatNumber(row.completionTokens)}
-                            className="nib-mono px-4 py-2.5 text-right text-ink-secondary"
-                          >
-                            {formatCompactTokens(row.completionTokens)}
-                          </td>
-                          <td
-                            title={formatNumber(row.totalTokens)}
-                            className="nib-mono px-4 py-2.5 text-right font-medium text-ink-primary"
-                          >
-                            {formatCompactTokens(row.totalTokens)}
-                          </td>
-                          <td className="nib-mono px-4 py-2.5 text-right text-ink-muted">
-                            {formatLatency(row.avgLatencyMs)}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              ) : (
-                <table className="w-full text-left text-xs">
-                  <thead className="border-b border-border-subtle bg-canvas/50 text-ink-muted">
-                    <tr>
-                      <th className="px-4 py-2.5 font-medium">模型服务</th>
-                      <th className="px-4 py-2.5 font-medium">模型</th>
-                      <th className="px-4 py-2.5 text-right font-medium">调用</th>
-                      <th className="px-4 py-2.5 text-right font-medium">输入</th>
-                      <th className="px-4 py-2.5 text-right font-medium">输出</th>
-                      <th className="px-4 py-2.5 text-right font-medium">合计</th>
-                      <th className="px-4 py-2.5 text-right font-medium">估算花费</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border-subtle">
-                    {(usageSummary?.byModel ?? []).map((row, idx) => (
-                      <tr key={`${row.providerName}-${row.modelName}-${idx}`}>
-                        <td className="px-4 py-2.5 text-[13px] text-ink-primary">
-                          {row.providerName || "—"}
-                        </td>
-                        <td className="nib-mono px-4 py-2.5 text-ink-secondary">
-                          {row.modelName || "—"}
-                        </td>
-                        <td className="nib-mono px-4 py-2.5 text-right text-ink-secondary">
-                          {formatNumber(row.calls)}
-                        </td>
-                        <td
-                          title={formatNumber(row.promptTokens)}
-                          className="nib-mono px-4 py-2.5 text-right text-ink-secondary"
-                        >
-                          {formatCompactTokens(row.promptTokens)}
-                        </td>
-                        <td
-                          title={formatNumber(row.completionTokens)}
-                          className="nib-mono px-4 py-2.5 text-right text-ink-secondary"
-                        >
-                          {formatCompactTokens(row.completionTokens)}
-                        </td>
-                        <td
-                          title={formatNumber(row.totalTokens)}
-                          className="nib-mono px-4 py-2.5 text-right font-medium text-ink-primary"
-                        >
-                          {formatCompactTokens(row.totalTokens)}
-                        </td>
-                        <td className="nib-mono px-4 py-2.5 text-right text-ink-secondary">
-                          {row.estimatedCost > 0
-                            ? `${row.currency === "USD" ? "$" : "¥"}${row.estimatedCost.toFixed(row.currency === "USD" ? 4 : 2)}`
-                            : "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          )}
         </section>
       </div>
+
+      <ConfirmDialog
+        dialog={confirmDialog}
+        busy={deleting}
+        onClose={() => setConfirmDialog(null)}
+      />
     </main>
   );
 }

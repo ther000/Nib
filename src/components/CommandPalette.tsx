@@ -8,6 +8,7 @@ import {
   FileText,
   Home,
   Keyboard,
+  Lightbulb,
   Maximize2,
   Minimize2,
   Moon,
@@ -15,11 +16,13 @@ import {
   Plus,
   Search,
   Settings,
+  ShieldCheck,
   Sparkles,
   Sun,
   X,
 } from "lucide-react";
 import { useApp } from "../stores/AppContext";
+import { ModalShell } from "./ui/ModalShell";
 import { exportBookWithNotify } from "../lib/bookExport";
 import { formatSeq, isIMEComposing } from "../lib/constants";
 
@@ -37,13 +40,13 @@ const SHORTCUT_ITEMS: Array<{ keys: string; desc: string; scope: string }> = [
   { keys: "Ctrl + Shift + P", desc: "打开命令面板 / 快捷键速查", scope: "全局" },
   { keys: "Ctrl + 1 / 2 / 3", desc: "切换 大纲 / 写作 / 设定", scope: "工作区" },
   { keys: "Ctrl + S", desc: "保存当前章节正文或大纲节拍", scope: "工作区" },
-  { keys: "Ctrl + Enter", desc: "开始或停止 AI 流式生成本章", scope: "写作台" },
-  { keys: "Ctrl + H", desc: "打开本章 / 全书查找与替换", scope: "写作台" },
-  { keys: "F11 / Ctrl+Shift+Z", desc: "进入或退出无干扰专注写作模式", scope: "写作台" },
-  { keys: "Ctrl + \\", desc: "折叠或展开写作台右侧抽屉", scope: "写作台" },
-  { keys: "Alt + [ / ]", desc: "跳转上一处 / 下一处审校告警段落", scope: "写作台" },
-  { keys: "Ctrl + K", desc: "打开或收起 AI 导演总控抽屉", scope: "工作区" },
-  { keys: "Ctrl + Shift + F", desc: "打开全局记忆与设定混合检索", scope: "工作区" },
+  { keys: "Ctrl + Enter", desc: "开始或停止 AI 生成本章", scope: "写作" },
+  { keys: "Ctrl + H", desc: "打开本章 / 全书查找与替换", scope: "写作" },
+  { keys: "F11 / Ctrl+Shift+Z", desc: "进入或退出专注写作模式", scope: "写作" },
+  { keys: "Ctrl + \\", desc: "折叠或展开右侧工具抽屉", scope: "写作" },
+  { keys: "Alt + [ / ]", desc: "跳转上一处 / 下一处审校建议", scope: "写作" },
+  { keys: "Ctrl + K", desc: "打开或收起 AI 导演", scope: "工作区" },
+  { keys: "Ctrl + Shift + F", desc: "打开全书内容与设定检索", scope: "工作区" },
 ];
 
 export function CommandPalette() {
@@ -71,6 +74,7 @@ function CommandPaletteBody() {
     openMemorySearch,
     openDirector,
     toggleDirector,
+    toggleNotes,
     toggleStudioDrawer,
     triggerSave,
     notify,
@@ -99,7 +103,7 @@ function CommandPaletteBody() {
         {
           id: "nav-architect",
           group: "视图切换",
-          label: "切换到大纲编排台",
+          label: "切换到大纲",
           keywords: "dagang bianpai architect",
           shortcut: "Ctrl+1",
           icon: <BookOpen className="h-3.5 w-3.5" />,
@@ -108,7 +112,7 @@ function CommandPaletteBody() {
         {
           id: "nav-studio",
           group: "视图切换",
-          label: "切换到正文写作台",
+          label: "切换到写作",
           keywords: "xiezuo studio zhengwen",
           shortcut: "Ctrl+2",
           icon: <PenLine className="h-3.5 w-3.5" />,
@@ -117,19 +121,47 @@ function CommandPaletteBody() {
         {
           id: "nav-atlas",
           group: "视图切换",
-          label: "切换到设定账本",
+          label: "切换到设定",
           keywords: "sheding atlas renwu",
           shortcut: "Ctrl+3",
           icon: <BookMarked className="h-3.5 w-3.5" />,
           run: () => openAtlasSubTab("entities"),
         },
         {
+          id: "nav-audit",
+          group: "视图切换",
+          label: "打开全书体检",
+          keywords: "tijian audit yizhixing",
+          icon: <ShieldCheck className="h-3.5 w-3.5" />,
+          run: () => openAtlasSubTab("audit"),
+        },
+        {
           id: "nav-style",
           group: "视图切换",
-          label: "打开文风与去 AI 味 / 敏感词规则",
+          label: "打开文风与敏感词规则",
           keywords: "wenfeng deai minganci style",
           icon: <Sparkles className="h-3.5 w-3.5" />,
           run: () => openAtlasSubTab("style"),
+        },
+        {
+          id: "toggle-notes",
+          group: "写作操作",
+          label: "打开 / 收起灵感便签",
+          keywords: "linggan bianqian notes scratch",
+          icon: <Lightbulb className="h-3.5 w-3.5" />,
+          run: () => toggleNotes(),
+        },
+        {
+          id: "reverse-extract",
+          group: "AI 助手",
+          label: "AI 反推旧稿设定",
+          keywords: "fantui reverse extract jiugao",
+          icon: <Sparkles className="h-3.5 w-3.5" />,
+          run: () => {
+            window.dispatchEvent(
+              new CustomEvent("nib:reverse-extract", { detail: { bookId: activeBook.id } })
+            );
+          },
         },
         {
           id: "toggle-focus",
@@ -277,6 +309,7 @@ function CommandPaletteBody() {
     toggleStudioDrawer,
     toggleDirector,
     openDirector,
+    toggleNotes,
     openMemorySearch,
     openHome,
     openCreateBook,
@@ -317,11 +350,6 @@ function CommandPaletteBody() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeCommandPalette();
-        return;
-      }
       if (mode !== "commands" || filtered.length === 0) return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -343,15 +371,15 @@ function CommandPaletteBody() {
   }, [mode, filtered, selectedIdx, closeCommandPalette]);
 
   return (
-    <div
-      data-nib-modal="true"
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 px-4 pt-[11vh] backdrop-blur-[2px]"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) closeCommandPalette();
-      }}
+    <ModalShell
+      open
+      onClose={closeCommandPalette}
+      align="top"
+      hideHeader
+      maxWidthClass="max-w-[560px]"
+      maxHeightClass="max-h-[72vh]"
     >
-      <div className="flex max-h-[72vh] w-full max-w-[560px] flex-col overflow-hidden rounded-xl border border-border-strong bg-elevated shadow-[var(--shadow-elevated)]">
-        {/* Header / Mode Switch */}
+      {/* Header / Mode Switch */}
         <div className="flex items-center gap-2 border-b border-border-subtle px-3.5 py-2.5">
           {mode === "commands" ? (
             <>
@@ -479,7 +507,6 @@ function CommandPaletteBody() {
             ))}
           </div>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 }

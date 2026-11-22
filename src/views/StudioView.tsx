@@ -24,6 +24,7 @@ import {
   History,
   Loader2,
   Minimize2,
+  MoreHorizontal,
   PanelLeft,
   PanelRight,
   Pencil,
@@ -141,11 +142,16 @@ export function StudioView() {
   const [findScope, setFindScope] = useState<"chapter" | "book">("chapter");
   const [findQuery, setFindQuery] = useState("");
   const [replaceText, setReplaceText] = useState("");
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [bookReplaceStats, setBookReplaceStats] = useState<{
     affectedChapters: number;
     totalMatches: number;
   } | null>(null);
   const [replacingBook, setReplacingBook] = useState(false);
+
+  // Canvas overflow menu (···)
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
 
   // Selection AI micro-edit state
   const [selectionRange, setSelectionRange] = useState<{
@@ -176,9 +182,9 @@ export function StudioView() {
   dirtyRef.current = dirty;
 
   // Drawer state
-  const [drawerTab, setDrawerTab] = useState<DrawerTab>("briefing");
+  const [drawerTab, setDrawerTab] = useState<DrawerTab>("audit");
 
-  // Left 3-in-1 reference sidebar + rewrite presets + snapshots state
+  // Left reference sidebar + rewrite presets + snapshots state
   const [refSidebarOpen, setRefSidebarOpen] = useState<boolean>(() => {
     try {
       return window.localStorage.getItem("nib.studio.refSidebarOpen") === "1";
@@ -186,13 +192,12 @@ export function StudioView() {
       return false;
     }
   });
-  const [refSidebarTab, setRefSidebarTab] = useState<ReferenceTab>("history");
+  const [refSidebarTab, setRefSidebarTab] = useState<ReferenceTab>("toc");
   const [focusedEntityId, setFocusedEntityId] = useState<number | null>(null);
   const [chapterBeats, setChapterBeats] = useState<Beat[]>([]);
   const [beatsLoading, setBeatsLoading] = useState(false);
   const [chapterSnapshots, setChapterSnapshots] = useState<EntitySnapshot[]>([]);
   const [snapshotsLoading, setSnapshotsLoading] = useState(false);
-  const [refIncludePending, setRefIncludePending] = useState(true);
   const [rewritePresets, setRewritePresets] = useState<RewritePreset[]>([]);
   const beatsReqIdRef = useRef(0);
   const snapshotsReqIdRef = useRef(0);
@@ -203,7 +208,7 @@ export function StudioView() {
   const [pinnedEntityIds, setPinnedEntityIds] = useState<Set<number>>(new Set());
   const [excludedEntityIds, setExcludedEntityIds] = useState<Set<number>>(new Set());
   const [extraInstruction, setExtraInstruction] = useState("");
-  const [includePending, setIncludePending] = useState(false);
+  const [includePending, setIncludePending] = useState(true);
   const [searchKeywordsText, setSearchKeywordsText] = useState("");
 
   // Pending memory delta state
@@ -380,7 +385,7 @@ export function StudioView() {
       const list = await MemoryService.snapshotAt(
         activeBook.id,
         activeChapter.globalSeq,
-        refIncludePending
+        includePending
       );
       if (mountedRef.current && snapshotsReqIdRef.current === reqId) {
         setChapterSnapshots(list);
@@ -394,7 +399,7 @@ export function StudioView() {
         setSnapshotsLoading(false);
       }
     }
-  }, [activeBook?.id, activeChapter, refIncludePending]);
+  }, [activeBook?.id, activeChapter, includePending]);
 
   useEffect(() => {
     if (!refSidebarOpen && !readingMode) return;
@@ -724,14 +729,14 @@ export function StudioView() {
       } catch (err) {
         if (ac.signal.aborted) {
           if (mountedRef.current && polishRunIdRef.current === runId) {
-            notify({ tone: "info", message: "已取消手术润色生成" });
+            notify({ tone: "info", message: "已取消局部润色" });
           }
           return;
         }
         if (!mountedRef.current || polishRunIdRef.current !== runId) return;
         notify({
           tone: "danger",
-          message: "生成手术润色失败",
+          message: "生成局部润色失败",
           detail: formatErrorMessage(err),
         });
       } finally {
@@ -778,12 +783,12 @@ export function StudioView() {
         handleDiffAppliedResult(res);
         notify({
           tone: accept ? "ok" : "info",
-          message: accept ? "已采纳手术润色并归档快照" : "已忽略该条润色建议",
+          message: accept ? "已采纳局部润色并保存快照" : "已忽略该条润色建议",
         });
       } catch (err) {
         notify({
           tone: "danger",
-          message: "应用手术润色失败",
+          message: "应用局部润色失败",
           detail: formatErrorMessage(err),
         });
       } finally {
@@ -809,7 +814,7 @@ export function StudioView() {
 
       const dirtyCount = result.markedDirtyChapterIds?.length ?? 0;
       const summaryParts = [
-        `${result.committedEvents} 条状态事件入库`,
+        `${result.committedEvents} 条状态更新`,
         `${result.updatedForeshadowings} 条伏笔更新`,
       ];
       if (result.updatedRelations > 0) {
@@ -819,11 +824,11 @@ export function StudioView() {
         summaryParts.push(`${result.updatedDeadlines} 条期限更新`);
       }
       if (dirtyCount > 0) {
-        summaryParts.push(`下游 ${dirtyCount} 章标记为上游变更`);
+        summaryParts.push(`后续 ${dirtyCount} 章已标记待核对`);
       }
       notify({
         tone: dirtyCount > 0 ? "warn" : "ok",
-        message: "记忆变更单已入库",
+        message: "设定更新已写入",
         detail: summaryParts.join(" · "),
       });
     },
@@ -877,6 +882,13 @@ export function StudioView() {
     setPendingDelta(null);
     setChapterAudit(null);
     setActiveParagraphIndex(null);
+    setVersions([]);
+    setSelectedVersionId(null);
+    setBriefing(null);
+    setFocusedEntityId(null);
+    setBookReplaceStats(null);
+    setCurrentMatchIndex(0);
+    setMoreMenuOpen(false);
     return () => {
       if (activeChapter && dirtyRef.current && !generatingRef.current) {
         const snapId = activeChapter.id;
@@ -1015,7 +1027,26 @@ export function StudioView() {
     return () => window.clearTimeout(timer);
   }, [dirty, generating, saving, activeChapter, content, title, handleSave]);
 
-  // Ctrl+H toggles inline Find & Replace bar
+  // Close overflow menu on outside click or Escape
+  useEffect(() => {
+    if (!moreMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (moreMenuRef.current && !moreMenuRef.current.contains(e.target as Node)) {
+        setMoreMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMoreMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [moreMenuOpen]);
+
+  // Ctrl+H toggles floating Find & Replace bar
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "h") {
@@ -1056,10 +1087,19 @@ export function StudioView() {
       notify({ tone: "info", message: "当前正文排版已经很规范，无需调整" });
       return;
     }
+    // 覆写前先归档原正文快照
+    if (activeChapter && content.trim()) {
+      void LibraryService.saveChapterDraft({
+        chapterId: activeChapter.id,
+        title: title.trim() || activeChapter.title,
+        content,
+        backupSource: "manual_backup",
+      }).catch(() => {});
+    }
     setContent(text);
     setDirty(true);
-    notify({ tone: "ok", message: "已整理标点、引号与段落间距（3 秒后自动保存）" });
-  }, [content, generating, notify]);
+    notify({ tone: "ok", message: "已整理标点、引号与段落间距" });
+  }, [activeChapter, title, content, generating, notify]);
 
   // Selection AI micro-edit handlers
   const handleEditorSelect = useCallback(() => {
@@ -1183,6 +1223,15 @@ export function StudioView() {
         return;
       }
     }
+    // 覆写前先归档原正文快照，确保历史版本可完整回退
+    if (activeChapter && content.trim()) {
+      void LibraryService.saveChapterDraft({
+        chapterId: activeChapter.id,
+        title: title.trim() || activeChapter.title,
+        content,
+        backupSource: "surgical_polish",
+      }).catch(() => {});
+    }
     const nextContent =
       content.slice(0, start) + selectionPreview + content.slice(end);
     setContent(nextContent);
@@ -1190,8 +1239,8 @@ export function StudioView() {
     setSelectionRange(null);
     setSelectionPreview(null);
     setSelectionCustomPrompt("");
-    notify({ tone: "ok", message: "已替换选中片段，将在 3 秒内自动保存" });
-  }, [selectionRange, selectionPreview, content, notify]);
+    notify({ tone: "ok", message: "已替换选中片段，原文已自动留存快照" });
+  }, [activeChapter, title, selectionRange, selectionPreview, content, notify]);
 
   const handleSaveRewritePreset = useCallback(
     async (label: string, instruction: string): Promise<boolean> => {
@@ -1314,10 +1363,50 @@ export function StudioView() {
   }, []);
 
   // Chapter & whole-book find/replace helpers
-  const chapterFindMatches = useMemo(() => {
-    if (!findQuery) return 0;
-    return content.split(findQuery).length - 1;
+  const chapterMatchPositions = useMemo(() => {
+    if (!findQuery) return [];
+    const positions: number[] = [];
+    let start = 0;
+    while (start <= content.length) {
+      const idx = content.indexOf(findQuery, start);
+      if (idx < 0) break;
+      positions.push(idx);
+      start = idx + findQuery.length;
+    }
+    return positions;
   }, [content, findQuery]);
+
+  const chapterFindMatches = chapterMatchPositions.length;
+
+  const handleJumpMatch = useCallback(
+    (delta: -1 | 1) => {
+      if (chapterMatchPositions.length === 0 || !findQuery) return;
+      if (readingMode) setReadingMode(false);
+      const nextIndex =
+        (currentMatchIndex + delta + chapterMatchPositions.length) %
+        chapterMatchPositions.length;
+      setCurrentMatchIndex(nextIndex);
+      const pos = chapterMatchPositions[nextIndex]!;
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(pos, pos + findQuery.length);
+        // 近似滚动到匹配行附近
+        const beforeLines = content.slice(0, pos).split("\n").length;
+        const totalLines = Math.max(1, content.split("\n").length);
+        if (canvasScrollRef.current) {
+          const targetScroll =
+            (beforeLines / totalLines) * canvasScrollRef.current.scrollHeight - 180;
+          canvasScrollRef.current.scrollTo({
+            top: Math.max(0, targetScroll),
+            behavior: "smooth",
+          });
+        }
+      });
+    },
+    [chapterMatchPositions, currentMatchIndex, findQuery, readingMode, content]
+  );
 
   const handleReplaceInChapter = useCallback(() => {
     if (!findQuery) return;
@@ -1326,10 +1415,19 @@ export function StudioView() {
       notify({ tone: "warn", message: "当前章节未找到匹配内容" });
       return;
     }
+    if (activeChapter && content.trim()) {
+      void LibraryService.saveChapterDraft({
+        chapterId: activeChapter.id,
+        title: title.trim() || activeChapter.title,
+        content,
+        backupSource: "manual_backup",
+      }).catch(() => {});
+    }
     setContent(content.split(findQuery).join(replaceText));
     setDirty(true);
+    setCurrentMatchIndex(0);
     notify({ tone: "ok", message: `已在本章替换 ${count} 处` });
-  }, [content, findQuery, replaceText, notify]);
+  }, [activeChapter, title, content, findQuery, replaceText, notify]);
 
   const handlePreviewBookReplace = useCallback(async () => {
     if (!activeBook || !findQuery) return;
@@ -1359,6 +1457,17 @@ export function StudioView() {
     if (!activeBook || !findQuery) return;
     setReplacingBook(true);
     try {
+      // 全书替换前先将当前章未保存修改落盘，防止丢稿
+      if (activeChapter && dirty) {
+        const saved = await LibraryService.saveChapterDraft({
+          chapterId: activeChapter.id,
+          title: title.trim() || activeChapter.title,
+          content,
+          backupSource: "manual_backup",
+        });
+        updateChapterInCache(saved);
+        setDirty(false);
+      }
       const res = await LibraryService.replaceBookText({
         bookId: activeBook.id,
         find: findQuery,
@@ -1394,6 +1503,10 @@ export function StudioView() {
   }, [
     activeBook,
     activeChapter,
+    dirty,
+    title,
+    content,
+    updateChapterInCache,
     findQuery,
     replaceText,
     refreshChapters,
@@ -1990,13 +2103,13 @@ export function StudioView() {
           entities={entities}
           snapshots={chapterSnapshots}
           snapshotsLoading={snapshotsLoading}
-          includePending={refIncludePending}
+          includePending={includePending}
           foreshadowings={foreshadowings}
           criticFindings={chapterAudit?.criticFindings ?? []}
           activeTab={refSidebarTab}
           focusedEntityId={focusedEntityId}
           onChangeTab={setRefSidebarTab}
-          onChangeIncludePending={setRefIncludePending}
+          onChangeIncludePending={setIncludePending}
           onRefreshSnapshots={() => void loadChapterSnapshots()}
           onClose={() => setRefSidebarOpen(false)}
           onSwitchChapter={(cid) => void selectChapter(cid)}
@@ -2006,29 +2119,62 @@ export function StudioView() {
         />
       )}
 
-      {/* Main Quiet Prose Canvas + Minimal Bottom Bar */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      {/* Main Quiet Prose Canvas + Floating Overlays + Minimal Bottom Bar */}
+      <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+        {/* Floating Find & Replace Bar (zero layout shift) */}
+        {findOpen && (
+          <div className="pointer-events-none absolute top-3 right-5 left-5 z-20 flex justify-end">
+            <FindReplaceBar
+              findScope={findScope}
+              findQuery={findQuery}
+              replaceText={replaceText}
+              chapterFindMatches={chapterFindMatches}
+              currentMatchIndex={currentMatchIndex}
+              bookReplaceStats={bookReplaceStats}
+              replacingBook={replacingBook}
+              onChangeScope={(scope) => {
+                setFindScope(scope);
+                setBookReplaceStats(null);
+              }}
+              onChangeQuery={(val) => {
+                setFindQuery(val);
+                setCurrentMatchIndex(0);
+                setBookReplaceStats(null);
+              }}
+              onChangeReplace={setReplaceText}
+              onJumpMatch={handleJumpMatch}
+              onReplaceInChapter={handleReplaceInChapter}
+              onPreviewBookReplace={() => void handlePreviewBookReplace()}
+              onExecuteBookReplace={() => void handleExecuteBookReplace()}
+              onClose={() => {
+                setFindOpen(false);
+                setBookReplaceStats(null);
+              }}
+            />
+          </div>
+        )}
+
         <div
           ref={canvasScrollRef}
-          className={`flex-1 overflow-y-auto px-8 pb-24 ${focusMode ? "pt-14" : "pt-8"}`}
+          className={`flex-1 overflow-y-auto px-8 pb-28 ${focusMode ? "pt-14" : "pt-6"}`}
         >
           <div className="mx-auto w-full max-w-[var(--prose-max-width)]">
-            {/* Subtle chapter breadcrumb & quick switcher */}
+            {/* Calm Single Utility Row */}
             {!focusMode && (
-              <div className="mb-5 flex items-center justify-between gap-2 text-xs text-ink-muted select-none">
-                <div className="flex min-w-0 items-center gap-2.5">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-ink-muted select-none">
+                <div className="flex min-w-0 items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setRefSidebarOpen((v) => !v)}
-                    title={refSidebarOpen ? "收起左侧参照栏" : "展开参照栏（历史章 / 节拍 / 实体速查）"}
-                    className={`flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] transition-colors ${
+                    title={refSidebarOpen ? "收起左侧对照栏" : "展开对照栏（目录 / 前文 / 节拍 / 设定速查）"}
+                    className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
                       refSidebarOpen
                         ? "border-accent/40 bg-accent-soft text-accent"
                         : "border-border-subtle bg-surface/80 text-ink-secondary hover:border-border-strong hover:text-ink-primary"
                     }`}
                   >
-                    <PanelLeft className="h-3 w-3" />
-                    <span>参照</span>
+                    <PanelLeft className="h-3.5 w-3.5" />
+                    <span>对照</span>
                   </button>
                   {activeVolumeTitle && (
                     <span className="truncate text-ink-muted">{activeVolumeTitle}</span>
@@ -2038,99 +2184,8 @@ export function StudioView() {
                   >
                     {statusMeta.label}
                   </span>
-                </div>
-
-                <div className="flex items-center gap-1">
-                  {paragraphAuditMaps.flaggedParagraphs.length > 0 && (
-                    <div className="mr-1 flex items-center gap-0.5 rounded-lg border border-border-subtle bg-surface px-1 py-0.5">
-                      <button
-                        type="button"
-                        onClick={() => cycleFlaggedParagraph(-1)}
-                        title="上一处建议 (Alt+[)"
-                        className="rounded px-1.5 py-0.5 text-xs text-ink-secondary hover:bg-elevated hover:text-ink-primary"
-                      >
-                        上一处
-                      </button>
-                      <span className="nib-mono px-1 text-xs text-warn">
-                        {paragraphAuditMaps.flaggedParagraphs.length} 处建议
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => cycleFlaggedParagraph(1)}
-                        title="下一处建议 (Alt+])"
-                        className="rounded px-1.5 py-0.5 text-xs text-ink-secondary hover:bg-elevated hover:text-ink-primary"
-                      >
-                        下一处
-                      </button>
-                    </div>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setFindOpen((v) => !v)}
-                    title="查找与替换 (Ctrl+H)"
-                    className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors ${
-                      findOpen
-                        ? "bg-accent-soft text-accent"
-                        : "text-ink-muted hover:bg-surface hover:text-ink-primary"
-                    }`}
-                  >
-                    <Search className="h-3 w-3" />
-                    <span>查找替换</span>
-                  </button>
-                  <button
-                    type="button"
-                    disabled={generating || !content.trim()}
-                    onClick={handleFormatProse}
-                    title="一键规范全角标点、中文引号与段落间距"
-                    className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-ink-muted transition-colors hover:bg-surface hover:text-ink-primary disabled:opacity-30"
-                  >
-                    <Wand2 className="h-3 w-3" />
-                    <span>排版</span>
-                  </button>
-                  <button
-                    type="button"
-                    disabled={generating || !content.trim()}
-                    onClick={() => void handleCopyCleanProse()}
-                    title="复制无格式纯净正文（可直接贴起点/番茄）"
-                    className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-ink-muted transition-colors hover:bg-surface hover:text-ink-primary disabled:opacity-30"
-                  >
-                    {copiedClean ? (
-                      <>
-                        <Check className="h-3 w-3 text-ok" />
-                        <span className="text-ok">已复制</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="h-3 w-3" />
-                        <span>复制纯净正文</span>
-                      </>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={generating}
-                    onClick={() => setReadingMode((v) => !v)}
-                    title={readingMode ? "切回编辑模式" : "切换校对视图"}
-                    className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors disabled:opacity-30 ${
-                      readingMode
-                        ? "bg-accent-soft text-accent"
-                        : "text-ink-muted hover:bg-surface hover:text-ink-primary"
-                    }`}
-                  >
-                    {readingMode ? (
-                      <>
-                        <Pencil className="h-3 w-3" />
-                        <span>编辑</span>
-                      </>
-                    ) : (
-                      <>
-                        <BookOpen className="h-3 w-3" />
-                        <span>校对视图</span>
-                      </>
-                    )}
-                  </button>
                   {chapters.length > 1 && (
-                    <>
+                    <div className="ml-0.5 flex items-center gap-0.5">
                       <button
                         type="button"
                         disabled={generating || currentChapterIndex <= 0}
@@ -2139,6 +2194,7 @@ export function StudioView() {
                           if (prevChap) void selectChapter(prevChap.id);
                         }}
                         title="上一章"
+                        aria-label="上一章"
                         className="rounded p-1 text-ink-muted transition-colors hover:bg-surface hover:text-ink-primary disabled:opacity-30"
                       >
                         <ChevronLeft className="h-3.5 w-3.5" />
@@ -2155,70 +2211,173 @@ export function StudioView() {
                           if (nextChap) void selectChapter(nextChap.id);
                         }}
                         title="下一章"
+                        aria-label="下一章"
                         className="rounded p-1 text-ink-muted transition-colors hover:bg-surface hover:text-ink-primary disabled:opacity-30"
                       >
                         <ChevronRight className="h-3.5 w-3.5" />
                       </button>
-                    </>
+                    </div>
                   )}
                 </div>
+
+                <div className="flex items-center gap-1.5">
+                  {paragraphAuditMaps.flaggedParagraphs.length > 0 && (
+                    <div className="flex items-center gap-0.5 rounded-lg border border-border-subtle bg-surface px-1 py-0.5">
+                      <button
+                        type="button"
+                        onClick={() => cycleFlaggedParagraph(-1)}
+                        title="上一处建议 (Alt+[)"
+                        aria-label="上一处建议"
+                        className="rounded px-1.5 py-0.5 text-xs text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                      >
+                        ‹
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => cycleFlaggedParagraph(1)}
+                        title="查看问题段落 (Alt+])"
+                        className="nib-mono px-1 text-xs font-medium text-warn"
+                      >
+                        {paragraphAuditMaps.flaggedParagraphs.length} 段待改
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => cycleFlaggedParagraph(1)}
+                        title="下一处建议 (Alt+])"
+                        aria-label="下一处建议"
+                        className="rounded px-1.5 py-0.5 text-xs text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                      >
+                        ›
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Unambiguous 2-Segment Mode Switch */}
+                  <div
+                    role="group"
+                    aria-label="视图模式"
+                    className="flex items-center rounded-lg border border-border-subtle bg-surface p-0.5"
+                  >
+                    <button
+                      type="button"
+                      disabled={generating}
+                      onClick={() => setReadingMode(false)}
+                      className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium transition-colors disabled:opacity-40 ${
+                        !readingMode
+                          ? "bg-elevated text-ink-primary shadow-xs"
+                          : "text-ink-muted hover:text-ink-primary"
+                      }`}
+                    >
+                      <Pencil className="h-3 w-3" />
+                      <span>写作</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={generating}
+                      onClick={() => setReadingMode(true)}
+                      className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium transition-colors disabled:opacity-40 ${
+                        readingMode
+                          ? "bg-accent-soft text-accent"
+                          : "text-ink-muted hover:text-ink-primary"
+                      }`}
+                    >
+                      <BookOpen className="h-3 w-3" />
+                      <span>校对</span>
+                    </button>
+                  </div>
+
+                  {/* Overflow Utility Menu (···) */}
+                  <div ref={moreMenuRef} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setMoreMenuOpen((v) => !v)}
+                      title="更多工具（查找替换 / 排版 / 复制 / 导出）"
+                      aria-label="更多写作工具"
+                      className={`flex h-7 w-7 items-center justify-center rounded-md border transition-colors ${
+                        moreMenuOpen || findOpen
+                          ? "border-accent/40 bg-accent-soft text-accent"
+                          : "border-border-subtle bg-surface/80 text-ink-secondary hover:border-border-strong hover:text-ink-primary"
+                      }`}
+                    >
+                      <MoreHorizontal className="h-3.5 w-3.5" />
+                    </button>
+
+                    {moreMenuOpen && (
+                      <div className="absolute top-[calc(100%+6px)] right-0 z-30 w-48 rounded-lg border border-border-strong bg-elevated py-1 shadow-[var(--shadow-elevated)]">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMoreMenuOpen(false);
+                            setFindOpen((v) => !v);
+                          }}
+                          className="flex w-full items-center justify-between px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-surface"
+                        >
+                          <span className="flex items-center gap-2">
+                            <Search className="h-3.5 w-3.5 text-ink-secondary" />
+                            <span>查找与替换</span>
+                          </span>
+                          <span className="nib-mono text-[11px] text-ink-muted">Ctrl+H</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={generating || !content.trim()}
+                          onClick={() => {
+                            setMoreMenuOpen(false);
+                            handleFormatProse();
+                          }}
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-surface disabled:opacity-40"
+                        >
+                          <Wand2 className="h-3.5 w-3.5 text-ink-secondary" />
+                          <span>规范标点与段落排版</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={generating || !content.trim()}
+                          onClick={() => {
+                            setMoreMenuOpen(false);
+                            void handleCopyCleanProse();
+                          }}
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-surface disabled:opacity-40"
+                        >
+                          {copiedClean ? (
+                            <Check className="h-3.5 w-3.5 text-ok" />
+                          ) : (
+                            <Copy className="h-3.5 w-3.5 text-ink-secondary" />
+                          )}
+                          <span>{copiedClean ? "已复制纯净正文" : "复制纯净正文"}</span>
+                        </button>
+                        <div className="my-1 border-t border-border-subtle" />
+                        <button
+                          type="button"
+                          disabled={exporting}
+                          onClick={() => {
+                            setMoreMenuOpen(false);
+                            void handleExportBook();
+                          }}
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink-primary transition-colors hover:bg-surface disabled:opacity-40"
+                        >
+                          <Download className="h-3.5 w-3.5 text-ink-secondary" />
+                          <span>{exporting ? "导出中…" : "导出全书 Markdown"}</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={toggleStudioDrawer}
+                    title="折叠 / 展开右侧抽屉 (Ctrl+\)"
+                    aria-label="切换右侧抽屉"
+                    className={`flex h-7 w-7 items-center justify-center rounded-md border transition-colors ${
+                      studioDrawerOpen
+                        ? "border-accent/40 bg-accent-soft text-accent"
+                        : "border-border-subtle bg-surface/80 text-ink-secondary hover:border-border-strong hover:text-ink-primary"
+                    }`}
+                  >
+                    <PanelRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               </div>
-            )}
-
-            {findOpen && (
-              <FindReplaceBar
-                findScope={findScope}
-                findQuery={findQuery}
-                replaceText={replaceText}
-                chapterFindMatches={chapterFindMatches}
-                bookReplaceStats={bookReplaceStats}
-                replacingBook={replacingBook}
-                onChangeScope={(scope) => {
-                  setFindScope(scope);
-                  setBookReplaceStats(null);
-                }}
-                onChangeQuery={(val) => {
-                  setFindQuery(val);
-                  setBookReplaceStats(null);
-                }}
-                onChangeReplace={setReplaceText}
-                onReplaceInChapter={handleReplaceInChapter}
-                onPreviewBookReplace={() => void handlePreviewBookReplace()}
-                onExecuteBookReplace={() => void handleExecuteBookReplace()}
-                onClose={() => {
-                  setFindOpen(false);
-                  setBookReplaceStats(null);
-                }}
-              />
-            )}
-
-            {!generating && !readingMode && selectionRange && (
-              <SelectionRewriteBar
-                selectedText={selectionRange.text}
-                selectionStage={selectionStage}
-                selectionRewriting={selectionRewriting}
-                selectionCustomPrompt={selectionCustomPrompt}
-                selectionPreview={selectionPreview}
-                presets={rewritePresets}
-                onChangeCustomPrompt={setSelectionCustomPrompt}
-                onRunAction={(action, customOverride) =>
-                  void runSelectionRewrite(action, undefined, customOverride)
-                }
-                onSavePreset={handleSaveRewritePreset}
-                onDeletePreset={handleDeleteRewritePreset}
-                onDismissBar={() => {
-                  selectionChannel.stop();
-                  setSelectionRewriting(false);
-                  setSelectionRange(null);
-                  setSelectionPreview(null);
-                }}
-                onCancelPreview={() => {
-                  selectionChannel.stop();
-                  setSelectionRewriting(false);
-                  setSelectionPreview(null);
-                }}
-                onApplyPreview={applySelectionRewrite}
-              />
             )}
 
             {/* Chapter Title & Primary Actions */}
@@ -2247,10 +2406,10 @@ export function StudioView() {
                       type="button"
                       onClick={stopGeneration}
                       title="停止生成 (Ctrl+Enter)"
-                      className="flex items-center gap-1.5 rounded-md border border-danger/40 bg-danger-soft px-3 py-1 font-medium text-danger transition-colors hover:border-danger"
+                      className="flex items-center gap-1.5 rounded-md border border-danger/40 bg-danger-soft px-3 py-1.5 font-medium text-danger transition-colors hover:border-danger"
                     >
                       <Square className="h-3 w-3 fill-current" />
-                      <span>停止</span>
+                      <span>停止生成</span>
                     </button>
                   ) : content.trim().length > 0 ? (
                     <div className="flex items-center gap-1.5">
@@ -2258,7 +2417,7 @@ export function StudioView() {
                         type="button"
                         onClick={() => void startGeneration("continue")}
                         title="紧接当前正文结尾继续往下写"
-                        className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 font-semibold text-canvas transition-opacity hover:opacity-90"
+                        className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 font-semibold text-canvas transition-opacity hover:opacity-90"
                       >
                         <FastForward className="h-3 w-3" />
                         <span>续写</span>
@@ -2267,7 +2426,7 @@ export function StudioView() {
                         type="button"
                         onClick={() => void startGeneration("rewrite")}
                         title="存档当前正文后按节拍重新生成整章"
-                        className="flex items-center gap-1 rounded-md border border-border-subtle bg-elevated px-2.5 py-1 text-ink-primary transition-colors hover:border-border-strong"
+                        className="flex items-center gap-1 rounded-md border border-border-subtle bg-elevated px-2.5 py-1.5 text-ink-primary transition-colors hover:border-border-strong"
                       >
                         <RefreshCw className="h-3 w-3 text-ink-secondary" />
                         <span>重写</span>
@@ -2278,7 +2437,7 @@ export function StudioView() {
                       type="button"
                       onClick={() => void startGeneration("rewrite")}
                       title="生成本章 (Ctrl+Enter)"
-                      className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 font-semibold text-canvas transition-opacity hover:opacity-90"
+                      className="flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-1.5 font-semibold text-canvas transition-opacity hover:opacity-90"
                     >
                       <Play className="h-3 w-3 fill-current" />
                       <span>生成本章</span>
@@ -2290,7 +2449,7 @@ export function StudioView() {
                     disabled={generating || saving}
                     onClick={() => void handleSave()}
                     title="保存正文并归档快照 (Ctrl+S)"
-                    className="flex items-center gap-1 rounded-md border border-border-subtle bg-elevated px-2.5 py-1 text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
+                    className="flex items-center gap-1 rounded-md border border-border-subtle bg-elevated px-2.5 py-1.5 text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
                   >
                     <Save className="h-3.5 w-3.5 text-ink-secondary" />
                     <span>保存</span>
@@ -2301,7 +2460,7 @@ export function StudioView() {
                     disabled={generating || finalizing}
                     onClick={() => void handleFinalize()}
                     title="标记本章定稿并同步 Markdown"
-                    className={`flex items-center gap-1 rounded-md border px-2.5 py-1 transition-colors disabled:opacity-40 ${
+                    className={`flex items-center gap-1 rounded-md border px-2.5 py-1.5 transition-colors disabled:opacity-40 ${
                       activeChapter.status === "finalized"
                         ? "border-ok/35 bg-ok-soft text-ok"
                         : "border-border-subtle bg-elevated text-ink-primary hover:border-ok/50 hover:text-ok"
@@ -2310,51 +2469,15 @@ export function StudioView() {
                     <CheckCircle2 className="h-3.5 w-3.5" />
                     <span>{finalizing ? "定稿中…" : "定稿"}</span>
                   </button>
-
-                  <button
-                    type="button"
-                    disabled={exporting}
-                    onClick={() => void handleExportBook()}
-                    title="单向导出全书 Markdown"
-                    className="flex items-center gap-1 rounded-md border border-border-subtle bg-elevated px-2.5 py-1 text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary disabled:opacity-40"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">
-                      {exporting ? "导出中…" : "导出全书"}
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={toggleStudioDrawer}
-                    title="折叠 / 展开右侧抽屉 (Ctrl+\)"
-                    aria-label="切换右侧抽屉"
-                    className={`ml-0.5 flex h-7 w-7 items-center justify-center rounded-md border transition-colors ${
-                      studioDrawerOpen
-                        ? "border-accent/35 bg-accent-soft text-accent"
-                        : "border-border-subtle bg-elevated text-ink-secondary hover:text-ink-primary"
-                    }`}
-                  >
-                    <PanelRight className="h-3.5 w-3.5" />
-                  </button>
                 </div>
               )}
             </div>
 
-            {/* Contextual inline banners */}
+            {/* Contextual inline banners (deduplicated actions) */}
             {generating && (
-              <div className="mb-5 flex items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent-soft px-3.5 py-2 text-xs text-accent">
-                <div className="flex items-center gap-2">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  <span>{genStageText || "正在流式出稿…"}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={stopGeneration}
-                  className="rounded px-2 py-0.5 font-medium text-danger transition-colors hover:bg-danger-soft"
-                >
-                  停止
-                </button>
+              <div className="mb-5 flex items-center gap-2 rounded-lg border border-accent/30 bg-accent-soft px-3.5 py-2 text-xs text-accent">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <span>{genStageText || "正在流式出稿…"}</span>
               </div>
             )}
 
@@ -2375,6 +2498,7 @@ export function StudioView() {
                   <button
                     type="button"
                     onClick={() => setGenError(null)}
+                    aria-label="关闭错误提示"
                     className="text-danger/70 hover:text-danger"
                   >
                     <X className="h-3.5 w-3.5" />
@@ -2384,10 +2508,10 @@ export function StudioView() {
             )}
 
             {!generating && !genError && activeChapter.status === "upstream_dirty" && (
-              <div className="mb-5 flex items-center justify-between gap-3 rounded-lg border border-danger/35 bg-danger-soft/70 px-3.5 py-2 text-xs text-danger">
+              <div className="mb-5 flex items-center justify-between gap-3 rounded-lg border border-warn/35 bg-warn-soft/60 px-3.5 py-2 text-xs text-warn">
                 <div className="flex items-center gap-2">
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                  <span>上游章节设定已变更，建议重新预览简报或复核本章正文</span>
+                  <span>前文设定有变动，建议核对上下文或复核本章正文</span>
                 </div>
                 <button
                   type="button"
@@ -2398,35 +2522,17 @@ export function StudioView() {
                   }}
                   className="shrink-0 font-medium underline underline-offset-2 hover:opacity-80"
                 >
-                  查看简报
+                  查看上下文
                 </button>
               </div>
             )}
 
             {!generating && !genError && activeChapter.status === "partial" && (
-              <div className="mb-5 flex items-center justify-between gap-3 rounded-lg border border-warn/30 bg-warn-soft px-3.5 py-2 text-xs text-warn">
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                  <span>
-                    已停在 <span className="nib-mono">{formatNumber(liveWordCount)}</span> 字，可继续手改或重新生成
-                  </span>
-                </div>
-                <div className="flex shrink-0 items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => void startGeneration("continue")}
-                    className="font-medium underline underline-offset-2 hover:opacity-80"
-                  >
-                    接着续写
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void startGeneration("rewrite")}
-                    className="font-medium text-ink-secondary underline underline-offset-2 hover:opacity-80"
-                  >
-                    重新生成
-                  </button>
-                </div>
+              <div className="mb-5 flex items-center gap-2 rounded-lg border border-warn/30 bg-warn-soft px-3.5 py-2 text-xs text-warn">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                <span>
+                  上次生成停在 <span className="nib-mono">{formatNumber(liveWordCount)}</span> 字，可继续手改或点上方「续写 / 重写」
+                </span>
               </div>
             )}
 
@@ -2441,7 +2547,7 @@ export function StudioView() {
               >
                 {streamingParagraphs.length === 0 ? (
                   <p className="text-ink-muted">
-                    {generating ? "等待首字输出…" : "本章暂无正文，双击进入编辑模式"}
+                    {generating ? "等待首字输出…" : "本章暂无正文，双击进入写作模式"}
                   </p>
                 ) : (
                   streamingParagraphs.map((para, idx) => (
@@ -2496,13 +2602,45 @@ export function StudioView() {
                   setContent(e.target.value);
                   setDirty(true);
                 }}
-                placeholder="在此直接落笔，或按 Ctrl+Enter 按编排节拍流式生成本章…"
+                placeholder="在此直接落笔，或按 Ctrl+Enter 按大纲节拍生成本章…"
                 spellCheck={false}
                 className="nib-prose-column block min-h-[480px] resize-none overflow-hidden bg-transparent placeholder:text-ink-muted/70 focus:outline-none"
               />
             )}
           </div>
         </div>
+
+        {/* Floating Selection Rewrite Bar (bottom-center, zero layout shift) */}
+        {!generating && !readingMode && selectionRange && (
+          <div className="pointer-events-none absolute right-6 bottom-13 left-6 z-20 flex justify-center">
+            <SelectionRewriteBar
+              selectedText={selectionRange.text}
+              selectionStage={selectionStage}
+              selectionRewriting={selectionRewriting}
+              selectionCustomPrompt={selectionCustomPrompt}
+              selectionPreview={selectionPreview}
+              presets={rewritePresets}
+              onChangeCustomPrompt={setSelectionCustomPrompt}
+              onRunAction={(action, customOverride) =>
+                void runSelectionRewrite(action, undefined, customOverride)
+              }
+              onSavePreset={handleSaveRewritePreset}
+              onDeletePreset={handleDeleteRewritePreset}
+              onDismissBar={() => {
+                selectionChannel.stop();
+                setSelectionRewriting(false);
+                setSelectionRange(null);
+                setSelectionPreview(null);
+              }}
+              onCancelPreview={() => {
+                selectionChannel.stop();
+                setSelectionRewriting(false);
+                setSelectionPreview(null);
+              }}
+              onApplyPreview={applySelectionRewrite}
+            />
+          </div>
+        )}
 
         {/* Minimal Studio Bottom Bar */}
         {!focusMode && (
@@ -2519,7 +2657,11 @@ export function StudioView() {
                 onClick={() =>
                   openSettings(draftRouteInfo.configured ? "routes" : "providers")
                 }
-                title="调整正文写作模型"
+                title={
+                  lastUsage
+                    ? `调整正文写作模型（本次调用：输入 ${formatCompactTokens(lastUsage.promptTokens)} / 输出 ${formatCompactTokens(lastUsage.completionTokens)} Token）`
+                    : "调整正文写作模型"
+                }
                 className={`truncate transition-colors hover:text-ink-primary ${
                   draftRouteInfo.configured
                     ? "nib-mono text-ink-secondary"
@@ -2536,7 +2678,7 @@ export function StudioView() {
               ) : saving ? (
                 <span className="text-ink-muted">保存中…</span>
               ) : dirty ? (
-                <span className="text-warn">未保存（3 秒后自动保存）</span>
+                <span className="text-warn">未保存</span>
               ) : activeChapter.status === "partial" ? (
                 <span className="text-warn">未写完</span>
               ) : lastAutoSavedAt ? (
@@ -2545,18 +2687,6 @@ export function StudioView() {
                 <span className="text-ink-muted">已保存</span>
               )}
             </div>
-
-            {lastUsage && !generating && (
-              <span
-                title={`输入 ${formatNumber(
-                  lastUsage.promptTokens
-                )} / 输出 ${formatNumber(lastUsage.completionTokens)} Token`}
-                className="nib-mono hidden shrink-0 text-xs text-ink-muted sm:inline"
-              >
-                输入 {formatCompactTokens(lastUsage.promptTokens)} / 输出{" "}
-                {formatCompactTokens(lastUsage.completionTokens)} Token
-              </span>
-            )}
           </footer>
         )}
       </div>
@@ -2569,18 +2699,6 @@ export function StudioView() {
         >
           <div className="flex items-center justify-between border-b border-border-subtle px-2 py-2">
             <div className="flex items-center gap-0.5">
-              <button
-                type="button"
-                onClick={() => setDrawerTab("briefing")}
-                className={`flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-                  drawerTab === "briefing"
-                    ? "bg-accent-soft text-accent"
-                    : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
-                }`}
-              >
-                <FileText className="h-3.5 w-3.5" />
-                <span>参考</span>
-              </button>
               <button
                 type="button"
                 onClick={() => setDrawerTab("audit")}
@@ -2634,18 +2752,32 @@ export function StudioView() {
                   </span>
                 )}
               </button>
+              <button
+                type="button"
+                onClick={() => setDrawerTab("briefing")}
+                className={`flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                  drawerTab === "briefing"
+                    ? "bg-accent-soft text-accent"
+                    : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
+                }`}
+              >
+                <FileText className="h-3.5 w-3.5" />
+                <span>上下文</span>
+              </button>
             </div>
 
             <button
               type="button"
-              onClick={() => {
+              onClick={async () => {
                 if (drawerTab === "briefing") void loadBriefing();
-                else if (drawerTab === "audit")
-                  void runLocalLint(activeChapter.id, false);
-                else if (drawerTab === "delta") void loadPendingDelta();
+                else if (drawerTab === "audit") {
+                  const ok = await ensureSavedBeforeAudit();
+                  if (ok) void runLocalLint(activeChapter.id, false);
+                } else if (drawerTab === "delta") void loadPendingDelta();
                 else void loadVersions();
               }}
-              title="刷新"
+              title="刷新当前面板"
+              aria-label="刷新当前面板"
               className="rounded p-1 text-ink-muted transition-colors hover:bg-elevated hover:text-ink-primary"
             >
               <RefreshCw
@@ -2690,8 +2822,9 @@ export function StudioView() {
               loading={auditLoading}
               activeParagraphIndex={activeParagraphIndex}
               polishingParagraphs={polishingParagraphs}
+              applyingDiffId={applyingDiffId}
               onAuditUpdated={setChapterAudit}
-              onDiffApplied={handleDiffAppliedResult}
+              onApplyDiff={(diffId, accept) => handleApplyInlineDiff(diffId, accept)}
               onFocusParagraph={scrollToParagraph}
               onEnsureSavedBeforeAudit={ensureSavedBeforeAudit}
               onRunLocalLint={async () => {

@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronRight,
   Flag,
+  List,
   ListChecks,
   Loader2,
   PanelLeftClose,
@@ -30,6 +31,7 @@ import {
   formatNumber,
   formatSeq,
   getBeatStageMeta,
+  getChapterStatusMeta,
   getEntityKindLabel,
   getForeshadowingStatusMeta,
   getHookMeta,
@@ -39,7 +41,7 @@ import {
 } from "../../lib/constants";
 import { alignBeatsToParagraphs, matchChapterEntities } from "../../lib/studioHelpers";
 
-export type ReferenceTab = "history" | "beats" | "entities";
+export type ReferenceTab = "toc" | "history" | "beats" | "entities";
 
 interface StudioReferenceSidebarProps {
   activeChapter: Chapter;
@@ -96,7 +98,20 @@ export function StudioReferenceSidebar({
   onInsertEntityName,
   onNotify,
 }: StudioReferenceSidebarProps) {
-  // 1. 历史章对照状态与缓存
+  // 0. 章节目录快速检索
+  const [tocQuery, setTocQuery] = useState("");
+  const filteredTocChapters = useMemo(() => {
+    const q = tocQuery.trim().toLowerCase();
+    if (!q) return chapters;
+    return chapters.filter(
+      (c) =>
+        c.title.toLowerCase().includes(q) ||
+        String(c.globalSeq).includes(q) ||
+        formatSeq(c.globalSeq).includes(q)
+    );
+  }, [chapters, tocQuery]);
+
+  // 1. 历史章对照状态与缓存（检测章节 updatedAt 自动失效，避免展示过期正文）
   const [refChapterId, setRefChapterId] = useState<number>(0);
   const [refCache, setRefCache] = useState<Record<number, Chapter>>({});
   const [refLoading, setRefLoading] = useState(false);
@@ -118,10 +133,18 @@ export function StudioReferenceSidebar({
     }
   }, [activeChapter.id, chapters, otherChapters]);
 
-  // 按需拉取参照章节全文并本地缓存
+  const latestRefMeta = useMemo(
+    () => chapters.find((c) => c.id === refChapterId) ?? null,
+    [chapters, refChapterId]
+  );
+
+  // 按需拉取参照章节全文并本地缓存（若章节 updatedAt 变化则重新拉取）
   useEffect(() => {
     if (activeTab !== "history" || refChapterId <= 0) return;
-    if (refCache[refChapterId]) return;
+    const cached = refCache[refChapterId];
+    if (cached && (!latestRefMeta?.updatedAt || cached.updatedAt === latestRefMeta.updatedAt)) {
+      return;
+    }
     let cancelled = false;
     setRefLoading(true);
     LibraryService.getChapter(refChapterId)
@@ -145,7 +168,7 @@ export function StudioReferenceSidebar({
     return () => {
       cancelled = true;
     };
-  }, [activeTab, refChapterId, refCache, onNotify]);
+  }, [activeTab, refChapterId, refCache, latestRefMeta?.updatedAt, onNotify]);
 
   const refChapter = refChapterId > 0 ? refCache[refChapterId] ?? null : null;
   const refParagraphs = useMemo(
@@ -247,18 +270,20 @@ export function StudioReferenceSidebar({
   return (
     <aside className="flex w-[320px] shrink-0 flex-col border-r border-border-subtle bg-surface/65">
       {/* Header Tabs */}
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border-subtle px-2.5">
-        <div className="flex items-center gap-1">
+      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border-subtle px-2">
+        <div className="flex items-center gap-0.5">
           {(
             [
-              { id: "history", label: "历史章", icon: BookOpen },
-              { id: "beats", label: `节拍 (${beats.length})`, icon: ListChecks },
+              { id: "toc", label: "目录", icon: List },
+              { id: "history", label: "前文", icon: BookOpen },
+              { id: "beats", label: `节拍`, count: beats.length, icon: ListChecks },
               {
                 id: "entities",
-                label: `速查 (${activeMentionedCount})`,
+                label: `速查`,
+                count: activeMentionedCount,
                 icon: BookMarked,
               },
-            ] as const
+            ] as Array<{ id: ReferenceTab; label: string; count?: number; icon: typeof List }>
           ).map((tab) => {
             const Icon = tab.icon;
             const active = activeTab === tab.id;
@@ -267,14 +292,17 @@ export function StudioReferenceSidebar({
                 key={tab.id}
                 type="button"
                 onClick={() => onChangeTab(tab.id)}
-                className={`flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium transition-colors ${
+                className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
                   active
                     ? "bg-accent-soft text-accent"
                     : "text-ink-secondary hover:bg-elevated hover:text-ink-primary"
                 }`}
               >
-                <Icon className="h-3 w-3" />
+                <Icon className="h-3 w-3 shrink-0" />
                 <span>{tab.label}</span>
+                {typeof tab.count === "number" && tab.count > 0 && (
+                  <span className="nib-mono text-[11px] opacity-75">{tab.count}</span>
+                )}
               </button>
             );
           })}
@@ -283,12 +311,70 @@ export function StudioReferenceSidebar({
         <button
           type="button"
           onClick={onClose}
-          title="收起左侧参照栏"
+          title="收起左侧对照栏"
+          aria-label="收起左侧对照栏"
           className="rounded p-1 text-ink-muted transition-colors hover:bg-elevated hover:text-ink-primary"
         >
           <PanelLeftClose className="h-3.5 w-3.5" />
         </button>
       </div>
+
+      {/* Tab 0: 目录速切 */}
+      {activeTab === "toc" && (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="shrink-0 border-b border-border-subtle bg-canvas/45 px-3 py-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-ink-muted" />
+              <input
+                type="text"
+                value={tocQuery}
+                onChange={(e) => setTocQuery(e.target.value)}
+                placeholder="搜索章号或标题…"
+                className="w-full rounded-lg border border-border-subtle bg-canvas py-1.5 pr-2.5 pl-8 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent"
+              />
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-2 py-2">
+            {filteredTocChapters.length === 0 ? (
+              <div className="py-10 text-center text-xs text-ink-muted">
+                没有匹配的章节
+              </div>
+            ) : (
+              <div className="flex flex-col gap-0.5">
+                {filteredTocChapters.map((chap) => {
+                  const isCurrent = chap.id === activeChapter.id;
+                  const meta = getChapterStatusMeta(chap.status);
+                  return (
+                    <button
+                      key={chap.id}
+                      type="button"
+                      disabled={generating && !isCurrent}
+                      onClick={() => {
+                        if (!isCurrent) onSwitchChapter(chap.id);
+                      }}
+                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors disabled:opacity-40 ${
+                        isCurrent
+                          ? "bg-accent-soft font-medium text-accent"
+                          : "text-ink-primary hover:bg-elevated"
+                      }`}
+                    >
+                      <span
+                        className={`h-1.5 w-1.5 shrink-0 rounded-full ${meta.dotClass}`}
+                        title={meta.label}
+                      />
+                      <span className="nib-mono shrink-0 text-[11px] text-ink-muted">
+                        {formatSeq(chap.globalSeq)}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">{chap.title}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Tab 1: 历史章对照 */}
       {activeTab === "history" && (
@@ -359,7 +445,7 @@ export function StudioReferenceSidebar({
             ) : (
               <div className="flex flex-col gap-3 font-prose text-[13.5px] leading-[1.85] text-ink-primary/90">
                 {refParagraphs.map((para, idx) => (
-                  <p key={idx} className="m-0 indent-[2em]">
+                  <p key={idx} className="m-0" style={{ textIndent: "var(--prose-indent)" }}>
                     {para}
                   </p>
                 ))}
@@ -372,19 +458,15 @@ export function StudioReferenceSidebar({
       {/* Tab 2: 本章节拍进度对照 */}
       {activeTab === "beats" && (
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="shrink-0 border-b border-border-subtle bg-canvas/45 px-3 py-2 text-[11px] text-ink-muted">
-            0 成本本地按出场实体与关键词估算每拍在正文的覆盖段位；点击段号可定位核验。
-          </div>
-
           <div className="flex-1 overflow-y-auto px-3 py-3">
             {beatsLoading ? (
               <div className="flex items-center justify-center gap-2 py-12 text-xs text-ink-muted">
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
-                <span>读取节拍卡…</span>
+                <span>读取剧情节拍…</span>
               </div>
             ) : beatAlignments.length === 0 ? (
               <div className="py-10 text-center text-xs text-ink-muted">
-                本章暂未编排节拍卡，可先在编排台添加。
+                本章暂未安排剧情节拍，可在「大纲」页添加。
               </div>
             ) : (
               <div className="flex flex-col gap-2.5">
@@ -395,8 +477,8 @@ export function StudioReferenceSidebar({
                           label:
                             item.startPara !== null && item.endPara !== null
                               ? item.startPara === item.endPara
-                                ? `P${item.startPara + 1}`
-                                : `P${item.startPara + 1}–P${item.endPara + 1}`
+                                ? `第 ${item.startPara + 1} 段`
+                                : `第 ${item.startPara + 1}–${item.endPara + 1} 段`
                               : "已覆盖",
                           cls: "border-ok/35 bg-ok-soft text-ok",
                         }
@@ -404,7 +486,7 @@ export function StudioReferenceSidebar({
                       ? {
                           label:
                             item.startPara !== null
-                              ? `偏弱 P${item.startPara + 1}`
+                              ? `偏弱 · 第 ${item.startPara + 1} 段`
                               : "覆盖偏弱",
                           cls: "border-warn/35 bg-warn-soft text-warn",
                         }
@@ -511,16 +593,16 @@ export function StudioReferenceSidebar({
               </button>
             </div>
 
-            <div className="flex items-center justify-between text-[11px] text-ink-muted">
-              <span>截至第 {formatSeq(activeChapter.globalSeq)} 章状态快照</span>
-              <label className="flex cursor-pointer items-center gap-1 text-ink-secondary select-none">
+            <div className="flex items-center justify-between text-xs text-ink-muted">
+              <span>截至第 {formatSeq(activeChapter.globalSeq)} 章设定状态</span>
+              <label className="flex cursor-pointer items-center gap-1.5 text-ink-secondary select-none">
                 <input
                   type="checkbox"
                   checked={includePending}
                   onChange={(e) => onChangeIncludePending(e.target.checked)}
-                  className="h-3 w-3 accent-[var(--accent)]"
+                  className="h-3.5 w-3.5 accent-[var(--accent)]"
                 />
-                <span>含未审变更</span>
+                <span>含待确认变动</span>
               </label>
             </div>
           </div>
@@ -529,7 +611,7 @@ export function StudioReferenceSidebar({
             {snapshotsLoading && snapshots.length === 0 ? (
               <div className="flex items-center justify-center gap-2 py-12 text-xs text-ink-muted">
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
-                <span>折算截至本章实体状态…</span>
+                <span>读取截至本章设定状态…</span>
               </div>
             ) : (
               <div className="flex flex-col gap-4">
@@ -636,13 +718,16 @@ export function StudioReferenceSidebar({
                                   ×{item.mentionCount}
                                 </span>
                               )}
-                              {item.inBeats && (
-                                <span className="rounded bg-surface px-1 py-0.5 text-[9.5px] text-ink-secondary">
-                                  拍
+                               {item.inBeats && (
+                                <span
+                                  title="本章节拍中已关联"
+                                  className="rounded bg-surface px-1.5 py-0.5 text-[11px] text-ink-secondary"
+                                >
+                                  节拍
                                 </span>
                               )}
                               {snap.pendingEventCount > 0 && (
-                                <span className="rounded bg-warn-soft px-1 py-0.5 text-[9.5px] text-warn">
+                                <span className="rounded bg-warn-soft px-1.5 py-0.5 text-[11px] text-warn">
                                   待审
                                 </span>
                               )}

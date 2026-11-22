@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { MemoryService, type MemorySearchHit } from "../mygo";
 import { useApp } from "../stores/AppContext";
+import { ModalShell } from "./ui/ModalShell";
 import { formatErrorMessage, formatSeq, isIMEComposing } from "../lib/constants";
 
 function escapeRegExp(s: string): string {
@@ -202,11 +203,6 @@ export function MemorySearchModal() {
   useEffect(() => {
     if (!memorySearchOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeMemorySearch();
-        return;
-      }
       if (e.key === "ArrowDown") {
         e.preventDefault();
         setActiveIndex((prev) => (hits.length === 0 ? 0 : (prev + 1) % hits.length));
@@ -235,165 +231,164 @@ export function MemorySearchModal() {
   if (!memorySearchOpen || !activeBook) return null;
 
   return (
-    <div
-      data-nib-modal="true"
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 px-4 pt-[13vh]"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) closeMemorySearch();
-      }}
+    <ModalShell
+      open
+      onClose={closeMemorySearch}
+      align="top"
+      hideHeader
+      maxWidthClass="max-w-[620px]"
+      maxHeightClass="max-h-[70vh]"
     >
-      <div className="flex max-h-[70vh] w-full max-w-[620px] flex-col overflow-hidden rounded-xl border border-border-strong bg-elevated shadow-[var(--shadow-elevated)]">
-        {/* Search Input Row */}
-        <div className="flex items-center gap-2.5 border-b border-border-subtle px-4 py-3">
-          {loading ? (
-            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" />
-          ) : (
-            <Search className="h-4 w-4 shrink-0 text-ink-muted" />
-          )}
-          <input
-            ref={inputRef}
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="检索前文原文、双字人名、设定、伏笔或弧线摘要…"
-            className="min-w-0 flex-1 bg-transparent text-sm text-ink-primary placeholder:text-ink-muted focus:outline-none"
-          />
-          {query && (
-            <button
-              type="button"
-              onClick={() => setQuery("")}
-              aria-label="清空"
-              className="rounded p-1 text-ink-muted hover:bg-surface hover:text-ink-primary"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-
-        {/* Spoiler Cap & Hint Bar */}
-        <div className="flex items-center justify-between border-b border-border-subtle bg-surface/60 px-4 py-2 text-[11px] text-ink-secondary">
-          <label
-            className={`flex items-center gap-1.5 select-none ${
-              activeChapter ? "cursor-pointer" : "opacity-45"
-            }`}
+      {/* Search Input Row */}
+      <div className="flex items-center gap-2.5 border-b border-border-subtle px-4 py-3">
+        {loading ? (
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" />
+        ) : (
+          <Search className="h-4 w-4 shrink-0 text-ink-muted" />
+        )}
+        <input
+          ref={inputRef}
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="检索全书正文、人名、设定、伏笔或摘要…"
+          className="min-w-0 flex-1 bg-transparent text-sm text-ink-primary placeholder:text-ink-muted focus:outline-none"
+        />
+        {query && (
+          <button
+            type="button"
+            onClick={() => setQuery("")}
+            aria-label="清空"
+            className="rounded p-1 text-ink-muted hover:bg-surface hover:text-ink-primary"
           >
-            <input
-              type="checkbox"
-              disabled={!activeChapter}
-              checked={beforeCurrentOnly}
-              onChange={(e) => setBeforeCurrentOnly(e.target.checked)}
-              className="h-3.5 w-3.5 accent-[var(--accent)]"
-            />
-            <span>
-              仅搜当前章之前
-              {activeChapter ? (
-                <span className="nib-mono ml-1 text-ink-muted">
-                  (&lt; 第 {formatSeq(activeChapter.globalSeq)} 章)
-                </span>
-              ) : null}
-            </span>
-          </label>
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
 
-          <div className="hidden items-center gap-2 text-ink-muted sm:flex">
-            <span>↑↓ 选择</span>
-            <span>·</span>
-            <span>Enter 跳转</span>
-            <span>·</span>
-            <span>Esc 关闭</span>
-          </div>
-        </div>
+      {/* Spoiler Cap & Hint Bar */}
+      <div className="flex items-center justify-between border-b border-border-subtle bg-surface/60 px-4 py-2 text-xs text-ink-secondary">
+        <label
+          className={`flex items-center gap-1.5 select-none ${
+            activeChapter ? "cursor-pointer" : "opacity-45"
+          }`}
+        >
+          <input
+            type="checkbox"
+            disabled={!activeChapter}
+            checked={beforeCurrentOnly}
+            onChange={(e) => setBeforeCurrentOnly(e.target.checked)}
+            className="h-3.5 w-3.5 accent-[var(--accent)]"
+          />
+          <span>
+            仅搜当前章之前
+            {activeChapter ? (
+              <span className="nib-mono ml-1 text-ink-muted">
+                (&lt; 第 {formatSeq(activeChapter.globalSeq)} 章)
+              </span>
+            ) : null}
+          </span>
+        </label>
 
-        {/* Results */}
-        <div className="flex-1 overflow-y-auto p-2">
-          {error ? (
-            <div className="px-3 py-6 text-center text-xs text-danger">{error}</div>
-          ) : !query.trim() ? (
-            <div className="px-4 py-10 text-center text-xs text-ink-muted">
-              输入关键词实时检索《{activeBook.title}》的章节正文、设定档案、伏笔与弧线摘要（支持双字人名）
-            </div>
-          ) : !loading && hits.length === 0 ? (
-            <div className="px-4 py-10 text-center text-xs text-ink-muted">
-              未找到与「{query.trim()}」匹配的章节、设定、伏笔或摘要
-            </div>
-          ) : (
-            <div className="flex flex-col gap-1">
-              {hits.map((hit, idx) => {
-                const isSelected = idx === activeIndex;
-                const isChapter = hit.source === "chapter";
-                const isForeshadow = hit.source === "foreshadowing";
-                const isSummary = hit.source === "arc_summary";
-                const badgeText = isChapter
-                  ? `第 ${formatSeq(hit.chapterSeq)} 章`
-                  : isForeshadow
-                    ? hit.chapterSeq > 0
-                      ? `伏笔 · 第 ${formatSeq(hit.chapterSeq)} 章`
-                      : "伏笔"
-                    : isSummary
-                      ? "摘要"
-                      : "实体";
-                return (
-                  <button
-                    ref={(el) => {
-                      itemRefs.current[idx] = el;
-                    }}
-                    key={`${hit.source}-${hit.chapterId}-${hit.entityId}-${hit.foreshadowingId ?? 0}-${hit.arcSummaryId ?? 0}-${idx}`}
-                    type="button"
-                    onMouseEnter={() => setActiveIndex(idx)}
-                    onClick={() => void handleSelectHit(hit)}
-                    className={`flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${
-                      isSelected ? "bg-accent-soft" : "hover:bg-surface"
-                    }`}
-                  >
-                    <div
-                      className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${
-                        isChapter || isForeshadow
-                          ? "bg-canvas text-accent"
-                          : "bg-canvas text-ink-secondary"
-                      }`}
-                    >
-                      {isChapter ? (
-                        <BookOpen className="h-3.5 w-3.5" />
-                      ) : isForeshadow ? (
-                        <Bookmark className="h-3.5 w-3.5" />
-                      ) : isSummary ? (
-                        <Layers className="h-3.5 w-3.5" />
-                      ) : (
-                        <Sparkles className="h-3.5 w-3.5" />
-                      )}
-                    </div>
-
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                            isChapter || isForeshadow
-                              ? "nib-mono bg-canvas text-accent"
-                              : "bg-canvas text-ink-secondary"
-                          }`}
-                        >
-                          {badgeText}
-                        </span>
-                        <span className="truncate text-[13px] font-medium text-ink-primary">
-                          {renderHighlighted(hit.title, query)}
-                        </span>
-                      </div>
-                      {hit.snippet && (
-                        <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-ink-secondary">
-                          {renderHighlighted(hit.snippet, query)}
-                        </p>
-                      )}
-                    </div>
-
-                    {isSelected && (
-                      <CornerDownLeft className="mt-1 h-3.5 w-3.5 shrink-0 text-accent" />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
+        <div className="hidden items-center gap-2 text-ink-muted sm:flex">
+          <span>↑↓ 选择</span>
+          <span>·</span>
+          <span>Enter 跳转</span>
+          <span>·</span>
+          <span>Esc 关闭</span>
         </div>
       </div>
-    </div>
+
+      {/* Results */}
+      <div className="flex-1 overflow-y-auto p-2">
+        {error ? (
+          <div className="px-3 py-6 text-center text-xs text-danger">{error}</div>
+        ) : !query.trim() ? (
+          <div className="px-4 py-10 text-center text-xs text-ink-muted">
+            输入关键词实时检索《{activeBook.title}》的章节正文、设定档案、伏笔与阶段摘要
+          </div>
+        ) : !loading && hits.length === 0 ? (
+          <div className="px-4 py-10 text-center text-xs text-ink-muted">
+            未找到与「{query.trim()}」匹配的章节、设定、伏笔或摘要
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {hits.map((hit, idx) => {
+              const isSelected = idx === activeIndex;
+              const isChapter = hit.source === "chapter";
+              const isForeshadow = hit.source === "foreshadowing";
+              const isSummary = hit.source === "arc_summary";
+              const badgeText = isChapter
+                ? `第 ${formatSeq(hit.chapterSeq)} 章`
+                : isForeshadow
+                  ? hit.chapterSeq > 0
+                    ? `伏笔 · 第 ${formatSeq(hit.chapterSeq)} 章`
+                    : "伏笔"
+                  : isSummary
+                    ? "摘要"
+                    : "设定";
+              return (
+                <button
+                  ref={(el) => {
+                    itemRefs.current[idx] = el;
+                  }}
+                  key={`${hit.source}-${hit.chapterId}-${hit.entityId}-${hit.foreshadowingId ?? 0}-${hit.arcSummaryId ?? 0}-${idx}`}
+                  type="button"
+                  onMouseEnter={() => setActiveIndex(idx)}
+                  onClick={() => void handleSelectHit(hit)}
+                  className={`flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${
+                    isSelected ? "bg-accent-soft" : "hover:bg-surface"
+                  }`}
+                >
+                  <div
+                    className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${
+                      isChapter || isForeshadow
+                        ? "bg-canvas text-accent"
+                        : "bg-canvas text-ink-secondary"
+                    }`}
+                  >
+                    {isChapter ? (
+                      <BookOpen className="h-3.5 w-3.5" />
+                    ) : isForeshadow ? (
+                      <Bookmark className="h-3.5 w-3.5" />
+                    ) : isSummary ? (
+                      <Layers className="h-3.5 w-3.5" />
+                    ) : (
+                      <Sparkles className="h-3.5 w-3.5" />
+                    )}
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
+                          isChapter || isForeshadow
+                            ? "nib-mono bg-canvas text-accent"
+                            : "bg-canvas text-ink-secondary"
+                        }`}
+                      >
+                        {badgeText}
+                      </span>
+                      <span className="truncate text-[13px] font-medium text-ink-primary">
+                        {renderHighlighted(hit.title, query)}
+                      </span>
+                    </div>
+                    {hit.snippet && (
+                      <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-ink-secondary">
+                        {renderHighlighted(hit.snippet, query)}
+                      </p>
+                    )}
+                  </div>
+
+                  {isSelected && (
+                    <CornerDownLeft className="mt-1 h-3.5 w-3.5 shrink-0 text-accent" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </ModalShell>
   );
 }

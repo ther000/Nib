@@ -141,7 +141,7 @@ export const FORESHADOWING_STATUSES: Array<
 ];
 
 export const ARC_SUMMARY_LEVELS: OptionMeta<ArcSummaryLevel>[] = [
-  { value: "arc_10", label: "10 章弧线摘要", shortLabel: "10章弧线" },
+  { value: "arc_10", label: "10 章阶段摘要", shortLabel: "10章摘要" },
   { value: "volume", label: "卷级摘要", shortLabel: "卷摘要" },
 ];
 
@@ -157,7 +157,7 @@ export const DELTA_FORESHADOW_ACTION_META: Record<
 
 export const STATE_EVENT_STATUS_LABELS: Record<StateEventStatus, string> = {
   pending: "待审",
-  committed: "已入库",
+  committed: "已生效",
   reverted: "已撤回",
 };
 
@@ -570,7 +570,7 @@ export const LOCAL_AUDIT_CATEGORIES: Array<{
   { value: "overdue_foreshadow", label: "超期未收伏笔", shortLabel: "超期伏笔" },
   { value: "timeline_anomaly", label: "时间线/期限异常", shortLabel: "时间异常" },
   { value: "pending_delta", label: "积压待审变更单", shortLabel: "待审变更" },
-  { value: "upstream_dirty", label: "下游脏标章", shortLabel: "脏标章节" },
+  { value: "upstream_dirty", label: "前文改动待核章", shortLabel: "前文改动" },
 ];
 
 export const AI_AUDIT_CATEGORIES: Array<{

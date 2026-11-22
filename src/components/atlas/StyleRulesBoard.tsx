@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ChevronDown,
+  ChevronRight,
   FileText,
   Loader2,
   Pencil,
@@ -11,7 +13,6 @@ import {
   Square,
   Trash2,
   Wand2,
-  X,
 } from "lucide-react";
 import {
   StyleService,
@@ -36,6 +37,7 @@ import {
   getSceneTypeLabel,
 } from "../../lib/constants";
 import { parseSensitiveImportLines } from "../../lib/studioHelpers";
+import { ModalShell } from "../ui/ModalShell";
 
 interface SampleEditorState {
   id: number;
@@ -60,8 +62,7 @@ interface RuleEditorState {
 export function StyleRulesBoard() {
   const { activeBook, notify } = useApp();
 
-  // Section 1: Style DNA Profile
-  const [profile, setProfile] = useState<StyleProfile | null>(null);
+  // Section 1: 文风设定
   const [avgSentence, setAvgSentence] = useState("18");
   const [maxPara, setMaxPara] = useState("140");
   const [dlgMin, setDlgMin] = useState("25");
@@ -69,6 +70,7 @@ export function StyleRulesBoard() {
   const [povRule, setPovRule] = useState<PovRule>("third_limited");
   const [toneDirectives, setToneDirectives] = useState("");
   const [forbiddenTropes, setForbiddenTropes] = useState("");
+  const [metricsExpanded, setMetricsExpanded] = useState(false);
   const [profileDirty, setProfileDirty] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
 
@@ -96,7 +98,6 @@ export function StyleRulesBoard() {
   const [importingSensitive, setImportingSensitive] = useState(false);
 
   const syncProfileForm = useCallback((p: StyleProfile) => {
-    setProfile(p);
     setAvgSentence(String(Math.round((p.avgSentenceChars || 18) * 10) / 10));
     setMaxPara(String(p.maxParagraphChars || 140));
     setDlgMin(String(Math.round((p.dialogueRatioMin ?? 0.25) * 100)));
@@ -165,21 +166,6 @@ export function StyleRulesBoard() {
     };
   }, []);
 
-  // Close modals on Escape
-  useEffect(() => {
-    if (!extractModalOpen && !sampleEditor && !ruleEditor && !sensitiveModalOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        if (extractModalOpen && !extractingProfile) setExtractModalOpen(false);
-        if (sampleEditor) setSampleEditor(null);
-        if (ruleEditor) setRuleEditor(null);
-        if (sensitiveModalOpen && !importingSensitive) setSensitiveModalOpen(false);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [extractModalOpen, extractingProfile, sampleEditor, ruleEditor, sensitiveModalOpen, importingSensitive]);
-
   const handleSaveProfile = async () => {
     if (!activeBook) return;
     const avg = Number.parseFloat(avgSentence) || 18;
@@ -200,9 +186,9 @@ export function StyleRulesBoard() {
         forbiddenTropesNote: forbiddenTropes.trim(),
       });
       syncProfileForm(saved);
-      notify({ tone: "ok", message: "已保存本书文风指纹（Style DNA）" });
+      notify({ tone: "ok", message: "已保存本书文风设定" });
     } catch (err) {
-      notify({ tone: "danger", message: "保存文风指纹失败", detail: formatErrorMessage(err) });
+      notify({ tone: "danger", message: "保存文风设定失败", detail: formatErrorMessage(err) });
     } finally {
       setSavingProfile(false);
     }
@@ -227,7 +213,7 @@ export function StyleRulesBoard() {
       setExtractModalOpen(false);
       notify({
         tone: "ok",
-        message: "已从样章提取文风指纹与场景锚点",
+        message: "已从样章提取文风与示范片段",
         detail: `平均句长 ${Math.round(extracted.avgSentenceChars)} 字 · 单段上限 ${extracted.maxParagraphChars} 字`,
       });
     } catch (err) {
@@ -235,7 +221,7 @@ export function StyleRulesBoard() {
         notify({ tone: "info", message: "已取消文风提取" });
         return;
       }
-      notify({ tone: "danger", message: "提取文风指纹失败", detail: formatErrorMessage(err) });
+      notify({ tone: "danger", message: "提取文风失败", detail: formatErrorMessage(err) });
     } finally {
       if (extractAbortRef.current === ac) extractAbortRef.current = null;
       setExtractingProfile(false);
@@ -396,18 +382,15 @@ export function StyleRulesBoard() {
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5">
       <div className="mx-auto flex w-full max-w-[1160px] flex-col gap-6 pb-10">
-        {/* 1. Style DNA 文风指纹 */}
+        {/* 1. 文风设定 */}
         <section className="rounded-xl border border-border-subtle bg-surface p-5">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border-subtle pb-3.5">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Sliders className="h-4 w-4 text-accent" />
-              <h2 className="text-sm font-medium text-ink-primary">
-                Style DNA 文风指纹（P7 槽位量化约束）
-              </h2>
-              {profile && (
-                <span className="nib-mono rounded bg-elevated px-2 py-0.5 text-[10.5px] text-ink-muted">
-                  平均句长 {Math.round(profile.avgSentenceChars)} 字 · 单段 &le;{" "}
-                  {profile.maxParagraphChars} 字
+              <h2 className="text-sm font-medium text-ink-primary">文风设定</h2>
+              {profileDirty && (
+                <span className="rounded bg-warn-soft px-1.5 py-0.5 text-[11px] font-medium text-warn">
+                  未保存
                 </span>
               )}
             </div>
@@ -422,7 +405,7 @@ export function StyleRulesBoard() {
                 className="flex items-center gap-1.5 rounded-md border border-border-subtle bg-elevated px-3 py-1.5 text-xs font-medium text-ink-primary transition-colors hover:border-accent hover:text-accent"
               >
                 <Wand2 className="h-3.5 w-3.5 text-accent" />
-                <span>导入样章提取文风</span>
+                <span>从样章提取文风</span>
               </button>
 
               <button
@@ -432,104 +415,15 @@ export function StyleRulesBoard() {
                 className="flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-40"
               >
                 <Save className="h-3.5 w-3.5" />
-                <span>{savingProfile ? "保存中…" : "保存指纹"}</span>
+                <span>{savingProfile ? "保存中…" : "保存文风"}</span>
               </button>
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-4 grid grid-cols-1 gap-3.5 md:grid-cols-2">
             <div>
-              <label className="mb-1 block text-[11px] text-ink-secondary">
-                平均句长（字）
-              </label>
-              <input
-                type="number"
-                min={5}
-                max={120}
-                step={0.5}
-                value={avgSentence}
-                onChange={(e) => {
-                  setAvgSentence(e.target.value);
-                  setProfileDirty(true);
-                }}
-                className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-[11px] text-ink-secondary">
-                手机阅读单段字数上限
-              </label>
-              <input
-                type="number"
-                min={40}
-                max={1000}
-                step={10}
-                value={maxPara}
-                onChange={(e) => {
-                  setMaxPara(e.target.value);
-                  setProfileDirty(true);
-                }}
-                className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-[11px] text-ink-secondary">
-                对话占比区间（%）
-              </label>
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={dlgMin}
-                  onChange={(e) => {
-                    setDlgMin(e.target.value);
-                    setProfileDirty(true);
-                  }}
-                  className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-2 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-                />
-                <span className="text-xs text-ink-muted">~</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={dlgMax}
-                  onChange={(e) => {
-                    setDlgMax(e.target.value);
-                    setProfileDirty(true);
-                  }}
-                  className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-2 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-[11px] text-ink-secondary">
-                叙事视角约束
-              </label>
-              <select
-                value={povRule}
-                onChange={(e) => {
-                  setPovRule(e.target.value);
-                  setProfileDirty(true);
-                }}
-                className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-              >
-                {POV_RULES.map((p) => (
-                  <option key={p.value} value={p.value}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="mt-3.5 grid grid-cols-1 gap-3.5 md:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-[11px] text-ink-secondary">
-                叙述语感与文风指令
+              <label className="mb-1 block text-xs text-ink-secondary">
+                叙述语感与文风要求
               </label>
               <textarea
                 rows={2}
@@ -544,8 +438,8 @@ export function StyleRulesBoard() {
             </div>
 
             <div>
-              <label className="mb-1 block text-[11px] text-ink-secondary">
-                本书专属防毒补充说明
+              <label className="mb-1 block text-xs text-ink-secondary">
+                本书专属避坑说明
               </label>
               <textarea
                 rows={2}
@@ -554,20 +448,132 @@ export function StyleRulesBoard() {
                   setForbiddenTropes(e.target.value);
                   setProfileDirty(true);
                 }}
-                placeholder="例如：主角行事果决不留活口，严禁无脑饶恕死敌或临阵顿悟嘴炮"
+                placeholder="例如：主角行事果决不留活口，严禁无脑饶恕死敌或临阵嘴炮"
                 className="w-full resize-y rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
               />
             </div>
           </div>
+
+          {/* Collapsible Numeric Style Metrics */}
+          <div className="mt-3.5 border-t border-border-subtle pt-3">
+            <button
+              type="button"
+              onClick={() => setMetricsExpanded((v) => !v)}
+              className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary hover:text-ink-primary"
+            >
+              {metricsExpanded ? (
+                <ChevronDown className="h-3.5 w-3.5 text-ink-muted" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5 text-ink-muted" />
+              )}
+              <span className="font-medium">量化指标与视角详情</span>
+              <span className="nib-mono rounded bg-canvas px-2 py-0.5 text-[11px] text-ink-muted">
+                {POV_RULES.find((p) => p.value === povRule)?.label ?? povRule} · 句长{" "}
+                {Math.round(Number(avgSentence) || 18)} 字 · 单段 &le;{" "}
+                {Number(maxPara) || 140} 字 · 对话 {dlgMin}%~{dlgMax}%
+              </span>
+            </button>
+
+            {metricsExpanded && (
+              <div className="mt-3 grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <label className="mb-1 block text-xs text-ink-secondary">
+                    平均句长（字）
+                  </label>
+                  <input
+                    type="number"
+                    min={5}
+                    max={120}
+                    step={0.5}
+                    value={avgSentence}
+                    onChange={(e) => {
+                      setAvgSentence(e.target.value);
+                      setProfileDirty(true);
+                    }}
+                    className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs text-ink-secondary">
+                    单段字数上限
+                  </label>
+                  <input
+                    type="number"
+                    min={40}
+                    max={1000}
+                    step={10}
+                    value={maxPara}
+                    onChange={(e) => {
+                      setMaxPara(e.target.value);
+                      setProfileDirty(true);
+                    }}
+                    className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs text-ink-secondary">
+                    对话占比区间（%）
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={dlgMin}
+                      onChange={(e) => {
+                        setDlgMin(e.target.value);
+                        setProfileDirty(true);
+                      }}
+                      className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-2 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                    />
+                    <span className="text-xs text-ink-muted">~</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={dlgMax}
+                      onChange={(e) => {
+                        setDlgMax(e.target.value);
+                        setProfileDirty(true);
+                      }}
+                      className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-2 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs text-ink-secondary">
+                    叙事视角
+                  </label>
+                  <select
+                    value={povRule}
+                    onChange={(e) => {
+                      setPovRule(e.target.value);
+                      setProfileDirty(true);
+                    }}
+                    className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                  >
+                    {POV_RULES.map((p) => (
+                      <option key={p.value} value={p.value}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+          </div>
         </section>
 
-        {/* 2. 分场景样章锚点库 (styleSamples) */}
+        {/* 2. 示范样章库 (styleSamples) */}
         <section className="rounded-xl border border-border-subtle bg-surface p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <FileText className="h-4 w-4 text-accent" />
               <h2 className="text-sm font-medium text-ink-primary">
-                分场景样章锚点库（按本章节拍类型动态注入 P7）
+                示范样章库（写作时按场景自动参考）
               </h2>
             </div>
 
@@ -669,7 +675,7 @@ export function StyleRulesBoard() {
                         <button
                           type="button"
                           onClick={() => void handleDeleteSample(sp.id)}
-                          className="rounded bg-danger px-2 py-0.5 text-[10.5px] font-medium text-white"
+                          className="rounded bg-danger px-2 py-0.5 text-[11px] font-medium text-canvas"
                         >
                           确认
                         </button>
@@ -698,13 +704,13 @@ export function StyleRulesBoard() {
           )}
         </section>
 
-        {/* 3. 去 AI 味黑名单与结构规则库 (deaiRules) */}
+        {/* 3. 禁用词与敏感词 (deaiRules) */}
         <section className="rounded-xl border border-border-subtle bg-surface p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <ShieldBan className="h-4 w-4 text-danger" />
               <h2 className="text-sm font-medium text-ink-primary">
-                去 AI 味黑名单与结构规则库
+                禁用词与敏感词
               </h2>
               <span className="nib-mono text-xs text-ink-muted">
                 {rules.filter((r) => r.enabled).length} / {rules.length} 启用
@@ -861,7 +867,7 @@ export function StyleRulesBoard() {
                           <button
                             type="button"
                             onClick={() => void handleDeleteRule(rule.id)}
-                            className="rounded bg-danger px-1.5 py-0.5 text-[10px] font-medium text-white"
+                            className="rounded bg-danger px-1.5 py-0.5 text-[11px] font-medium text-canvas"
                           >
                             删
                           </button>
@@ -892,446 +898,386 @@ export function StyleRulesBoard() {
       </div>
 
       {/* Extract Style Profile Modal */}
-      {extractModalOpen && (
-        <div
-          data-nib-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget && !extractingProfile) {
-              setExtractModalOpen(false);
-            }
-          }}
-        >
-          <div className="flex max-h-[84vh] w-full max-w-[600px] flex-col overflow-hidden rounded-xl border border-border-strong bg-elevated shadow-[var(--shadow-elevated)]">
-            <div className="flex items-center justify-between border-b border-border-subtle px-5 py-3.5">
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-accent" />
-                <h3 className="text-sm font-medium text-ink-primary">
-                  导入样章提取 Style DNA 文风指纹
-                </h3>
-              </div>
+      <ModalShell
+        open={extractModalOpen}
+        onClose={() => setExtractModalOpen(false)}
+        closeDisabled={extractingProfile}
+        title="从样章提取文风"
+        icon={<Sparkles className="h-4 w-4 text-accent" />}
+        maxWidthClass="max-w-[600px]"
+        footer={
+          <>
+            {extractingProfile ? (
               <button
                 type="button"
-                disabled={extractingProfile}
+                onClick={() => extractAbortRef.current?.abort()}
+                className="flex items-center gap-1.5 rounded-md border border-danger/40 bg-danger-soft px-3.5 py-1.5 text-xs font-medium text-danger"
+              >
+                <Square className="h-3 w-3 fill-current" />
+                <span>取消提取</span>
+              </button>
+            ) : (
+              <button
+                type="button"
                 onClick={() => setExtractModalOpen(false)}
-                className="rounded p-1 text-ink-muted hover:bg-surface hover:text-ink-primary"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-5">
-              <div className="text-xs text-ink-secondary">
-                粘贴 1~5 章满意的样章或标杆片段，自动统计句长、段长、对话占比并切分四类场景示范锚点。
-              </div>
-
-              {sampleInputs.map((val, idx) => (
-                <div key={idx} className="flex flex-col gap-1">
-                  <div className="flex items-center justify-between text-xs text-ink-secondary">
-                    <span>样章 #{idx + 1}</span>
-                    {sampleInputs.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setSampleInputs((prev) =>
-                            prev.filter((_, i) => i !== idx)
-                          )
-                        }
-                        className="text-[11px] text-ink-muted hover:text-danger"
-                      >
-                        移除
-                      </button>
-                    )}
-                  </div>
-                  <textarea
-                    rows={5}
-                    value={val}
-                    onChange={(e) =>
-                      setSampleInputs((prev) =>
-                        prev.map((item, i) => (i === idx ? e.target.value : item))
-                      )
-                    }
-                    placeholder="在此粘贴样章正文…"
-                    className="w-full resize-y rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
-                  />
-                </div>
-              ))}
-
-              {sampleInputs.length < 5 && (
-                <button
-                  type="button"
-                  onClick={() => setSampleInputs((prev) => [...prev, ""])}
-                  className="flex items-center justify-center gap-1 rounded-md border border-dashed border-border-strong py-1.5 text-xs text-ink-secondary hover:border-accent hover:text-accent"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  <span>添加一段样章（{sampleInputs.length}/5）</span>
-                </button>
-              )}
-            </div>
-
-            <div className="flex items-center justify-end gap-2 border-t border-border-subtle bg-surface/50 px-5 py-3">
-              {extractingProfile ? (
-                <button
-                  type="button"
-                  onClick={() => extractAbortRef.current?.abort()}
-                  className="flex items-center gap-1.5 rounded-md border border-danger/40 bg-danger-soft px-3.5 py-1.5 text-xs font-medium text-danger"
-                >
-                  <Square className="h-3 w-3 fill-current" />
-                  <span>取消提取</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setExtractModalOpen(false)}
-                  className="rounded-md px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface hover:text-ink-primary"
-                >
-                  取消
-                </button>
-              )}
-              <button
-                type="button"
-                disabled={extractingProfile}
-                onClick={() => void handleExtractProfile()}
-                className="flex items-center gap-1.5 rounded-md bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
-              >
-                {extractingProfile ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    <span>提取中…</span>
-                  </>
-                ) : (
-                  <>
-                    <Wand2 className="h-3.5 w-3.5" />
-                    <span>提取并保存</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Style Sample Editor Modal */}
-      {sampleEditor && (
-        <div
-          data-nib-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setSampleEditor(null);
-          }}
-        >
-          <div className="w-full max-w-[520px] overflow-hidden rounded-xl border border-border-strong bg-elevated shadow-[var(--shadow-elevated)]">
-            <div className="flex items-center justify-between border-b border-border-subtle px-5 py-3.5">
-              <h3 className="text-sm font-medium text-ink-primary">
-                {sampleEditor.id > 0 ? "编辑分场景样章锚点" : "新增分场景样章锚点"}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setSampleEditor(null)}
-                className="rounded p-1 text-ink-muted hover:bg-surface hover:text-ink-primary"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="flex flex-col gap-3.5 p-5">
-              <div className="grid grid-cols-[140px_1fr] gap-3">
-                <div>
-                  <label className="mb-1 block text-xs text-ink-secondary">
-                    场景类型
-                  </label>
-                  <select
-                    value={sampleEditor.sceneType}
-                    onChange={(e) =>
-                      setSampleEditor({ ...sampleEditor, sceneType: e.target.value })
-                    }
-                    className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-                  >
-                    {SCENE_TYPES.map((sc) => (
-                      <option key={sc.value} value={sc.value}>
-                        {sc.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs text-ink-secondary">
-                    片段标题
-                  </label>
-                  <input
-                    type="text"
-                    autoFocus
-                    value={sampleEditor.title}
-                    onChange={(e) =>
-                      setSampleEditor({ ...sampleEditor, title: e.target.value })
-                    }
-                    placeholder="例如：石室短兵相接示范段"
-                    className="w-full rounded-md border border-border-subtle bg-canvas px-3 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs text-ink-secondary">
-                  样章示范片段（建议 300~600 字）
-                </label>
-                <textarea
-                  rows={6}
-                  value={sampleEditor.excerpt}
-                  onChange={(e) =>
-                    setSampleEditor({ ...sampleEditor, excerpt: e.target.value })
-                  }
-                  placeholder="只示范用词节奏与短段动作感，模型不会照搬其中剧情"
-                  className="w-full resize-y rounded-md border border-border-subtle bg-canvas px-3 py-2 font-prose text-xs leading-relaxed text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 border-t border-border-subtle bg-surface/50 px-5 py-3">
-              <button
-                type="button"
-                onClick={() => setSampleEditor(null)}
                 className="rounded-md px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface hover:text-ink-primary"
               >
                 取消
               </button>
-              <button
-                type="button"
-                disabled={savingSample}
-                onClick={() => void handleSaveSample()}
-                className="rounded-md bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
-              >
-                {savingSample ? "保存中…" : "保存样章"}
-              </button>
-            </div>
+            )}
+            <button
+              type="button"
+              disabled={extractingProfile}
+              onClick={() => void handleExtractProfile()}
+              className="flex items-center gap-1.5 rounded-md bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {extractingProfile ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span>提取中…</span>
+                </>
+              ) : (
+                <>
+                  <Wand2 className="h-3.5 w-3.5" />
+                  <span>提取并保存</span>
+                </>
+              )}
+            </button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3 overflow-y-auto p-5">
+          <div className="text-xs text-ink-secondary">
+            粘贴 1~5 章满意的样章或标杆片段，自动统计句长、段长、对话占比并切分场景示范片段。
           </div>
-        </div>
-      )}
 
-      {/* Bulk Sensitive / Forbidden Words Modal */}
-      {sensitiveModalOpen && (
-        <div
-          data-nib-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget && !importingSensitive) {
-              setSensitiveModalOpen(false);
-            }
-          }}
-        >
-          <div className="w-full max-w-[480px] overflow-hidden rounded-xl border border-border-strong bg-elevated shadow-[var(--shadow-elevated)]">
-            <div className="flex items-center justify-between border-b border-border-subtle px-5 py-3.5">
-              <div className="flex items-center gap-2">
-                <ShieldBan className="h-4 w-4 text-danger" />
-                <h3 className="text-sm font-medium text-ink-primary">
-                  批量导入敏感词 / 平台违禁词
-                </h3>
-              </div>
-              <button
-                type="button"
-                disabled={importingSensitive}
-                onClick={() => setSensitiveModalOpen(false)}
-                className="rounded p-1 text-ink-muted hover:bg-surface hover:text-ink-primary"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="flex flex-col gap-3 p-5">
-              <div className="text-xs leading-relaxed text-ink-secondary">
-                每行一个词（支持逗号、顿号分隔），也支持 <span className="nib-mono text-ink-primary">敏感词=替换词</span> 或 <span className="nib-mono text-ink-primary">敏感词-&gt;替换词</span> 指定一键脱敏替换词。
+          {sampleInputs.map((val, idx) => (
+            <div key={idx} className="flex flex-col gap-1">
+              <div className="flex items-center justify-between text-xs text-ink-secondary">
+                <span>样章 #{idx + 1}</span>
+                {sampleInputs.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSampleInputs((prev) =>
+                        prev.filter((_, i) => i !== idx)
+                      )
+                    }
+                    className="text-xs text-ink-muted hover:text-danger"
+                  >
+                    移除
+                  </button>
+                )}
               </div>
               <textarea
-                rows={7}
-                autoFocus
-                value={sensitiveText}
-                onChange={(e) => setSensitiveText(e.target.value)}
-                placeholder={"例如：\n违禁词A=安全词A\n违禁词B -> 安全词B\n角色旧名C"}
+                rows={5}
+                value={val}
+                onChange={(e) =>
+                  setSampleInputs((prev) =>
+                    prev.map((item, i) => (i === idx ? e.target.value : item))
+                  )
+                }
+                placeholder="在此粘贴样章正文…"
                 className="w-full resize-y rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
               />
             </div>
-            <div className="flex items-center justify-end gap-2 border-t border-border-subtle bg-surface/50 px-5 py-3">
-              <button
-                type="button"
-                disabled={importingSensitive}
-                onClick={() => setSensitiveModalOpen(false)}
-                className="rounded-md px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface hover:text-ink-primary"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                disabled={importingSensitive || !sensitiveText.trim()}
-                onClick={() => void handleImportSensitiveWords()}
-                className="rounded-md bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-40"
-              >
-                {importingSensitive ? "导入中…" : "确认批量导入"}
-              </button>
-            </div>
-          </div>
+          ))}
+
+          {sampleInputs.length < 5 && (
+            <button
+              type="button"
+              onClick={() => setSampleInputs((prev) => [...prev, ""])}
+              className="flex items-center justify-center gap-1 rounded-md border border-dashed border-border-strong py-1.5 text-xs text-ink-secondary hover:border-accent hover:text-accent"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>添加一段样章（{sampleInputs.length}/5）</span>
+            </button>
+          )}
         </div>
-      )}
+      </ModalShell>
 
-      {/* De-AI Rule Editor Modal */}
-      {ruleEditor && (
-        <div
-          data-nib-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setRuleEditor(null);
-          }}
-        >
-          <div className="w-full max-w-[480px] overflow-hidden rounded-xl border border-border-strong bg-elevated shadow-[var(--shadow-elevated)]">
-            <div className="flex items-center justify-between border-b border-border-subtle px-5 py-3.5">
-              <h3 className="text-sm font-medium text-ink-primary">
-                {ruleEditor.id > 0 ? "编辑去 AI 味规则" : "新增去 AI 味禁用词条"}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setRuleEditor(null)}
-                className="rounded p-1 text-ink-muted hover:bg-surface hover:text-ink-primary"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="flex flex-col gap-3.5 p-5">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="mb-1 block text-xs text-ink-secondary">
-                    规则分类
-                  </label>
-                  <select
-                    value={ruleEditor.category}
-                    onChange={(e) =>
-                      setRuleEditor({ ...ruleEditor, category: e.target.value })
-                    }
-                    className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-                  >
-                    {DEAI_CATEGORIES.map((c) => (
-                      <option key={c.value} value={c.value}>
-                        {c.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-xs text-ink-secondary">
-                    告警级别
-                  </label>
-                  <select
-                    value={ruleEditor.severity}
-                    onChange={(e) =>
-                      setRuleEditor({ ...ruleEditor, severity: e.target.value })
-                    }
-                    className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-                  >
-                    {LINT_SEVERITIES.map((s) => (
-                      <option key={s.value} value={s.value}>
-                        {s.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
+      {/* Style Sample Editor Modal */}
+      <ModalShell
+        open={Boolean(sampleEditor)}
+        onClose={() => setSampleEditor(null)}
+        closeDisabled={savingSample}
+        title={sampleEditor && sampleEditor.id > 0 ? "编辑示范样章" : "新增示范样章"}
+        icon={<FileText className="h-4 w-4 text-accent" />}
+        maxWidthClass="max-w-[520px]"
+        footer={
+          <>
+            <button
+              type="button"
+              disabled={savingSample}
+              onClick={() => setSampleEditor(null)}
+              className="rounded-md px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface hover:text-ink-primary disabled:opacity-40"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              disabled={savingSample}
+              onClick={() => void handleSaveSample()}
+              className="rounded-md bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {savingSample ? "保存中…" : "保存样章"}
+            </button>
+          </>
+        }
+      >
+        {sampleEditor && (
+          <div className="flex flex-col gap-3.5 p-5">
+            <div className="grid grid-cols-[140px_1fr] gap-3">
               <div>
-                <div className="mb-1 flex items-center justify-between">
-                  <label className="text-xs text-ink-secondary">
-                    匹配词条或正则表达式
-                  </label>
-                  <label className="flex cursor-pointer items-center gap-1 text-[11px] text-ink-secondary">
-                    <input
-                      type="checkbox"
-                      checked={ruleEditor.isRegex}
-                      onChange={(e) =>
-                        setRuleEditor({ ...ruleEditor, isRegex: e.target.checked })
-                      }
-                      className="h-3.5 w-3.5 accent-[var(--accent)]"
-                    />
-                    <span>正则表达式</span>
-                  </label>
-                </div>
+                <label className="mb-1 block text-xs text-ink-secondary">
+                  场景类型
+                </label>
+                <select
+                  value={sampleEditor.sceneType}
+                  onChange={(e) =>
+                    setSampleEditor({ ...sampleEditor, sceneType: e.target.value })
+                  }
+                  className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                >
+                  {SCENE_TYPES.map((sc) => (
+                    <option key={sc.value} value={sc.value}>
+                      {sc.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-ink-secondary">
+                  片段标题
+                </label>
                 <input
                   type="text"
                   autoFocus
-                  value={ruleEditor.pattern}
+                  value={sampleEditor.title}
                   onChange={(e) =>
-                    setRuleEditor({ ...ruleEditor, pattern: e.target.value })
+                    setSampleEditor({ ...sampleEditor, title: e.target.value })
                   }
-                  placeholder="例如：嘴角勾起一抹弧度"
-                  className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-3 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                  placeholder="例如：石室短兵相接示范段"
+                  className="w-full rounded-md border border-border-subtle bg-canvas px-3 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
                 />
               </div>
+            </div>
 
-              <div className="grid grid-cols-[140px_1fr] gap-3">
-                <div>
-                  <label className="mb-1 block text-xs text-ink-secondary">
-                    单章允许上限
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={50}
-                    value={ruleEditor.maxPerChapter}
-                    onChange={(e) =>
-                      setRuleEditor({ ...ruleEditor, maxPerChapter: e.target.value })
-                    }
-                    className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs text-ink-secondary">
-                    一键替换词（可选）
-                  </label>
-                  <input
-                    type="text"
-                    value={ruleEditor.replacement}
-                    onChange={(e) =>
-                      setRuleEditor({ ...ruleEditor, replacement: e.target.value })
-                    }
-                    placeholder="用于敏感词或固定禁用词的一键安全替换"
-                    className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
-                  />
-                </div>
+            <div>
+              <label className="mb-1 block text-xs text-ink-secondary">
+                示范片段（建议 300~600 字）
+              </label>
+              <textarea
+                rows={6}
+                value={sampleEditor.excerpt}
+                onChange={(e) =>
+                  setSampleEditor({ ...sampleEditor, excerpt: e.target.value })
+                }
+                placeholder="只示范用词节奏与短段动作感，AI 不会照搬其中剧情"
+                className="w-full resize-y rounded-md border border-border-subtle bg-canvas px-3 py-2 font-prose text-xs leading-relaxed text-ink-primary placeholder:font-ui placeholder:text-ink-muted focus:border-accent focus:outline-none"
+              />
+            </div>
+          </div>
+        )}
+      </ModalShell>
+
+      {/* Bulk Sensitive / Forbidden Words Modal */}
+      <ModalShell
+        open={sensitiveModalOpen}
+        onClose={() => setSensitiveModalOpen(false)}
+        closeDisabled={importingSensitive}
+        title="批量导入敏感词 / 违禁词"
+        icon={<ShieldBan className="h-4 w-4 text-danger" />}
+        maxWidthClass="max-w-[480px]"
+        footer={
+          <>
+            <button
+              type="button"
+              disabled={importingSensitive}
+              onClick={() => setSensitiveModalOpen(false)}
+              className="rounded-md px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface hover:text-ink-primary disabled:opacity-40"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              disabled={importingSensitive || !sensitiveText.trim()}
+              onClick={() => void handleImportSensitiveWords()}
+              className="rounded-md bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-40"
+            >
+              {importingSensitive ? "导入中…" : "确认批量导入"}
+            </button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3 p-5">
+          <div className="text-xs leading-relaxed text-ink-secondary">
+            每行一个词（支持逗号、顿号分隔），也支持{" "}
+            <span className="nib-mono text-ink-primary">敏感词=替换词</span> 或{" "}
+            <span className="nib-mono text-ink-primary">敏感词-&gt;替换词</span>{" "}
+            指定一键替换词。
+          </div>
+          <textarea
+            rows={7}
+            autoFocus
+            value={sensitiveText}
+            onChange={(e) => setSensitiveText(e.target.value)}
+            placeholder={"例如：\n违禁词A=安全词A\n违禁词B -> 安全词B\n角色旧名C"}
+            className="w-full resize-y rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+          />
+        </div>
+      </ModalShell>
+
+      {/* De-AI Rule Editor Modal */}
+      <ModalShell
+        open={Boolean(ruleEditor)}
+        onClose={() => setRuleEditor(null)}
+        closeDisabled={savingRule}
+        title={ruleEditor && ruleEditor.id > 0 ? "编辑词条规则" : "新增禁用词条"}
+        icon={<ShieldBan className="h-4 w-4 text-accent" />}
+        maxWidthClass="max-w-[480px]"
+        footer={
+          <>
+            <button
+              type="button"
+              disabled={savingRule}
+              onClick={() => setRuleEditor(null)}
+              className="rounded-md px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface hover:text-ink-primary disabled:opacity-40"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              disabled={savingRule}
+              onClick={() => void handleSaveRule()}
+              className="rounded-md bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {savingRule ? "保存中…" : "保存规则"}
+            </button>
+          </>
+        }
+      >
+        {ruleEditor && (
+          <div className="flex flex-col gap-3.5 p-5">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-xs text-ink-secondary">
+                  规则分类
+                </label>
+                <select
+                  value={ruleEditor.category}
+                  onChange={(e) =>
+                    setRuleEditor({ ...ruleEditor, category: e.target.value })
+                  }
+                  className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                >
+                  {DEAI_CATEGORIES.map((c) => (
+                    <option key={c.value} value={c.value}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
                 <label className="mb-1 block text-xs text-ink-secondary">
-                  修改建议提示
+                  提醒级别
+                </label>
+                <select
+                  value={ruleEditor.severity}
+                  onChange={(e) =>
+                    setRuleEditor({ ...ruleEditor, severity: e.target.value })
+                  }
+                  className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                >
+                  {LINT_SEVERITIES.map((s) => (
+                    <option key={s.value} value={s.value}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <label className="text-xs text-ink-secondary">匹配词条</label>
+                <label
+                  title="仅在需要复杂模式匹配时开启"
+                  className="flex cursor-pointer items-center gap-1 text-[11px] text-ink-muted hover:text-ink-secondary"
+                >
+                  <input
+                    type="checkbox"
+                    checked={ruleEditor.isRegex}
+                    onChange={(e) =>
+                      setRuleEditor({ ...ruleEditor, isRegex: e.target.checked })
+                    }
+                    className="h-3 w-3 accent-[var(--accent)]"
+                  />
+                  <span>高级：正则匹配</span>
+                </label>
+              </div>
+              <input
+                type="text"
+                autoFocus
+                value={ruleEditor.pattern}
+                onChange={(e) =>
+                  setRuleEditor({ ...ruleEditor, pattern: e.target.value })
+                }
+                placeholder="例如：嘴角勾起一抹弧度"
+                className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-3 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+              />
+            </div>
+
+            <div className="grid grid-cols-[140px_1fr] gap-3">
+              <div>
+                <label className="mb-1 block text-xs text-ink-secondary">
+                  单章允许上限
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={50}
+                  value={ruleEditor.maxPerChapter}
+                  onChange={(e) =>
+                    setRuleEditor({ ...ruleEditor, maxPerChapter: e.target.value })
+                  }
+                  className="nib-mono w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-ink-secondary">
+                  一键替换词（可选）
                 </label>
                 <input
                   type="text"
-                  value={ruleEditor.hint}
+                  value={ruleEditor.replacement}
                   onChange={(e) =>
-                    setRuleEditor({ ...ruleEditor, hint: e.target.value })
+                    setRuleEditor({ ...ruleEditor, replacement: e.target.value })
                   }
-                  placeholder="改用具体动作或短句台词"
+                  placeholder="用于敏感词或固定禁用词的一键替换"
                   className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
                 />
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 border-t border-border-subtle bg-surface/50 px-5 py-3">
-              <button
-                type="button"
-                onClick={() => setRuleEditor(null)}
-                className="rounded-md px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface hover:text-ink-primary"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                disabled={savingRule}
-                onClick={() => void handleSaveRule()}
-                className="rounded-md bg-accent px-4 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
-              >
-                {savingRule ? "保存中…" : "保存规则"}
-              </button>
+            <div>
+              <label className="mb-1 block text-xs text-ink-secondary">
+                修改建议提示
+              </label>
+              <input
+                type="text"
+                value={ruleEditor.hint}
+                onChange={(e) =>
+                  setRuleEditor({ ...ruleEditor, hint: e.target.value })
+                }
+                placeholder="改用具体动作或短句台词"
+                className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+              />
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </ModalShell>
     </div>
   );
 }

@@ -114,9 +114,10 @@ export function AtlasView() {
     [chapters]
   );
 
-  // Timeline state for 实体档案
+  // Timeline state for 设定档案 & 关系网
   const [timelineSeq, setTimelineSeq] = useState<number>(latestChapterSeq);
   const [includePending, setIncludePending] = useState<boolean>(false);
+  const [timelineOpen, setTimelineOpen] = useState<boolean>(false);
   const userAdjustedTimelineRef = useRef(false);
   const lastBookIdRef = useRef<number | null>(activeBook?.id ?? null);
 
@@ -145,7 +146,7 @@ export function AtlasView() {
   const snapReqRef = useRef(0);
 
   const [presenceReport, setPresenceReport] = useState<EntityPresenceReport | null>(null);
-  const [absentThreshold, setAbsentThreshold] = useState<number>(15);
+  const absentThreshold = 15;
   const [absentOnly, setAbsentOnly] = useState<boolean>(false);
   const presenceReqRef = useRef(0);
 
@@ -600,13 +601,13 @@ export function AtlasView() {
           },
         },
         {
-          label: ent.isInvariant ? "取消世界铁律标记" : "设为世界铁律 (P0)",
+          label: ent.isInvariant ? "取消世界铁律标记" : "设为世界铁律",
           icon: <Shield className="h-3.5 w-3.5" />,
           onSelect: () => void handleToggleEntityInvariant(ent),
         },
         { type: "separator" },
         {
-          label: "删除实体…",
+          label: "删除档案…",
           icon: <Trash2 className="h-3.5 w-3.5" />,
           danger: true,
           onSelect: () => {
@@ -641,7 +642,7 @@ export function AtlasView() {
     badgeTone?: "danger" | "muted";
     badgeText?: string;
   }> = [
-    { id: "entities", label: "实体档案", Icon: Users, badge: allEntities.length, badgeTone: "muted" },
+    { id: "entities", label: "设定档案", Icon: Users, badge: allEntities.length, badgeTone: "muted" },
     {
       id: "relations",
       label: "关系网",
@@ -655,24 +656,27 @@ export function AtlasView() {
       badgeTone: overdueForeshadowCount > 0 ? "danger" : "muted",
       badgeText: overdueForeshadowCount > 0 ? `${overdueForeshadowCount} 超期` : undefined,
     },
-    { id: "summaries", label: "弧线摘要", Icon: BookMarked },
-    { id: "style", label: "文风与去AI味规则", Icon: Sparkles },
+    { id: "summaries", label: "阶段摘要", Icon: BookMarked },
+    { id: "style", label: "文风与敏感词", Icon: Sparkles },
     {
       id: "audit",
       label: "全书体检",
       Icon: ShieldCheck,
       badge: dirtyChapterCount,
       badgeTone: dirtyChapterCount > 0 ? "danger" : "muted",
-      badgeText: dirtyChapterCount > 0 ? `${dirtyChapterCount} 脏标` : undefined,
+      badgeText: dirtyChapterCount > 0 ? `${dirtyChapterCount} 待核` : undefined,
     },
   ];
+
+  const isTimelineFiltered =
+    (latestChapterSeq > 0 && timelineSeq !== latestChapterSeq) || includePending;
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-canvas">
       {/* Atlas Sub-Navigation Bar */}
       <div className="shrink-0 border-b border-border-subtle bg-surface px-6">
         <div className="mx-auto flex h-10 w-full max-w-[1160px] items-center justify-between gap-4">
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 overflow-x-auto">
             {subTabs.map(({ id, label, Icon, badge, badgeTone, badgeText }) => {
               const active = atlasSubTab === id;
               return (
@@ -680,7 +684,7 @@ export function AtlasView() {
                   key={id}
                   type="button"
                   onClick={() => setAtlasSubTab(id)}
-                  className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  className={`flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                     active
                       ? "bg-accent-soft text-accent"
                       : "text-ink-secondary hover:bg-elevated/60 hover:text-ink-primary"
@@ -690,7 +694,7 @@ export function AtlasView() {
                   <span>{label}</span>
                   {badge !== undefined && badge > 0 && (
                     <span
-                      className={`nib-mono rounded-full px-1.5 py-0.5 text-[10px] ${
+                      className={`nib-mono rounded-full px-1.5 py-0.5 text-[11px] ${
                         badgeTone === "danger"
                           ? "bg-danger-soft text-danger font-semibold"
                           : "bg-canvas/70 text-ink-muted"
@@ -704,20 +708,51 @@ export function AtlasView() {
             })}
           </div>
 
-          {(atlasSubTab === "entities" || atlasSubTab === "relations") && (
-            <div className="hidden items-center gap-2 text-[11px] text-ink-muted sm:flex">
-              <Clock className="h-3.5 w-3.5 text-accent" />
+          {(atlasSubTab === "entities" || atlasSubTab === "relations") && latestChapterSeq > 0 && (
+            <button
+              type="button"
+              onClick={() => setTimelineOpen((v) => !v)}
+              title="按章节时间点回溯当时的设定与关系状态"
+              className={`flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors ${
+                timelineOpen || isTimelineFiltered
+                  ? "border-accent/40 bg-accent-soft text-accent"
+                  : "border-border-subtle bg-canvas text-ink-secondary hover:border-border-strong hover:text-ink-primary"
+              }`}
+            >
+              <Clock className="h-3.5 w-3.5" />
               <span>
-                {timelineSeq === 0
-                  ? "初始静态设定"
-                  : `时间轴：截至第 ${formatSeq(timelineSeq)} 章`}
+                {isTimelineFiltered
+                  ? timelineSeq === 0
+                    ? "初始设定"
+                    : `截至第 ${formatSeq(timelineSeq)} 章`
+                  : "按章回溯"}
               </span>
-            </div>
+            </button>
           )}
         </div>
       </div>
 
-      {/* Sub-tab 1: 实体档案 (with Pinned Invariants + Chapter Timeline Slider) */}
+      {/* Collapsible Shared Timeline Bar for 设定档案 & 关系网 */}
+      {timelineOpen &&
+        (atlasSubTab === "entities" || atlasSubTab === "relations") &&
+        latestChapterSeq > 0 && (
+          <div className="shrink-0 border-b border-border-subtle bg-surface/50 px-6 py-2.5">
+            <div className="mx-auto w-full max-w-[1160px]">
+              <AtlasTimelineBar
+                timelineSeq={timelineSeq}
+                latestChapterSeq={latestChapterSeq}
+                chapters={chapters}
+                includePending={includePending}
+                onChangeTimelineSeq={handleTimelineSeqChange}
+                onChangeIncludePending={setIncludePending}
+                compact
+                labelPrefix={atlasSubTab === "relations" ? "关系状态" : "设定状态"}
+              />
+            </div>
+          </div>
+        )}
+
+      {/* Sub-tab 1: 设定档案 (with Pinned Invariants) */}
       {atlasSubTab === "entities" && (
         <>
           {/* Pinned Top Strip: 世界铁律 (isInvariant: true) */}
@@ -726,8 +761,8 @@ export function AtlasView() {
               <div className="flex shrink-0 items-center gap-1.5">
                 <ShieldAlert className="h-4 w-4 text-danger" />
                 <span className="text-xs font-semibold text-ink-primary">世界铁律</span>
-                <span className="nib-mono rounded bg-danger-soft px-1.5 py-0.5 text-[10px] font-medium text-danger">
-                  P0 强制注入 · {invariants.length}
+                <span className="nib-mono rounded bg-danger-soft px-1.5 py-0.5 text-[11px] font-medium text-danger">
+                  每章必带 · {invariants.length}
                 </span>
               </div>
 
@@ -760,66 +795,6 @@ export function AtlasView() {
           {/* Main Content */}
           <div className="flex-1 overflow-y-auto px-6 py-5">
             <div className="mx-auto flex w-full max-w-[1160px] flex-col gap-4">
-              {/* Shared Chapter Timeline Slider Strip */}
-              <AtlasTimelineBar
-                timelineSeq={timelineSeq}
-                latestChapterSeq={latestChapterSeq}
-                chapters={chapters}
-                includePending={includePending}
-                onChangeTimelineSeq={handleTimelineSeqChange}
-                onChangeIncludePending={setIncludePending}
-              />
-
-              {/* Compact Presence & Absence Radar Strip */}
-              {latestChapterSeq > 0 && (
-                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border-subtle bg-surface/75 px-3.5 py-2 text-xs">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Radio className="h-3.5 w-3.5 text-accent" />
-                    <span className="font-medium text-ink-primary">出场与掉线雷达</span>
-                    <span className="text-ink-muted">
-                      （统计截至第 {formatSeq(timelineSeq)} 章的正文提及与节拍出场）
-                    </span>
-                    {absentAlertCount > 0 ? (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-danger-soft px-2 py-0.5 text-[11px] font-medium text-danger">
-                        <AlertTriangle className="h-3 w-3" />
-                        {absentAlertCount} 个非铁律实体已掉线 ≥ {absentThreshold} 章
-                      </span>
-                    ) : (
-                      <span className="rounded-full bg-ok-soft px-2 py-0.5 text-[11px] text-ok">
-                        当前无掉线超过 {absentThreshold} 章的已出场实体
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-3">
-                    <label className="flex items-center gap-1.5 text-ink-secondary">
-                      <span>掉线阈值</span>
-                      <select
-                        value={absentThreshold}
-                        onChange={(e) => setAbsentThreshold(Number(e.target.value))}
-                        className="nib-mono rounded border border-border-subtle bg-canvas px-1.5 py-0.5 text-[11px] text-ink-primary focus:border-accent focus:outline-none"
-                      >
-                        {[10, 15, 20, 30].map((n) => (
-                          <option key={n} value={n}>
-                            {n} 章
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-
-                    <label className="flex cursor-pointer items-center gap-1.5 text-ink-secondary select-none">
-                      <input
-                        type="checkbox"
-                        checked={absentOnly}
-                        onChange={(e) => setAbsentOnly(e.target.checked)}
-                        className="h-3.5 w-3.5 accent-[var(--accent)]"
-                      />
-                      <span>仅看掉线实体</span>
-                    </label>
-                  </div>
-                </div>
-              )}
-
               {/* Filter Toolbar */}
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-1 rounded-lg border border-border-subtle bg-surface p-1">
@@ -848,6 +823,21 @@ export function AtlasView() {
                       {k.label}
                     </button>
                   ))}
+                  {absentAlertCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setAbsentOnly((v) => !v)}
+                      title={`筛选已超过 ${absentThreshold} 章未出场的角色或设定`}
+                      className={`ml-1 inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                        absentOnly
+                          ? "bg-danger-soft text-danger"
+                          : "text-danger/85 hover:bg-danger-soft/50"
+                      }`}
+                    >
+                      <AlertTriangle className="h-3 w-3" />
+                      <span>久未出场 ({absentAlertCount})</span>
+                    </button>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -857,7 +847,7 @@ export function AtlasView() {
                       type="text"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="检索实体名、别名或设定…"
+                      placeholder="搜索名称、别名或设定…"
                       className="w-56 rounded-md border border-border-subtle bg-surface py-1.5 pr-7 pl-8 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
                     />
                     {searchQuery && (
@@ -875,7 +865,7 @@ export function AtlasView() {
                     type="button"
                     onClick={() => setSafetyToolsOpen(true)}
                     disabled={allEntities.length === 0}
-                    title="合并重复实体或全书安全改名（带预览与撤销点）"
+                    title="合并重复档案或全书安全改名（改前自动备份）"
                     className="flex items-center gap-1.5 rounded-md border border-border-subtle bg-surface px-2.5 py-1.5 text-xs font-medium text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary disabled:opacity-40"
                   >
                     <Merge className="h-3.5 w-3.5 text-accent" />
@@ -893,7 +883,7 @@ export function AtlasView() {
                     className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-canvas transition-opacity hover:opacity-90"
                   >
                     <Plus className="h-3.5 w-3.5" />
-                    <span>新建实体</span>
+                    <span>新建设定</span>
                   </button>
                 </div>
               </div>
@@ -901,16 +891,18 @@ export function AtlasView() {
               {/* Snapshot Card Grid */}
               {loading && displayedSnapshots.length === 0 ? (
                 <div className="py-16 text-center text-xs text-ink-muted">
-                  正在折算时间轴快照…
+                  正在读取设定状态…
                 </div>
               ) : displayedSnapshots.length === 0 ? (
                 <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border-strong bg-surface/35 py-16 text-center">
                   <div className="text-xs text-ink-secondary">
                     {searchQuery
-                      ? `未找到与「${searchQuery}」匹配的实体`
-                      : "当前分类下暂无设定实体"}
+                      ? `未找到与「${searchQuery}」匹配的设定`
+                      : absentOnly
+                      ? "当前没有久未出场的设定"
+                      : "当前分类下暂无设定档案"}
                   </div>
-                  {!searchQuery && (
+                  {!searchQuery && !absentOnly && (
                     <button
                       type="button"
                       onClick={() =>
@@ -921,7 +913,7 @@ export function AtlasView() {
                       }
                       className="rounded-md border border-accent/40 bg-accent-soft px-3.5 py-1.5 text-xs font-medium text-accent hover:border-accent"
                     >
-                      新建实体档案
+                      新建设定档案
                     </button>
                   )}
                 </div>
@@ -1047,11 +1039,8 @@ export function AtlasView() {
           timelineSeq={timelineSeq}
           latestChapterSeq={latestChapterSeq}
           includePending={includePending}
-          onChangeTimelineSeq={handleTimelineSeqChange}
-          onChangeIncludePending={setIncludePending}
           presenceReport={presenceReport}
           absentThreshold={absentThreshold}
-          onChangeAbsentThreshold={setAbsentThreshold}
         />
       )}
 
@@ -1074,6 +1063,7 @@ export function AtlasView() {
       {/* Slide-Over Detail Editor for Entities (with Chronological State Events History) */}
       {editor && (
         <div
+          data-nib-modal="true"
           className="fixed inset-0 z-40 flex justify-end bg-black/50"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) setEditor(null);
@@ -1083,7 +1073,7 @@ export function AtlasView() {
             {/* Header */}
             <div className="flex items-center justify-between border-b border-border-subtle px-5 py-3.5">
               <h2 className="text-sm font-medium text-ink-primary">
-                {editor.id > 0 ? "编辑设定实体" : "新建设定实体"}
+                {editor.id > 0 ? "编辑设定档案" : "新建设定档案"}
               </h2>
               <button
                 type="button"
@@ -1139,7 +1129,7 @@ export function AtlasView() {
                       设为世界铁律
                     </div>
                     <div className="text-[11px] text-ink-muted">
-                      每章出稿强制注入 P0 槽位，不可被上下文配额裁剪
+                      每章生成时始终携带给 AI，不会被自动省略
                     </div>
                   </div>
                 </div>
@@ -1210,10 +1200,10 @@ export function AtlasView() {
                 <div className="flex flex-col gap-2.5">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium text-ink-secondary">
-                      {activeGenrePreset?.name ?? "题材"}初始属性底座
+                      {activeGenrePreset?.name ?? "题材"}基础设定
                     </span>
                     <span className="text-[11px] text-ink-muted">
-                      后续章节变化记录在状态事件账本中
+                      各章变化自动记录在下方演变流水中
                     </span>
                   </div>
                   <div className="flex flex-col gap-2">
@@ -1477,14 +1467,14 @@ export function AtlasView() {
               {editor.id > 0 ? (
                 confirmDelete ? (
                   <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      disabled={saving}
-                      onClick={() => void handleDeleteEntity()}
-                      className="rounded-md bg-danger px-2.5 py-1 text-xs font-medium text-white"
-                    >
-                      确认删除
-                    </button>
+                      <button
+                        type="button"
+                        disabled={saving}
+                        onClick={() => void handleDeleteEntity()}
+                        className="rounded-md bg-danger px-2.5 py-1 text-xs font-medium text-canvas"
+                      >
+                        确认删除
+                      </button>
                     <button
                       type="button"
                       onClick={() => setConfirmDelete(false)}
