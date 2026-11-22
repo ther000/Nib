@@ -120,4 +120,10 @@ func TestPhase3ToPhase4UpgradeBackupAndBatchCRUD(t *testing.T) {
 			t.Fatalf("unexpected draft stage stat: %+v", stStat)
 		}
 	}
+	if len(summary.Daily) != 1 {
+		t.Fatalf("expected 1 daily usage bucket for today, got %+v", summary.Daily)
+	}
+	if summary.Daily[0].Calls != 3 || summary.Daily[0].TotalTokens != 4700 {
+		t.Fatalf("unexpected daily usage bucket: %+v", summary.Daily[0])
+	}
 }

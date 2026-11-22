@@ -473,5 +473,8 @@ func (s *SettingsService) GetUsageSummary(ctx context.Context, bookID int64) (do
 	if summary.ByModel == nil {
 		summary.ByModel = []domain.ModelUsageStat{}
 	}
+	if summary.Daily == nil {
+		summary.Daily = []domain.DailyUsageStat{}
+	}
 	return summary, nil
 }

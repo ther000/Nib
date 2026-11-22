@@ -856,3 +856,54 @@ func TestCompileM2TimelineDeadlinesAndTimedRelations(t *testing.T) {
 		t.Fatalf("expected only pre-chapter relation, got spoiler:\n%s", brief.UserPrompt)
 	}
 }
+
+func TestBuildSearchKeywordsIncludesAliasesAndP6FiltersDuplicateSources(t *testing.T) {
+	p2 := newPhase2Fixture()
+	// 给 POV 与普通出场角色都挂上多个别名与 1 字无效别名，验证主名优先 + 别名补齐 + 上限控制。
+	p2.snapshotsCommitted[0].Entity.Aliases = []string{"渊", "青衫剑客", "林长老", "多余别名三"}
+	p2.snapshotsCommitted[1].Entity.Aliases = []string{"煞星", "王大执事", "王三别名"}
+	// 混入伏笔与摘要命中（分数极高），验证 P6 只保留 chapter/entity 不被重复占位。
+	p2.searchHits = []domain.MemorySearchHit{
+		{Source: domain.MemorySearchSourceForeshadowing, ForeshadowingID: 99, ChapterSeq: 5, Title: "重复伏笔", Snippet: "【重复伏笔】不应占 P6 名额", Score: 99.0},
+		{Source: domain.MemorySearchSourceArcSummary, ArcSummaryID: 88, ChapterSeq: 10, Title: "弧线摘要 第1~10章", Snippet: "【重复摘要】不应占 P6 名额", Score: 98.0},
+		{Source: domain.MemorySearchSourceChapter, ChapterID: 501, ChapterSeq: 12, Title: "旧章出处", Snippet: "【别名命中】青衫剑客曾现身坊市。", Score: 5.0},
+		{Source: domain.MemorySearchSourceEntity, EntityID: 102, Title: "王煞", Snippet: "【实体命中】外号煞星。", Score: 4.0},
+	}
+
+	comp := New(p2)
+	brief, err := comp.Compile(context.Background(), 100, domain.BriefingOptions{})
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+
+	// 验证关键词：包含非高优/高优主名以及别名，不含单字别名，且不超过 6 个。
+	if len(p2.searchedKeywords) > 6 {
+		t.Fatalf("expected at most 6 auto search keywords, got %d: %v", len(p2.searchedKeywords), p2.searchedKeywords)
+	}
+	kwSet := make(map[string]bool, len(p2.searchedKeywords))
+	for _, kw := range p2.searchedKeywords {
+		kwSet[kw] = true
+	}
+	for _, want := range []string{"王煞", "林渊", "煞星", "青衫剑客"} {
+		if !kwSet[want] {
+			t.Errorf("expected keyword %q in searchedKeywords=%v", want, p2.searchedKeywords)
+		}
+	}
+	if kwSet["渊"] {
+		t.Errorf("single-rune alias should be skipped, got %v", p2.searchedKeywords)
+	}
+
+	// 验证 P6 只包含 chapter 与 entity，不包含 foreshadowing / arc_summary。
+	var p6Content string
+	for _, s := range brief.Slots {
+		if s.Key == "p6_memory_search" {
+			p6Content = s.Content
+		}
+	}
+	if !strings.Contains(p6Content, "【别名命中】") || !strings.Contains(p6Content, "【实体命中】") {
+		t.Fatalf("expected chapter & entity hits in P6, got:\n%s", p6Content)
+	}
+	if strings.Contains(p6Content, "重复伏笔") || strings.Contains(p6Content, "重复摘要") {
+		t.Fatalf("foreshadowing/arc_summary should not duplicate into P6, got:\n%s", p6Content)
+	}
+}

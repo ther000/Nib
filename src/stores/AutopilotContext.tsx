@@ -1,6 +1,5 @@
 import {
   createContext,
-  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -12,13 +11,10 @@ import { isMyGo } from "mygo-runtime";
 import { AutopilotService, events, type AutopilotState } from "../mygo";
 
 interface AutopilotStateValue {
-  autopilotOpen: boolean;
   autopilotState: AutopilotState | null;
 }
 
 interface AutopilotActionsValue {
-  openAutopilot: () => void;
-  closeAutopilot: () => void;
   setAutopilotState: (state: AutopilotState | null) => void;
 }
 
@@ -36,7 +32,6 @@ export function AutopilotProvider({
   onProgressRefresh,
   children,
 }: AutopilotProviderProps) {
-  const [autopilotOpen, setAutopilotOpen] = useState(false);
   const [autopilotState, setAutopilotState] = useState<AutopilotState | null>(null);
 
   const activeBookIdRef = useRef(activeBookId);
@@ -92,16 +87,13 @@ export function AutopilotProvider({
     };
   }, []);
 
-  const openAutopilot = useCallback(() => setAutopilotOpen(true), []);
-  const closeAutopilot = useCallback(() => setAutopilotOpen(false), []);
-
   const stateValue = useMemo<AutopilotStateValue>(
-    () => ({ autopilotOpen, autopilotState }),
-    [autopilotOpen, autopilotState]
+    () => ({ autopilotState }),
+    [autopilotState]
   );
   const actionsValue = useMemo<AutopilotActionsValue>(
-    () => ({ openAutopilot, closeAutopilot, setAutopilotState }),
-    [openAutopilot, closeAutopilot]
+    () => ({ setAutopilotState }),
+    []
   );
 
   return (

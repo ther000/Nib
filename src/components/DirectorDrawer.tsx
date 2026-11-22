@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Bot,
   CheckCircle2,
   Loader2,
   RotateCcw,
@@ -18,9 +19,11 @@ import {
   type DirectorToolCall,
 } from "../mygo";
 import { useApp } from "../stores/AppContext";
+import { useAutopilotState } from "../stores/AutopilotContext";
 import { useMygoChannel } from "../hooks/useMygoStream";
 import { hasAnyEnabledModel, hasReadyModelRoute } from "../lib/modelReady";
 import { formatErrorMessage, isIMEComposing } from "../lib/constants";
+import { AutopilotPanel } from "./AutopilotConsole";
 
 const QUICK_PROMPTS = [
   "检查当前书的设定和章纲，帮我补全不足之处",
@@ -32,6 +35,8 @@ const QUICK_PROMPTS = [
 export function DirectorDrawer() {
   const {
     directorOpen,
+    directorTab,
+    setDirectorTab,
     closeDirector,
     activeBook,
     activeChapter,
@@ -43,6 +48,7 @@ export function DirectorDrawer() {
     bumpMemoryRevision,
     notify,
   } = useApp();
+  const { autopilotState } = useAutopilotState();
 
   const [messages, setMessages] = useState<DirectorMessage[]>([]);
   const [input, setInput] = useState("");
@@ -265,21 +271,60 @@ export function DirectorDrawer() {
     }
   };
 
+  const bookAutopilot =
+    autopilotState?.bookId === activeBook.id ? autopilotState : null;
+  const autopilotRunning = bookAutopilot?.status === "running";
+  const autopilotWaiting = bookAutopilot?.status === "waiting_decision";
+
   return (
     <aside className="flex h-full w-[360px] shrink-0 flex-col border-l border-border-subtle bg-surface">
       {/* Header */}
-      <div className="flex h-11 shrink-0 items-center justify-between border-b border-border-subtle px-4">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-3.5 w-3.5 text-accent" />
-          <span className="text-[13px] font-medium text-ink-primary">AI 导演</span>
-          {activeChapter && (
-            <span className="max-w-[140px] truncate rounded bg-canvas px-1.5 py-0.5 text-xs text-ink-muted">
+      <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border-subtle px-3">
+        <div className="flex items-center gap-0.5 rounded-lg border border-border-subtle bg-canvas/80 p-0.5">
+          <button
+            type="button"
+            onClick={() => setDirectorTab("chat")}
+            className={`flex items-center gap-1.5 rounded-[6px] px-2.5 py-1 text-xs font-medium transition-colors ${
+              directorTab === "chat"
+                ? "bg-accent-soft text-accent"
+                : "text-ink-secondary hover:text-ink-primary"
+            }`}
+          >
+            <Sparkles className="h-3 w-3" />
+            <span>AI 导演</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setDirectorTab("autopilot")}
+            className={`flex items-center gap-1.5 rounded-[6px] px-2.5 py-1 text-xs font-medium transition-colors ${
+              directorTab === "autopilot"
+                ? "bg-accent-soft text-accent"
+                : "text-ink-secondary hover:text-ink-primary"
+            }`}
+          >
+            {autopilotRunning ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Bot className="h-3 w-3" />
+            )}
+            <span>
+              {autopilotRunning
+                ? `托管 ${bookAutopilot.completedChapters}/${bookAutopilot.targetChapters}`
+                : "自动托管"}
+            </span>
+            {autopilotWaiting && (
+              <span className="h-1.5 w-1.5 rounded-full bg-warn" />
+            )}
+          </button>
+        </div>
+
+        <div className="flex items-center gap-1">
+          {directorTab === "chat" && activeChapter && (
+            <span className="max-w-[72px] truncate rounded bg-canvas px-1.5 py-0.5 text-[11px] text-ink-muted">
               第 {activeChapter.globalSeq} 章
             </span>
           )}
-        </div>
-        <div className="flex items-center gap-1">
-          {messages.length > 0 && !running && (
+          {directorTab === "chat" && messages.length > 0 && !running && (
             <button
               type="button"
               onClick={() => void handleClearHistory()}
@@ -302,8 +347,12 @@ export function DirectorDrawer() {
         </div>
       </div>
 
-      {/* Messages */}
-      <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
+      {directorTab === "autopilot" ? (
+        <AutopilotPanel />
+      ) : (
+        <>
+          {/* Messages */}
+          <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
         {messages.length === 0 && !running ? (
           <div className="flex flex-col gap-3">
             <div className="rounded-lg border border-border-subtle bg-canvas p-3.5">
@@ -472,6 +521,8 @@ export function DirectorDrawer() {
           </div>
         </div>
       </div>
+        </>
+      )}
     </aside>
   );
 }

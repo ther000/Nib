@@ -20,7 +20,6 @@ import {
   X,
 } from "lucide-react";
 import { useApp } from "../stores/AppContext";
-import { useAutopilotActions } from "../stores/AutopilotContext";
 import { exportBookWithNotify } from "../lib/bookExport";
 import { formatSeq, isIMEComposing } from "../lib/constants";
 
@@ -70,12 +69,12 @@ function CommandPaletteBody() {
     openCreateBook,
     openSettings,
     openMemorySearch,
+    openDirector,
     toggleDirector,
     toggleStudioDrawer,
     triggerSave,
     notify,
   } = useApp();
-  const { openAutopilot } = useAutopilotActions();
 
   const [mode, setMode] = useState<"commands" | "shortcuts">("commands");
   const [query, setQuery] = useState("");
@@ -177,7 +176,7 @@ function CommandPaletteBody() {
           label: "打开 AI 自动托管写作",
           keywords: "tuoguan autopilot",
           icon: <Bot className="h-3.5 w-3.5" />,
-          run: () => openAutopilot(),
+          run: () => openDirector("autopilot"),
         },
         {
           id: "open-memory-search",
@@ -277,7 +276,7 @@ function CommandPaletteBody() {
     triggerSave,
     toggleStudioDrawer,
     toggleDirector,
-    openAutopilot,
+    openDirector,
     openMemorySearch,
     openHome,
     openCreateBook,

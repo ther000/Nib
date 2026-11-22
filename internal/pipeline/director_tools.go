@@ -85,8 +85,8 @@ var directorToolSpecs = []directorToolSpec{
 	{
 		Name:        "search_memory",
 		Label:       "检索全书记忆",
-		Description: "全文检索全书正文与设定记录",
-		PromptHint:  `{"query": "关键词"} — 全文检索全书正文与设定记录`,
+		Description: "全文检索全书正文、设定实体、伏笔与弧线/卷摘要；单次未命中时可换近义词或实体别名重试",
+		PromptHint:  `{"query": "关键词"} — 全文检索正文、设定、伏笔与弧线/卷摘要（未命中可换近义词/别名重试）`,
 		Parameters: schemaObj(map[string]any{
 			"query": schemaStr("检索关键词"),
 		}, "query"),

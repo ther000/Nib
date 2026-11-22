@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"nib/internal/domain"
 )
@@ -328,6 +329,7 @@ func (s *Store) GetUsageSummary(ctx context.Context, bookID int64) (domain.Usage
 		BookID:  bookID,
 		ByStage: []domain.StageUsageStat{},
 		ByModel: []domain.ModelUsageStat{},
+		Daily:   []domain.DailyUsageStat{},
 	}
 
 	whereClause := ""
@@ -426,6 +428,46 @@ func (s *Store) GetUsageSummary(ctx context.Context, bookID int64) (domain.Usage
 		summary.ByModel = append(summary.ByModel, ms)
 	}
 	if err := modelRows.Err(); err != nil {
+		return domain.UsageSummary{}, mapSQLiteError(err)
+	}
+
+	// 4. 按本地自然日聚合近 375 天用量（供 52 周年度热力图使用，留足时区边界余量）
+	sinceUTC := time.Now().UTC().AddDate(0, 0, -375).Format(time.RFC3339)
+	dailyWhere := "WHERE created_at >= ?"
+	dailyArgs := []any{sinceUTC}
+	if bookID > 0 {
+		dailyWhere = "WHERE book_id = ? AND created_at >= ?"
+		dailyArgs = []any{bookID, sinceUTC}
+	}
+	dailyRows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT date(created_at, 'localtime') AS stat_date,
+		       COUNT(*),
+		       COALESCE(SUM(prompt_tokens), 0),
+		       COALESCE(SUM(completion_tokens), 0)
+		FROM token_usage_logs
+		%s
+		GROUP BY stat_date
+		ORDER BY stat_date ASC
+	`, dailyWhere), dailyArgs...)
+	if err != nil {
+		return domain.UsageSummary{}, mapSQLiteError(err)
+	}
+	defer dailyRows.Close()
+
+	for dailyRows.Next() {
+		var ds domain.DailyUsageStat
+		if err := dailyRows.Scan(
+			&ds.Date,
+			&ds.Calls,
+			&ds.PromptTokens,
+			&ds.CompletionTokens,
+		); err != nil {
+			return domain.UsageSummary{}, mapSQLiteError(err)
+		}
+		ds.TotalTokens = ds.PromptTokens + ds.CompletionTokens
+		summary.Daily = append(summary.Daily, ds)
+	}
+	if err := dailyRows.Err(); err != nil {
 		return domain.UsageSummary{}, mapSQLiteError(err)
 	}
 

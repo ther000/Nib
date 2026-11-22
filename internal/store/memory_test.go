@@ -638,3 +638,155 @@ func TestSearchMemoryMatchesAttributesForLongQueriesAndV10Indexes(t *testing.T) 
 		t.Fatalf("expected 4 sampled v10 indexes, got %d", idxCount)
 	}
 }
+
+func TestSearchMemoryForeshadowingsAndArcSummariesFTSAndSpoilerGuard(t *testing.T) {
+	ctx := context.Background()
+	dbFile := filepath.Join(t.TempDir(), "nib_v14_fts.db")
+
+	allMigs, err := loadEmbeddedMigrations()
+	if err != nil {
+		t.Fatalf("loadEmbeddedMigrations: %v", err)
+	}
+	if len(allMigs) < 14 {
+		t.Fatalf("expected at least 14 migrations, got %d", len(allMigs))
+	}
+
+	// 1. 先用 001..013 初始化旧库并写入伏笔与弧线摘要，验证迁移 014 rebuild 回填能力。
+	stOld, err := openWithMigrations(dbFile, allMigs[:13])
+	if err != nil {
+		t.Fatalf("open v13 db: %v", err)
+	}
+	book, err := stOld.CreateBook(ctx, domain.CreateBookInput{Title: "伏笔与摘要检索", Genre: domain.GenreXuanhuan})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	fsEarly, err := stOld.UpsertForeshadowing(ctx, domain.UpsertForeshadowingInput{
+		BookID:            book.ID,
+		Title:             "血玉密库钥匙",
+		Description:       "残片背面刻着玄冥古宗阵纹，指向三百年前灵脉。",
+		PlantedChapterSeq: 5,
+		TargetResolveSeq:  30,
+		Status:            domain.ForeshadowingPlanted,
+	})
+	if err != nil {
+		t.Fatalf("UpsertForeshadowing early: %v", err)
+	}
+	fsFuture, err := stOld.UpsertForeshadowing(ctx, domain.UpsertForeshadowingInput{
+		BookID:            book.ID,
+		Title:             "未来血玉秘辛",
+		Description:       "玄冥古宗太上长老在第18章亲自现身夺取血玉。",
+		PlantedChapterSeq: 18,
+		TargetResolveSeq:  50,
+		Status:            domain.ForeshadowingPlanted,
+	})
+	if err != nil {
+		t.Fatalf("UpsertForeshadowing future: %v", err)
+	}
+	arcEarly, err := stOld.UpsertArcSummary(ctx, domain.UpsertArcSummaryInput{
+		BookID:   book.ID,
+		Level:    domain.ArcSummaryLevelArc10,
+		StartSeq: 1,
+		EndSeq:   10,
+		Summary:  "主角潜入坊市夺得玄冥古宗遗物，震慑黑煞执事。",
+	})
+	if err != nil {
+		t.Fatalf("UpsertArcSummary early: %v", err)
+	}
+	arcFuture, err := stOld.UpsertArcSummary(ctx, domain.UpsertArcSummaryInput{
+		BookID:   book.ID,
+		Level:    domain.ArcSummaryLevelArc10,
+		StartSeq: 11,
+		EndSeq:   20,
+		Summary:  "主角闯入玄冥古宗主殿，揭开第二重血玉封印。",
+	})
+	if err != nil {
+		t.Fatalf("UpsertArcSummary future: %v", err)
+	}
+	if err := stOld.Close(); err != nil {
+		t.Fatalf("close v13 db: %v", err)
+	}
+
+	// 2. 升级到含 014 的最新迁移。
+	st, err := Open(dbFile)
+	if err != nil {
+		t.Fatalf("Open upgraded v14 db: %v", err)
+	}
+	defer st.Close()
+
+	// 3. 3+ 字走 FTS5，且 maxChapterSeq=10 严防第 18 章伏笔和 11~20 章摘要剧透。
+	ftsHits, err := st.SearchMemory(ctx, book.ID, "玄冥古宗", 10)
+	if err != nil {
+		t.Fatalf("SearchMemory FTS5: %v", err)
+	}
+	var gotEarlyFS, gotEarlyArc bool
+	for _, h := range ftsHits {
+		if h.ForeshadowingID == fsFuture.ID || h.ArcSummaryID == arcFuture.ID {
+			t.Fatalf("future spoiler leaked under maxChapterSeq=10: %+v", h)
+		}
+		if h.Source == domain.MemorySearchSourceForeshadowing && h.ForeshadowingID == fsEarly.ID {
+			gotEarlyFS = true
+		}
+		if h.Source == domain.MemorySearchSourceArcSummary && h.ArcSummaryID == arcEarly.ID {
+			gotEarlyArc = true
+		}
+	}
+	if !gotEarlyFS || !gotEarlyArc {
+		t.Fatalf("expected FTS5 backfill recall for both early foreshadowing & arc summary, got %+v", ftsHits)
+	}
+
+	// 4. 2 字短词走 LIKE 回退，同样遵守防剧透上限。
+	shortHits, err := st.SearchMemory(ctx, book.ID, "血玉", 10)
+	if err != nil {
+		t.Fatalf("SearchMemory LIKE: %v", err)
+	}
+	gotEarlyFS = false
+	for _, h := range shortHits {
+		if h.ForeshadowingID == fsFuture.ID || h.ArcSummaryID == arcFuture.ID {
+			t.Fatalf("future spoiler leaked in LIKE fallback under maxChapterSeq=10: %+v", h)
+		}
+		if h.Source == domain.MemorySearchSourceForeshadowing && h.ForeshadowingID == fsEarly.ID {
+			gotEarlyFS = true
+		}
+	}
+	if !gotEarlyFS {
+		t.Fatalf("expected 2-char LIKE recall for early foreshadowing, got %+v", shortHits)
+	}
+
+	// 5. 不限章号（maxChapterSeq=0）时可召回全部，且新增/更新触发器实时同步。
+	allHits, err := st.SearchMemory(ctx, book.ID, "玄冥古宗", 0)
+	if err != nil {
+		t.Fatalf("SearchMemory unlimited: %v", err)
+	}
+	var gotFutureFS, gotFutureArc bool
+	for _, h := range allHits {
+		if h.ForeshadowingID == fsFuture.ID {
+			gotFutureFS = true
+		}
+		if h.ArcSummaryID == arcFuture.ID {
+			gotFutureArc = true
+		}
+	}
+	if !gotFutureFS || !gotFutureArc {
+		t.Fatalf("expected unlimited search to include future foreshadowing & arc summary, got %+v", allHits)
+	}
+
+	// 更新伏笔描述后应立即可通过 FTS5 检索到新词，旧词不再命中该条。
+	if _, err := st.UpsertForeshadowing(ctx, domain.UpsertForeshadowingInput{
+		ID:                fsEarly.ID,
+		BookID:            book.ID,
+		Title:             "血玉密库钥匙",
+		Description:       "改写为赤阳星盘坐标线索。",
+		PlantedChapterSeq: 5,
+		TargetResolveSeq:  30,
+		Status:            domain.ForeshadowingHinted,
+	}); err != nil {
+		t.Fatalf("update foreshadowing: %v", err)
+	}
+	updatedHits, err := st.SearchMemory(ctx, book.ID, "赤阳星盘", 10)
+	if err != nil {
+		t.Fatalf("SearchMemory after update: %v", err)
+	}
+	if len(updatedHits) != 1 || updatedHits[0].ForeshadowingID != fsEarly.ID {
+		t.Fatalf("expected updated foreshadowing hit via trigger, got %+v", updatedHits)
+	}
+}

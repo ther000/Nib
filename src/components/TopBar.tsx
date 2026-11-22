@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  Bot,
   Check,
   ChevronDown,
   Command,
@@ -8,6 +7,7 @@ import {
   Home,
   Lightbulb,
   Loader2,
+  Maximize2,
   Moon,
   Plus,
   Search,
@@ -16,7 +16,7 @@ import {
   Sun,
 } from "lucide-react";
 import { useApp } from "../stores/AppContext";
-import { useAutopilotActions, useAutopilotState } from "../stores/AutopilotContext";
+import { useAutopilotState } from "../stores/AutopilotContext";
 import type { WorkspaceTab } from "../lib/constants";
 
 const WORKSPACE_TABS: Array<{ id: WorkspaceTab; label: string; shortcut: string }> = [
@@ -36,16 +36,18 @@ export function TopBar() {
     setActiveTab,
     books,
     activeBook,
+    activeChapter,
     genrePresets,
     openSettings,
     openCreateBook,
     openMemorySearch,
     directorOpen,
+    openDirector,
     toggleDirector,
+    toggleFocusMode,
     openCommandPalette,
   } = useApp();
   const { autopilotState } = useAutopilotState();
-  const { openAutopilot } = useAutopilotActions();
 
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -217,64 +219,60 @@ export function TopBar() {
         <div className="flex-1" />
       )}
 
-      {/* Right: AI Director + Autopilot + Memory Search + Theme + Settings */}
+      {/* Right: Notes + AI Director (incl. Autopilot) + Memory Search + Command + Focus + Theme + Settings */}
       <div className="flex items-center gap-1">
-        {inWorkspace && activeBook && (
-          <>
-            <button
-              type="button"
-              onClick={() => window.dispatchEvent(new Event("nib:toggle-notes"))}
-              title="灵感便签"
-              aria-label="灵感便签"
-              className="mr-0.5 flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
-            >
-              <Lightbulb className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={toggleDirector}
-              title="AI 导演总控 (Ctrl+K)"
-              className={`flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors ${
-                directorOpen
-                  ? "border-accent/40 bg-accent-soft text-accent"
-                  : "border-border-subtle bg-canvas text-ink-secondary hover:border-border-strong hover:text-ink-primary"
-              }`}
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              <span>AI 导演</span>
-            </button>
-            <button
-              type="button"
-              onClick={openAutopilot}
-              title="AI 自动托管写作"
-              className={`mr-0.5 flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors ${
-                autopilotState?.bookId === activeBook.id &&
-                autopilotState.status === "waiting_decision"
-                  ? "border-warn/50 bg-warn-soft text-warn"
-                  : autopilotState?.bookId === activeBook.id &&
-                      autopilotState.status === "running"
-                    ? "border-accent/40 bg-accent-soft text-accent"
-                    : "border-border-subtle bg-canvas text-ink-secondary hover:border-border-strong hover:text-ink-primary"
-              }`}
-            >
-              {autopilotState?.bookId === activeBook.id &&
-              autopilotState.status === "running" ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Bot className="h-3.5 w-3.5" />
-              )}
-              <span>
-                {autopilotState?.bookId === activeBook.id &&
-                autopilotState.status === "waiting_decision"
-                  ? "托管待确认"
-                  : autopilotState?.bookId === activeBook.id &&
-                      autopilotState.status === "running"
-                    ? `托管 ${autopilotState.completedChapters}/${autopilotState.targetChapters}`
-                    : "AI 托管"}
-              </span>
-            </button>
-          </>
-        )}
+        {inWorkspace && activeBook && (() => {
+          const isAutopilotWaiting =
+            autopilotState?.bookId === activeBook.id &&
+            autopilotState.status === "waiting_decision";
+          const isAutopilotRunning =
+            autopilotState?.bookId === activeBook.id &&
+            autopilotState.status === "running";
+          return (
+            <>
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new Event("nib:toggle-notes"))}
+                title="灵感便签"
+                aria-label="灵感便签"
+                className="mr-0.5 flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+              >
+                <Lightbulb className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!directorOpen && isAutopilotWaiting) {
+                    openDirector("autopilot");
+                  } else {
+                    toggleDirector();
+                  }
+                }}
+                title="AI 导演与自动托管 (Ctrl+K)"
+                className={`mr-0.5 flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors ${
+                  isAutopilotWaiting
+                    ? "border-warn/50 bg-warn-soft text-warn"
+                    : directorOpen || isAutopilotRunning
+                      ? "border-accent/40 bg-accent-soft text-accent"
+                      : "border-border-subtle bg-canvas text-ink-secondary hover:border-border-strong hover:text-ink-primary"
+                }`}
+              >
+                {isAutopilotRunning ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3.5 w-3.5" />
+                )}
+                <span>
+                  {isAutopilotWaiting
+                    ? "托管待确认"
+                    : isAutopilotRunning
+                      ? `AI 导演 · ${autopilotState.completedChapters}/${autopilotState.targetChapters}`
+                      : "AI 导演"}
+                </span>
+              </button>
+            </>
+          );
+        })()}
         {inWorkspace && (
           <button
             type="button"
@@ -295,6 +293,17 @@ export function TopBar() {
         >
           <Command className="h-3.5 w-3.5" />
         </button>
+        {inWorkspace && activeBook && activeTab === "studio" && activeChapter && (
+          <button
+            type="button"
+            onClick={toggleFocusMode}
+            title="专注写作模式 (F11 / Ctrl+Shift+Z)"
+            aria-label="专注写作模式"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+          </button>
+        )}
         <button
           type="button"
           onClick={toggleTheme}

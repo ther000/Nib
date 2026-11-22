@@ -49,6 +49,7 @@ export type { ToastItem, ToastTone };
 
 export type SettingsTab = "providers" | "routes" | "workspace";
 export type AppViewMode = "home" | "workspace";
+export type DirectorTab = "chat" | "autopilot";
 
 interface AppContextValue {
   // Preferences
@@ -103,7 +104,9 @@ interface AppContextValue {
   closeMemorySearch: () => void;
   toggleMemorySearch: () => void;
   directorOpen: boolean;
-  openDirector: () => void;
+  directorTab: DirectorTab;
+  setDirectorTab: (tab: DirectorTab) => void;
+  openDirector: (tab?: DirectorTab) => void;
   closeDirector: () => void;
   toggleDirector: () => void;
 
@@ -188,6 +191,7 @@ function AppProviderInner({ children }: { children: ReactNode }) {
   const [createBookOpen, setCreateBookOpen] = useState(false);
   const [memorySearchOpen, setMemorySearchOpen] = useState(false);
   const [directorOpen, setDirectorOpen] = useState(false);
+  const [directorTab, setDirectorTab] = useState<DirectorTab>("chat");
   const [focusMode, setFocusMode] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
@@ -671,7 +675,10 @@ function AppProviderInner({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const openDirector = useCallback(() => setDirectorOpen(true), []);
+  const openDirector = useCallback((tab?: DirectorTab) => {
+    if (tab) setDirectorTab(tab);
+    setDirectorOpen(true);
+  }, []);
   const closeDirector = useCallback(() => setDirectorOpen(false), []);
   const toggleDirector = useCallback(() => setDirectorOpen((v) => !v), []);
 
@@ -736,6 +743,8 @@ function AppProviderInner({ children }: { children: ReactNode }) {
       closeMemorySearch,
       toggleMemorySearch,
       directorOpen,
+      directorTab,
+      setDirectorTab,
       openDirector,
       closeDirector,
       toggleDirector,
@@ -823,6 +832,8 @@ function AppProviderInner({ children }: { children: ReactNode }) {
       closeMemorySearch,
       toggleMemorySearch,
       directorOpen,
+      directorTab,
+      setDirectorTab,
       openDirector,
       closeDirector,
       toggleDirector,

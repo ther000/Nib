@@ -11,9 +11,9 @@ import (
 )
 
 // SearchMemory 执行 FTS5 trigram + 双字短词 LIKE 混合检索（遵循 AGENTS.md §3.4）。
-// - 检索词长度 >= 3 runes：使用 chapters_fts 与 entities_fts（trigram）精确检索；
+// - 检索词长度 >= 3 runes：使用 chapters_fts / entities_fts / foreshadowings_fts / arc_summaries_fts（trigram）精确检索；
 // - 检索词长度 < 3 runes：自动回退 LIKE '%query%'，避免 trigram 对双字人名（如“林渊”）漏召回；
-// - maxChapterSeq > 0 时严格限制 chapters.global_seq <= maxChapterSeq，杜绝未来章节剧透。
+// - maxChapterSeq > 0 时严格限制章节、伏笔埋设章号与摘要结束章号 <= maxChapterSeq，杜绝未来章节剧透。
 func (s *Store) SearchMemory(ctx context.Context, bookID int64, query string, maxChapterSeq int) ([]domain.MemorySearchHit, error) {
 	if bookID <= 0 {
 		return nil, &domain.ValidationError{Field: "bookId", Message: "书籍 ID 必须大于 0"}
@@ -68,7 +68,16 @@ func (s *Store) SearchMemory(ctx context.Context, bookID int64, query string, ma
 		if hits[i].ChapterSeq != hits[j].ChapterSeq {
 			return hits[i].ChapterSeq > hits[j].ChapterSeq
 		}
-		return hits[i].EntityID < hits[j].EntityID
+		if hits[i].EntityID != hits[j].EntityID {
+			return hits[i].EntityID < hits[j].EntityID
+		}
+		if hits[i].ForeshadowingID != hits[j].ForeshadowingID {
+			return hits[i].ForeshadowingID < hits[j].ForeshadowingID
+		}
+		if hits[i].ArcSummaryID != hits[j].ArcSummaryID {
+			return hits[i].ArcSummaryID < hits[j].ArcSummaryID
+		}
+		return hits[i].ChapterID < hits[j].ChapterID
 	})
 	if len(hits) > 30 {
 		hits = hits[:30]
@@ -159,6 +168,86 @@ func (s *Store) searchMemoryFTS5(ctx context.Context, bookID int64, q string, ma
 		})
 	}
 	if err := entRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 3. 伏笔 FTS5 检索（防剧透：maxChapterSeq > 0 时仅返回 planted_chapter_seq <= maxChapterSeq）
+	fsRows, err := s.db.QueryContext(ctx, `
+		SELECT f.id, f.planted_chapter_seq, f.title, f.description, f.status,
+		       bm25(foreshadowings_fts) AS rank
+		FROM foreshadowings_fts
+		JOIN foreshadowings f ON f.id = foreshadowings_fts.rowid
+		WHERE foreshadowings_fts MATCH ?
+		  AND f.book_id = ?
+		  AND (? <= 0 OR f.planted_chapter_seq <= ?)
+		ORDER BY rank ASC, f.planted_chapter_seq DESC, f.id ASC
+		LIMIT 20
+	`, matchExpr, bookID, maxChapterSeq, maxChapterSeq)
+	if err != nil {
+		return nil, mapSQLiteError(err)
+	}
+	defer fsRows.Close()
+
+	for fsRows.Next() {
+		var (
+			id, plantedSeq           int64
+			title, description, stat string
+			rank                     float64
+		)
+		if err := fsRows.Scan(&id, &plantedSeq, &title, &description, &stat, &rank); err != nil {
+			return nil, mapSQLiteError(err)
+		}
+		combined := formatForeshadowSearchText(title, description, domain.ForeshadowingStatus(stat))
+		hits = append(hits, domain.MemorySearchHit{
+			Source:          domain.MemorySearchSourceForeshadowing,
+			ForeshadowingID: id,
+			ChapterSeq:      int(plantedSeq),
+			Title:           title,
+			Snippet:         buildContextSnippet(combined, q, title),
+			Score:           bm25ToPositiveScore(rank),
+		})
+	}
+	if err := fsRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 4. 弧线/卷摘要 FTS5 检索（防剧透：maxChapterSeq > 0 时仅返回 end_seq <= maxChapterSeq）
+	arcRows, err := s.db.QueryContext(ctx, `
+		SELECT a.id, a.level, a.start_seq, a.end_seq, a.summary,
+		       bm25(arc_summaries_fts) AS rank
+		FROM arc_summaries_fts
+		JOIN arc_summaries a ON a.id = arc_summaries_fts.rowid
+		WHERE arc_summaries_fts MATCH ?
+		  AND a.book_id = ?
+		  AND (? <= 0 OR a.end_seq <= ?)
+		ORDER BY rank ASC, a.end_seq DESC, a.id ASC
+		LIMIT 20
+	`, matchExpr, bookID, maxChapterSeq, maxChapterSeq)
+	if err != nil {
+		return nil, mapSQLiteError(err)
+	}
+	defer arcRows.Close()
+
+	for arcRows.Next() {
+		var (
+			id, startSeq, endSeq int64
+			level, summary       string
+			rank                 float64
+		)
+		if err := arcRows.Scan(&id, &level, &startSeq, &endSeq, &summary, &rank); err != nil {
+			return nil, mapSQLiteError(err)
+		}
+		title := formatArcSummarySearchTitle(domain.ArcSummaryLevel(level), int(startSeq), int(endSeq))
+		hits = append(hits, domain.MemorySearchHit{
+			Source:       domain.MemorySearchSourceArcSummary,
+			ArcSummaryID: id,
+			ChapterSeq:   int(endSeq),
+			Title:        title,
+			Snippet:      buildContextSnippet(summary, q, title),
+			Score:        bm25ToPositiveScore(rank),
+		})
+	}
+	if err := arcRows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -300,6 +389,91 @@ func (s *Store) searchMemoryLike(ctx context.Context, bookID int64, q string, ma
 		return nil, err
 	}
 
+	// 3. 伏笔短词 LIKE 回退检索
+	fsRows, err := s.db.QueryContext(ctx, `
+		SELECT id, planted_chapter_seq, title, description, status
+		FROM foreshadowings
+		WHERE book_id = ?
+		  AND (? <= 0 OR planted_chapter_seq <= ?)
+		  AND (title LIKE ? ESCAPE '\' OR description LIKE ? ESCAPE '\')
+		ORDER BY planted_chapter_seq DESC, id ASC
+		LIMIT 20
+	`, bookID, maxChapterSeq, maxChapterSeq, pattern, pattern)
+	if err != nil {
+		return nil, mapSQLiteError(err)
+	}
+	defer fsRows.Close()
+
+	for fsRows.Next() {
+		var (
+			id, plantedSeq           int64
+			title, description, stat string
+		)
+		if err := fsRows.Scan(&id, &plantedSeq, &title, &description, &stat); err != nil {
+			return nil, mapSQLiteError(err)
+		}
+		score := 1.0
+		if strings.Contains(title, q) {
+			score += 2.0
+		}
+		if cnt := strings.Count(description, q); cnt > 0 {
+			score += float64(min(cnt, 5)) * 0.25
+		}
+		combined := formatForeshadowSearchText(title, description, domain.ForeshadowingStatus(stat))
+		hits = append(hits, domain.MemorySearchHit{
+			Source:          domain.MemorySearchSourceForeshadowing,
+			ForeshadowingID: id,
+			ChapterSeq:      int(plantedSeq),
+			Title:           title,
+			Snippet:         buildContextSnippet(combined, q, title),
+			Score:           score,
+		})
+	}
+	if err := fsRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 4. 弧线/卷摘要短词 LIKE 回退检索
+	arcRows, err := s.db.QueryContext(ctx, `
+		SELECT id, level, start_seq, end_seq, summary
+		FROM arc_summaries
+		WHERE book_id = ?
+		  AND (? <= 0 OR end_seq <= ?)
+		  AND summary LIKE ? ESCAPE '\'
+		ORDER BY end_seq DESC, id ASC
+		LIMIT 20
+	`, bookID, maxChapterSeq, maxChapterSeq, pattern)
+	if err != nil {
+		return nil, mapSQLiteError(err)
+	}
+	defer arcRows.Close()
+
+	for arcRows.Next() {
+		var (
+			id, startSeq, endSeq int64
+			level, summary       string
+		)
+		if err := arcRows.Scan(&id, &level, &startSeq, &endSeq, &summary); err != nil {
+			return nil, mapSQLiteError(err)
+		}
+		score := 1.0
+		if cnt := strings.Count(summary, q); cnt > 0 {
+			score += float64(min(cnt, 5)) * 0.25
+		}
+		title := formatArcSummarySearchTitle(domain.ArcSummaryLevel(level), int(startSeq), int(endSeq))
+		hits = append(hits, domain.MemorySearchHit{
+			Source:       domain.MemorySearchSourceArcSummary,
+			ArcSummaryID: id,
+			ChapterSeq:   int(endSeq),
+			Title:        title,
+			Snippet:      buildContextSnippet(summary, q, title),
+			Score:        score,
+		})
+	}
+	if err := arcRows.Err(); err != nil {
+		return nil, err
+	}
+
 	return hits, nil
 }
 
@@ -313,6 +487,28 @@ func bm25ToPositiveScore(rank float64) float64 {
 		return 1.0 - rank
 	}
 	return 1.0 / (1.0 + rank)
+}
+
+func formatForeshadowSearchText(title, description string, status domain.ForeshadowingStatus) string {
+	parts := make([]string, 0, 3)
+	if label := status.Label(); label != "" {
+		parts = append(parts, "["+label+"]")
+	}
+	if t := strings.TrimSpace(title); t != "" {
+		parts = append(parts, t)
+	}
+	if d := strings.TrimSpace(description); d != "" {
+		parts = append(parts, d)
+	}
+	return strings.Join(parts, " ")
+}
+
+func formatArcSummarySearchTitle(level domain.ArcSummaryLevel, startSeq, endSeq int) string {
+	prefix := "弧线摘要"
+	if level == domain.ArcSummaryLevelVolume {
+		prefix = "卷摘要"
+	}
+	return fmt.Sprintf("%s 第%d~%d章", prefix, startSeq, endSeq)
 }
 
 func formatEntitySearchText(name string, aliases []string, summary string, attrs map[string]string) string {

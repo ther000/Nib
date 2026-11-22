@@ -423,6 +423,15 @@ type ModelUsageStat struct {
 	Currency         string  `json:"currency,omitempty"`
 }
 
+// DailyUsageStat 按本地自然日（YYYY-MM-DD）聚合的 Token 消耗与调用次数，用于用量热力图。
+type DailyUsageStat struct {
+	Date             string `json:"date"`
+	Calls            int    `json:"calls"`
+	PromptTokens     int    `json:"promptTokens"`
+	CompletionTokens int    `json:"completionTokens"`
+	TotalTokens      int    `json:"totalTokens"`
+}
+
 // UsageSummary 汇总整本书（或全局）的 Token 消耗统计面板数据。
 type UsageSummary struct {
 	BookID                int64            `json:"bookId"`
@@ -434,4 +443,5 @@ type UsageSummary struct {
 	EstimatedCostUSD      float64          `json:"estimatedCostUsd"`
 	ByStage               []StageUsageStat `json:"byStage"`
 	ByModel               []ModelUsageStat `json:"byModel"`
+	Daily                 []DailyUsageStat `json:"daily"`
 }

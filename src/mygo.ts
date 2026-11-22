@@ -458,6 +458,14 @@ export interface CriticFinding {
   suggestion: string;
 }
 
+export interface DailyUsageStat {
+  date: string;
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
 export interface DailyWordStat {
   date: string;
   wordsDelta: number;
@@ -938,6 +946,8 @@ export interface MemorySearchHit {
   chapterId: number;
   chapterSeq: number;
   entityId: number;
+  foreshadowingId?: number;
+  arcSummaryId?: number;
   title: string;
   snippet: string;
   score: number;
@@ -1434,6 +1444,7 @@ export interface UsageSummary {
   estimatedCostUsd: number;
   byStage: StageUsageStat[];
   byModel: ModelUsageStat[];
+  daily: DailyUsageStat[];
 }
 
 export type VersionSource = string;

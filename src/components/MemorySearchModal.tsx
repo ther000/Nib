@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  Bookmark,
   BookOpen,
   CornerDownLeft,
+  Layers,
   Loader2,
   Search,
   Sparkles,
@@ -91,6 +93,7 @@ export function MemorySearchModal() {
     closeMemorySearch,
     jumpToChapter,
     jumpToEntity,
+    openAtlasSubTab,
   } = useApp();
 
   const [query, setQuery] = useState("");
@@ -151,10 +154,14 @@ export function MemorySearchModal() {
         if (reqIdRef.current !== reqId) return;
 
         // Edge case: when activeChapter is ch 1 and "仅搜当前章之前" is checked,
-        // backend treats maxChapterSeq=0 as unlimited, so filter chapter hits >= 1 cleanly.
+        // backend treats maxChapterSeq=0 as unlimited, so filter hits bound to ch >= 1 cleanly.
         const filtered =
           beforeCurrentOnly && activeChapter && activeChapter.globalSeq <= 1
-            ? rawHits.filter((h) => h.source !== "chapter")
+            ? rawHits.filter(
+                (h) =>
+                  h.source === "entity" ||
+                  (h.source !== "chapter" && h.chapterSeq <= 0)
+              )
             : rawHits;
 
         setHits(filtered);
@@ -179,6 +186,10 @@ export function MemorySearchModal() {
       await jumpToChapter(hit.chapterId);
     } else if (hit.source === "entity" && hit.entityId > 0) {
       jumpToEntity(hit.entityId);
+    } else if (hit.source === "foreshadowing") {
+      openAtlasSubTab("foreshadowings");
+    } else if (hit.source === "arc_summary") {
+      openAtlasSubTab("summaries");
     }
   };
 
@@ -244,7 +255,7 @@ export function MemorySearchModal() {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="检索前文原文、双字人名、招式、道具或设定…"
+            placeholder="检索前文原文、双字人名、设定、伏笔或弧线摘要…"
             className="min-w-0 flex-1 bg-transparent text-sm text-ink-primary placeholder:text-ink-muted focus:outline-none"
           />
           {query && (
@@ -298,23 +309,34 @@ export function MemorySearchModal() {
             <div className="px-3 py-6 text-center text-xs text-danger">{error}</div>
           ) : !query.trim() ? (
             <div className="px-4 py-10 text-center text-xs text-ink-muted">
-              输入关键词实时检索《{activeBook.title}》的章节正文与设定档案（支持双字人名）
+              输入关键词实时检索《{activeBook.title}》的章节正文、设定档案、伏笔与弧线摘要（支持双字人名）
             </div>
           ) : !loading && hits.length === 0 ? (
             <div className="px-4 py-10 text-center text-xs text-ink-muted">
-              未找到与「{query.trim()}」匹配的章节或实体
+              未找到与「{query.trim()}」匹配的章节、设定、伏笔或摘要
             </div>
           ) : (
             <div className="flex flex-col gap-1">
               {hits.map((hit, idx) => {
                 const isSelected = idx === activeIndex;
                 const isChapter = hit.source === "chapter";
+                const isForeshadow = hit.source === "foreshadowing";
+                const isSummary = hit.source === "arc_summary";
+                const badgeText = isChapter
+                  ? `第 ${formatSeq(hit.chapterSeq)} 章`
+                  : isForeshadow
+                    ? hit.chapterSeq > 0
+                      ? `伏笔 · 第 ${formatSeq(hit.chapterSeq)} 章`
+                      : "伏笔"
+                    : isSummary
+                      ? "摘要"
+                      : "实体";
                 return (
                   <button
                     ref={(el) => {
                       itemRefs.current[idx] = el;
                     }}
-                    key={`${hit.source}-${hit.chapterId}-${hit.entityId}-${idx}`}
+                    key={`${hit.source}-${hit.chapterId}-${hit.entityId}-${hit.foreshadowingId ?? 0}-${hit.arcSummaryId ?? 0}-${idx}`}
                     type="button"
                     onMouseEnter={() => setActiveIndex(idx)}
                     onClick={() => void handleSelectHit(hit)}
@@ -324,13 +346,17 @@ export function MemorySearchModal() {
                   >
                     <div
                       className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${
-                        isChapter
+                        isChapter || isForeshadow
                           ? "bg-canvas text-accent"
                           : "bg-canvas text-ink-secondary"
                       }`}
                     >
                       {isChapter ? (
                         <BookOpen className="h-3.5 w-3.5" />
+                      ) : isForeshadow ? (
+                        <Bookmark className="h-3.5 w-3.5" />
+                      ) : isSummary ? (
+                        <Layers className="h-3.5 w-3.5" />
                       ) : (
                         <Sparkles className="h-3.5 w-3.5" />
                       )}
@@ -340,12 +366,12 @@ export function MemorySearchModal() {
                       <div className="flex items-center gap-2">
                         <span
                           className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                            isChapter
+                            isChapter || isForeshadow
                               ? "nib-mono bg-canvas text-accent"
                               : "bg-canvas text-ink-secondary"
                           }`}
                         >
-                          {isChapter ? `第 ${formatSeq(hit.chapterSeq)} 章` : "实体"}
+                          {badgeText}
                         </span>
                         <span className="truncate text-[13px] font-medium text-ink-primary">
                           {renderHighlighted(hit.title, query)}

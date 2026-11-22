@@ -17,6 +17,7 @@ import {
 import { LibraryService, SettingsService, type Book, type UsageSummary, type WritingStatsSummary } from "../mygo";
 import { useApp } from "../stores/AppContext";
 import { useContextMenu } from "../components/ContextMenu";
+import { UsageHeatmap } from "../components/UsageHeatmap";
 import { exportBookWithNotify } from "../lib/bookExport";
 import { hasAnyEnabledModel, hasReadyModelRoute } from "../lib/modelReady";
 import {
@@ -691,6 +692,9 @@ export function HomeView() {
               )}
             </div>
           </div>
+
+          {/* Annual Daily Token Heatmap */}
+          <UsageHeatmap daily={usageSummary?.daily ?? []} />
 
           {/* Breakdown Table (shown when there is usage data) */}
           {(usageSummary?.totalCalls ?? 0) > 0 && (

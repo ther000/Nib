@@ -1,11 +1,10 @@
 import { Suspense, lazy, useEffect } from "react";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { AppProvider, useApp } from "./stores/AppContext";
-import { useAutopilotState } from "./stores/AutopilotContext";
 import { ContextMenuProvider } from "./components/ContextMenu";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { TopBar } from "./components/TopBar";
-import { AutopilotModal, AutopilotStatusBar } from "./components/AutopilotConsole";
+import { AutopilotStatusBar } from "./components/AutopilotConsole";
 import { DirectorDrawer } from "./components/DirectorDrawer";
 import { CreateBookModal } from "./components/CreateBookModal";
 import { CommandPalette } from "./components/CommandPalette";
@@ -61,7 +60,6 @@ function NibShell() {
     commandPaletteOpen,
     toggleCommandPalette,
   } = useApp();
-  const { autopilotOpen } = useAutopilotState();
 
   const inWorkspace = viewMode === "workspace" && Boolean(activeBook);
   const effectiveFocusMode = focusMode && inWorkspace && activeTab === "studio";
@@ -85,7 +83,7 @@ function NibShell() {
     const handleKeyDown = (e: KeyboardEvent) => {
       const domModalOpen = Boolean(document.querySelector('[data-nib-modal="true"]'));
       const blockingModalOpen =
-        settingsOpen || createBookOpen || autopilotOpen || domModalOpen;
+        settingsOpen || createBookOpen || domModalOpen;
 
       if (e.key === "F11" && !blockingModalOpen && inWorkspace && activeTab === "studio") {
         e.preventDefault();
@@ -107,7 +105,7 @@ function NibShell() {
       const mod = e.ctrlKey || e.metaKey;
       if (!mod) return;
 
-      if ((e.key.toLowerCase() === "p" || e.code === "KeyP") && e.shiftKey && !settingsOpen && !createBookOpen && !autopilotOpen) {
+      if ((e.key.toLowerCase() === "p" || e.code === "KeyP") && e.shiftKey && !settingsOpen && !createBookOpen) {
         e.preventDefault();
         toggleCommandPalette();
         return;
@@ -130,7 +128,6 @@ function NibShell() {
         e.shiftKey &&
         !settingsOpen &&
         !createBookOpen &&
-        !autopilotOpen &&
         inWorkspace
       ) {
         e.preventDefault();
@@ -256,7 +253,6 @@ function NibShell() {
       <CreateBookModal />
       <ScratchNotesDrawer />
       <ReverseExtractModal />
-      <AutopilotModal />
       <MemorySearchModal />
       <CommandPalette />
       {settingsOpen && (

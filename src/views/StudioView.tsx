@@ -23,7 +23,6 @@ import {
   FileText,
   History,
   Loader2,
-  Maximize2,
   Minimize2,
   PanelLeft,
   PanelRight,
@@ -111,7 +110,6 @@ export function StudioView() {
     toggleStudioDrawer,
     focusMode,
     setFocusMode,
-    toggleFocusMode,
     selectChapter,
     refreshChapters,
     refreshActiveChapter,
@@ -1953,20 +1951,29 @@ export function StudioView() {
 
   return (
     <div className="relative flex min-h-0 flex-1 overflow-hidden bg-canvas">
-      {/* 专注写作模式右上角悬浮微弱状态条 */}
+      {/* 专注写作模式顶部隐形拖拽栏 + 右上角悬浮微弱状态条（避开原生窗口控制按钮） */}
       {focusMode && (
-        <div className="fixed top-3 right-4 z-30 flex items-center gap-2 rounded-full border border-border-subtle bg-surface/85 px-3 py-1 text-xs text-ink-secondary opacity-70 backdrop-blur-md transition-opacity hover:opacity-100">
-          <span className="nib-mono text-ink-primary">{formatNumber(liveWordCount)} 字</span>
-          <span className="h-3 w-px bg-border-subtle" />
-          <button
-            type="button"
-            onClick={() => setFocusMode(false)}
-            title="退出专注模式 (Esc / F11)"
-            className="flex items-center gap-1 text-ink-secondary transition-colors hover:text-accent"
-          >
-            <Minimize2 className="h-3 w-3" />
-            <span>退出专注</span>
-          </button>
+        <div
+          className="nib-drag-region fixed top-0 right-0 left-0 z-30 flex items-center justify-end"
+          style={{
+            height: "var(--mygo-titlebar-height, var(--topbar-height))",
+            paddingLeft: "calc(12px + var(--mygo-titlebar-inset-left, 0px))",
+            paddingRight: "calc(12px + var(--mygo-titlebar-inset-right, 0px))",
+          }}
+        >
+          <div className="nib-no-drag flex items-center gap-2 rounded-full border border-border-subtle bg-surface/85 px-3 py-1 text-xs text-ink-secondary opacity-70 backdrop-blur-md transition-opacity hover:opacity-100">
+            <span className="nib-mono text-ink-primary">{formatNumber(liveWordCount)} 字</span>
+            <span className="h-3 w-px bg-border-subtle" />
+            <button
+              type="button"
+              onClick={() => setFocusMode(false)}
+              title="退出专注模式 (Esc / F11)"
+              className="flex items-center gap-1 text-ink-secondary transition-colors hover:text-accent"
+            >
+              <Minimize2 className="h-3 w-3" />
+              <span>退出专注</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -2026,9 +2033,6 @@ export function StudioView() {
                   {activeVolumeTitle && (
                     <span className="truncate text-ink-muted">{activeVolumeTitle}</span>
                   )}
-                  <span className="text-ink-secondary">
-                    第 {formatSeq(activeChapter.globalSeq)} 章
-                  </span>
                   <span
                     className={`rounded-full border px-2 py-0.5 text-xs ${statusMeta.badgeClass}`}
                   >
@@ -2157,14 +2161,6 @@ export function StudioView() {
                       </button>
                     </>
                   )}
-                  <button
-                    type="button"
-                    onClick={toggleFocusMode}
-                    title="专注写作模式 (F11 / Ctrl+Shift+Z)"
-                    className="rounded p-1 text-ink-muted transition-colors hover:bg-surface hover:text-ink-primary"
-                  >
-                    <Maximize2 className="h-3.5 w-3.5" />
-                  </button>
                 </div>
               </div>
             )}
@@ -2225,18 +2221,125 @@ export function StudioView() {
               />
             )}
 
-            {/* Chapter Title */}
-            <input
-              type="text"
-              value={title}
-              readOnly={generating}
-              onChange={(e) => {
-                setTitle(e.target.value);
-                setDirty(true);
-              }}
-              placeholder="章节标题"
-              className="mb-6 w-full bg-transparent font-prose text-[26px] leading-snug font-medium tracking-tight text-ink-primary placeholder:text-ink-muted focus:outline-none"
-            />
+            {/* Chapter Title & Primary Actions */}
+            <div className="mb-6 flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5">
+              <div className="flex min-w-[200px] flex-1 items-baseline gap-2.5">
+                <span className="shrink-0 font-prose text-[19px] font-normal tracking-tight text-ink-muted select-none">
+                  第 {formatSeq(activeChapter.globalSeq)} 章
+                </span>
+                <input
+                  type="text"
+                  value={title}
+                  readOnly={generating}
+                  onChange={(e) => {
+                    setTitle(e.target.value);
+                    setDirty(true);
+                  }}
+                  placeholder="章节标题"
+                  className="min-w-0 flex-1 bg-transparent font-prose text-[26px] leading-snug font-medium tracking-tight text-ink-primary placeholder:text-ink-muted focus:outline-none"
+                />
+              </div>
+
+              {!focusMode && (
+                <div className="flex shrink-0 flex-wrap items-center gap-1.5 text-xs select-none">
+                  {generating ? (
+                    <button
+                      type="button"
+                      onClick={stopGeneration}
+                      title="停止生成 (Ctrl+Enter)"
+                      className="flex items-center gap-1.5 rounded-md border border-danger/40 bg-danger-soft px-3 py-1 font-medium text-danger transition-colors hover:border-danger"
+                    >
+                      <Square className="h-3 w-3 fill-current" />
+                      <span>停止</span>
+                    </button>
+                  ) : content.trim().length > 0 ? (
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => void startGeneration("continue")}
+                        title="紧接当前正文结尾继续往下写"
+                        className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 font-semibold text-canvas transition-opacity hover:opacity-90"
+                      >
+                        <FastForward className="h-3 w-3" />
+                        <span>续写</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void startGeneration("rewrite")}
+                        title="存档当前正文后按节拍重新生成整章"
+                        className="flex items-center gap-1 rounded-md border border-border-subtle bg-elevated px-2.5 py-1 text-ink-primary transition-colors hover:border-border-strong"
+                      >
+                        <RefreshCw className="h-3 w-3 text-ink-secondary" />
+                        <span>重写</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void startGeneration("rewrite")}
+                      title="生成本章 (Ctrl+Enter)"
+                      className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 font-semibold text-canvas transition-opacity hover:opacity-90"
+                    >
+                      <Play className="h-3 w-3 fill-current" />
+                      <span>生成本章</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={generating || saving}
+                    onClick={() => void handleSave()}
+                    title="保存正文并归档快照 (Ctrl+S)"
+                    className="flex items-center gap-1 rounded-md border border-border-subtle bg-elevated px-2.5 py-1 text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
+                  >
+                    <Save className="h-3.5 w-3.5 text-ink-secondary" />
+                    <span>保存</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={generating || finalizing}
+                    onClick={() => void handleFinalize()}
+                    title="标记本章定稿并同步 Markdown"
+                    className={`flex items-center gap-1 rounded-md border px-2.5 py-1 transition-colors disabled:opacity-40 ${
+                      activeChapter.status === "finalized"
+                        ? "border-ok/35 bg-ok-soft text-ok"
+                        : "border-border-subtle bg-elevated text-ink-primary hover:border-ok/50 hover:text-ok"
+                    }`}
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    <span>{finalizing ? "定稿中…" : "定稿"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={exporting}
+                    onClick={() => void handleExportBook()}
+                    title="单向导出全书 Markdown"
+                    className="flex items-center gap-1 rounded-md border border-border-subtle bg-elevated px-2.5 py-1 text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary disabled:opacity-40"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">
+                      {exporting ? "导出中…" : "导出全书"}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={toggleStudioDrawer}
+                    title="折叠 / 展开右侧抽屉 (Ctrl+\)"
+                    aria-label="切换右侧抽屉"
+                    className={`ml-0.5 flex h-7 w-7 items-center justify-center rounded-md border transition-colors ${
+                      studioDrawerOpen
+                        ? "border-accent/35 bg-accent-soft text-accent"
+                        : "border-border-subtle bg-elevated text-ink-secondary hover:text-ink-primary"
+                    }`}
+                  >
+                    <PanelRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
+            </div>
 
             {/* Contextual inline banners */}
             {generating && (
@@ -2441,117 +2544,19 @@ export function StudioView() {
               ) : (
                 <span className="text-ink-muted">已保存</span>
               )}
-
-              {lastUsage && !generating && (
-                <span
-                  title={`输入 ${formatNumber(
-                    lastUsage.promptTokens
-                  )} / 输出 ${formatNumber(lastUsage.completionTokens)} Token`}
-                  className="nib-mono hidden text-xs text-ink-muted lg:inline"
-                >
-                  输入 {formatCompactTokens(lastUsage.promptTokens)} / 输出{" "}
-                  {formatCompactTokens(lastUsage.completionTokens)} Token
-                </span>
-              )}
             </div>
 
-            <div className="flex shrink-0 items-center gap-1.5">
-              {generating ? (
-                <button
-                  type="button"
-                  onClick={stopGeneration}
-                  title="停止生成 (Ctrl+Enter)"
-                  className="flex items-center gap-1.5 rounded-md border border-danger/40 bg-danger-soft px-3 py-1 font-medium text-danger transition-colors hover:border-danger"
-                >
-                  <Square className="h-3 w-3 fill-current" />
-                  <span>停止</span>
-                </button>
-              ) : content.trim().length > 0 ? (
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => void startGeneration("continue")}
-                    title="紧接当前正文结尾继续往下写"
-                    className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 font-semibold text-canvas transition-opacity hover:opacity-90"
-                  >
-                    <FastForward className="h-3 w-3" />
-                    <span>续写</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void startGeneration("rewrite")}
-                    title="存档当前正文后按节拍重新生成整章"
-                    className="flex items-center gap-1 rounded-md border border-border-subtle bg-elevated px-2.5 py-1 text-ink-primary transition-colors hover:border-border-strong"
-                  >
-                    <RefreshCw className="h-3 w-3 text-ink-secondary" />
-                    <span>重写</span>
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => void startGeneration("rewrite")}
-                  title="生成本章 (Ctrl+Enter)"
-                  className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 font-semibold text-canvas transition-opacity hover:opacity-90"
-                >
-                  <Play className="h-3 w-3 fill-current" />
-                  <span>生成本章</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                disabled={generating || saving}
-                onClick={() => void handleSave()}
-                title="保存正文并归档快照 (Ctrl+S)"
-                className="flex items-center gap-1 rounded-md border border-border-subtle bg-elevated px-2.5 py-1 text-ink-primary transition-colors hover:border-border-strong disabled:opacity-40"
+            {lastUsage && !generating && (
+              <span
+                title={`输入 ${formatNumber(
+                  lastUsage.promptTokens
+                )} / 输出 ${formatNumber(lastUsage.completionTokens)} Token`}
+                className="nib-mono hidden shrink-0 text-xs text-ink-muted sm:inline"
               >
-                <Save className="h-3.5 w-3.5 text-ink-secondary" />
-                <span>保存</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={generating || finalizing}
-                onClick={() => void handleFinalize()}
-                title="标记本章定稿并同步 Markdown"
-                className={`flex items-center gap-1 rounded-md border px-2.5 py-1 transition-colors disabled:opacity-40 ${
-                  activeChapter.status === "finalized"
-                    ? "border-ok/35 bg-ok-soft text-ok"
-                    : "border-border-subtle bg-elevated text-ink-primary hover:border-ok/50 hover:text-ok"
-                }`}
-              >
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                <span>{finalizing ? "定稿中…" : "定稿"}</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={exporting}
-                onClick={() => void handleExportBook()}
-                title="单向导出全书 Markdown"
-                className="flex items-center gap-1 rounded-md border border-border-subtle bg-elevated px-2.5 py-1 text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary disabled:opacity-40"
-              >
-                <Download className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">
-                  {exporting ? "导出中…" : "导出全书"}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={toggleStudioDrawer}
-                title="折叠 / 展开右侧抽屉 (Ctrl+\)"
-                aria-label="切换右侧抽屉"
-                className={`ml-0.5 flex h-7 w-7 items-center justify-center rounded-md border transition-colors ${
-                  studioDrawerOpen
-                    ? "border-accent/35 bg-accent-soft text-accent"
-                    : "border-border-subtle bg-elevated text-ink-secondary hover:text-ink-primary"
-                }`}
-              >
-                <PanelRight className="h-3.5 w-3.5" />
-              </button>
-            </div>
+                输入 {formatCompactTokens(lastUsage.promptTokens)} / 输出{" "}
+                {formatCompactTokens(lastUsage.completionTokens)} Token
+              </span>
+            )}
           </footer>
         )}
       </div>

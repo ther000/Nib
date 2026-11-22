@@ -143,8 +143,10 @@ const (
 	DeltaDecisionKindRelation   = "relation"
 	DeltaDecisionKindDeadline   = "deadline"
 
-	MemorySearchSourceChapter = "chapter"
-	MemorySearchSourceEntity  = "entity"
+	MemorySearchSourceChapter       = "chapter"
+	MemorySearchSourceEntity        = "entity"
+	MemorySearchSourceForeshadowing = "foreshadowing"
+	MemorySearchSourceArcSummary    = "arc_summary"
 )
 
 // StoryDeadlineStatus 定义故事内关键期限/倒计时的生命周期状态（对应 story_deadlines.status）。
@@ -542,11 +544,13 @@ type ApplyDeltaResult struct {
 
 // MemorySearchHit 表示 FTS5 + 短词 LIKE 混合检索返回的命中片段。
 type MemorySearchHit struct {
-	Source     string  `json:"source"` // "chapter" | "entity"
-	ChapterID  int64   `json:"chapterId"`
-	ChapterSeq int     `json:"chapterSeq"`
-	EntityID   int64   `json:"entityId"`
-	Title      string  `json:"title"`
-	Snippet    string  `json:"snippet"`
-	Score      float64 `json:"score"`
+	Source          string  `json:"source"` // "chapter" | "entity" | "foreshadowing" | "arc_summary"
+	ChapterID       int64   `json:"chapterId"`
+	ChapterSeq      int     `json:"chapterSeq"`
+	EntityID        int64   `json:"entityId"`
+	ForeshadowingID int64   `json:"foreshadowingId,omitempty"`
+	ArcSummaryID    int64   `json:"arcSummaryId,omitempty"`
+	Title           string  `json:"title"`
+	Snippet         string  `json:"snippet"`
+	Score           float64 `json:"score"`
 }

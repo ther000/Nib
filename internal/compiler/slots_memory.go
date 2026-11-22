@@ -400,44 +400,83 @@ func buildP5Content(
 }
 
 func buildSearchKeywords(explicit []string, p2Candidates []p2Candidate, beats []domain.Beat) []string {
-	out := make([]string, 0, 5)
+	const (
+		maxExplicitKeywords = 5
+		maxPrimaryNames     = 3
+		maxAutoKeywords     = 6
+		maxAliasesPerEntity = 2
+	)
+	out := make([]string, 0, maxAutoKeywords)
 	seen := make(map[string]bool)
-	add := func(raw string) {
+	add := func(raw string) bool {
 		kw := strings.TrimSpace(raw)
 		if kw == "" || len([]rune(kw)) < 2 {
-			return
+			return false
 		}
 		lower := strings.ToLower(kw)
 		if seen[lower] {
-			return
+			return false
 		}
 		seen[lower] = true
 		out = append(out, kw)
+		return true
 	}
 
 	for _, kw := range explicit {
 		add(kw)
 	}
 	if len(out) > 0 {
-		if len(out) > 5 {
-			return out[:5]
+		if len(out) > maxExplicitKeywords {
+			return out[:maxExplicitKeywords]
 		}
 		return out
 	}
 
+	// 1. 优先收集出场实体主名（非高优实体优先，再补 POV/钉选实体，最多 3 个主名），防止单个角色的别名挤占其他出场角色。
 	for _, cand := range p2Candidates {
 		if !cand.highPriority {
 			add(cand.entity.Name)
 		}
-		if len(out) >= 3 {
-			return out
+		if len(out) >= maxPrimaryNames {
+			break
 		}
 	}
-	for _, cand := range p2Candidates {
-		add(cand.entity.Name)
-		if len(out) >= 3 {
-			return out
+	if len(out) < maxPrimaryNames {
+		for _, cand := range p2Candidates {
+			add(cand.entity.Name)
+			if len(out) >= maxPrimaryNames {
+				break
+			}
 		}
+	}
+
+	// 2. 补充出场实体别名（每实体最多 2 个，总计最多 6 个），避免角色换称呼或合并后历史正文漏召回。
+	addAliases := func(highPriority bool) {
+		for _, cand := range p2Candidates {
+			if cand.highPriority != highPriority {
+				continue
+			}
+			addedForEntity := 0
+			for _, alias := range cand.entity.Aliases {
+				if len(out) >= maxAutoKeywords || addedForEntity >= maxAliasesPerEntity {
+					break
+				}
+				if add(alias) {
+					addedForEntity++
+				}
+			}
+			if len(out) >= maxAutoKeywords {
+				return
+			}
+		}
+	}
+	addAliases(false)
+	if len(out) < maxAutoKeywords {
+		addAliases(true)
+	}
+
+	if len(out) >= 2 {
+		return out
 	}
 	for _, b := range beats {
 		for _, tok := range strings.FieldsFunc(b.ConflictNote+" "+b.Summary, isKeywordDelimiter) {
@@ -484,6 +523,10 @@ func runSpoilerFreeMemorySearch(
 			return nil, err
 		}
 		for _, h := range hits {
+			// P3 已装配未回收伏笔、P5 已装配摘要金字塔，P6 专注保留章节原文与实体设定出处，避免重复占位。
+			if h.Source != domain.MemorySearchSourceChapter && h.Source != domain.MemorySearchSourceEntity {
+				continue
+			}
 			if h.Source == domain.MemorySearchSourceChapter && h.ChapterSeq > maxChapterSeq {
 				continue
 			}
