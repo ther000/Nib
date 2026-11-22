@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"strings"
 
 	"github.com/egoist/mygo"
 
@@ -57,18 +56,7 @@ func (s *StudioService) GenerateChapter(
 	}
 	defer release()
 
-	emit := func(chunk domain.GenChunk) error {
-		if ch == nil {
-			return nil
-		}
-		if sendErr := ch.Send(chunk); sendErr != nil {
-			cancel()
-			return sendErr
-		}
-		return nil
-	}
-
-	return runner.GenerateChapter(genCtx, chapterID, opts, emit)
+	return runner.GenerateChapter(genCtx, chapterID, opts, channelEmitter(genCtx, cancel, ch))
 }
 
 // RewriteSelection 对编辑器选中的局部段落执行流式 AI 微调，返回改写预览文本（不直接改库）。
@@ -86,18 +74,7 @@ func (s *StudioService) RewriteSelection(
 	}
 	defer release()
 
-	emit := func(chunk domain.GenChunk) error {
-		if ch == nil {
-			return nil
-		}
-		if sendErr := ch.Send(chunk); sendErr != nil {
-			cancel()
-			return sendErr
-		}
-		return nil
-	}
-
-	return runner.RewriteSelection(genCtx, req, emit)
+	return runner.RewriteSelection(genCtx, req, channelEmitter(genCtx, cancel, ch))
 }
 
 // ListChapterVersions 按时间倒序列出章节的历史正文快照。
@@ -133,16 +110,8 @@ func (s *StudioService) RestoreVersion(ctx context.Context, versionID int64) (do
 	if err != nil {
 		return domain.Chapter{}, err
 	}
-	if exp := s.rt.exporter(); exp != nil {
-		book, bErr := st.GetBook(ctx, chap.BookID)
-		if bErr != nil {
-			return chap, bErr
-		}
-		if strings.TrimSpace(book.ExportDir) != "" {
-			if _, expErr := exp.ExportChapter(ctx, chap.ID); expErr != nil {
-				return chap, expErr
-			}
-		}
+	if err := s.rt.syncChapterMarkdownIfConfigured(ctx, chap); err != nil {
+		return chap, err
 	}
 	return chap, nil
 }

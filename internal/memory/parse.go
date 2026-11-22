@@ -4,13 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"nib/internal/domain"
+	"nib/internal/llm"
 )
-
-var reCodeFence = regexp.MustCompile("(?s)```(?:json|JSON)?\\s*\\n?(.*?)\\n?```")
 
 type rawDeltaPayload struct {
 	CausalSummary        string                `json:"causal_summary"`
@@ -63,68 +61,8 @@ type rawForeshadowUpdate struct {
 	InvolvedEntityNames []string `json:"involved_entity_names"`
 }
 
-// extractJSONObject 剥离 Markdown 代码围栏与前后闲聊，提取首个完整平衡的 JSON 对象。
-func extractJSONObject(raw string) (string, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return "", errors.New("empty LLM response")
-	}
-
-	if matches := reCodeFence.FindStringSubmatch(trimmed); len(matches) == 2 {
-		candidate := strings.TrimSpace(matches[1])
-		if json.Valid([]byte(candidate)) && strings.HasPrefix(candidate, "{") {
-			return candidate, nil
-		}
-		trimmed = candidate
-	}
-
-	if strings.HasPrefix(trimmed, "{") && json.Valid([]byte(trimmed)) {
-		return trimmed, nil
-	}
-
-	// 扫描首个平衡的 {...} 对象（正确跳过字符串内的大括号与转义符）。
-	start := strings.IndexByte(trimmed, '{')
-	if start < 0 {
-		return "", errors.New("no JSON object found in response")
-	}
-	depth := 0
-	inString := false
-	escaped := false
-	for i := start; i < len(trimmed); i++ {
-		ch := trimmed[i]
-		if escaped {
-			escaped = false
-			continue
-		}
-		if inString {
-			if ch == '\\' {
-				escaped = true
-			} else if ch == '"' {
-				inString = false
-			}
-			continue
-		}
-		switch ch {
-		case '"':
-			inString = true
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				candidate := trimmed[start : i+1]
-				if !json.Valid([]byte(candidate)) {
-					return "", errors.New("extracted JSON object is malformed")
-				}
-				return candidate, nil
-			}
-		}
-	}
-	return "", errors.New("unterminated JSON object in response")
-}
-
 func parseRawDeltaPayload(raw string) (rawDeltaPayload, error) {
-	jsonStr, err := extractJSONObject(raw)
+	jsonStr, err := llm.ExtractJSONObject(raw)
 	if err != nil {
 		return rawDeltaPayload{}, err
 	}

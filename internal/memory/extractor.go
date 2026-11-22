@@ -205,6 +205,8 @@ func (e *Extractor) collectLLMResponse(
 		return "", err
 	}
 
+	domain.NotifyUsageObserver(ctx, lastUsage)
+
 	if rec, ok := e.store.(tokenUsageRecorder); ok && bookID > 0 {
 		latencyMs := time.Since(start).Milliseconds()
 		if latencyMs < 0 {

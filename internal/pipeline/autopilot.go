@@ -117,7 +117,7 @@ func (r *Runner) StartAutopilot(ctx context.Context, req domain.AutopilotRequest
 	if _, err := r.store.GetBook(ctx, req.BookID); err != nil {
 		return domain.AutopilotState{}, fmt.Errorf("load book %d: %w", req.BookID, err)
 	}
-	if _, _, err := r.resolveDraftRouteAndProvider(ctx); err != nil {
+	if _, _, err := r.resolveStageRouteAndProvider(ctx, domain.StageDraft); err != nil {
 		return domain.AutopilotState{}, err
 	}
 
@@ -287,6 +287,17 @@ func (r *Runner) runAutopilotLoop(ctx context.Context, sess *autopilotSession, r
 		}
 		r.emitAutopilotProgress(snap)
 	}
+	ctx = domain.WithUsageObserver(ctx, func(u domain.TokenUsage) {
+		tokens := u.TotalTokens
+		if tokens <= 0 {
+			tokens = max(0, u.PromptTokens) + max(0, u.CompletionTokens)
+		}
+		if tokens > 0 {
+			update(func(s *domain.AutopilotState) {
+				s.TokensUsed += tokens
+			})
+		}
+	})
 	addLog := func(seq int, step domain.AutopilotStep, tone, msg string) {
 		update(func(s *domain.AutopilotState) {
 			s.Step = step
@@ -424,15 +435,7 @@ func (r *Runner) runAutopilotLoop(ctx context.Context, sess *autopilotSession, r
 			}
 
 			addLog(chap.GlobalSeq, domain.AutopilotStepDrafting, "info", fmt.Sprintf("第 %d 章《%s》正在写正文…", chap.GlobalSeq, chap.Title))
-			var chapterTokens int
-			savedChap, draftErr := r.draftChapterWithSelfHeal(ctx, chap.ID, func(usage domain.TokenUsage) {
-				chapterTokens = usage.TotalTokens
-			})
-			if chapterTokens > 0 {
-				update(func(s *domain.AutopilotState) {
-					s.TokensUsed += chapterTokens
-				})
-			}
+			savedChap, draftErr := r.draftChapterWithSelfHeal(ctx, chap.ID)
 
 			if draftErr != nil {
 				if errors.Is(draftErr, domain.ErrGenerationCanceled) || errors.Is(draftErr, context.Canceled) || ctx.Err() != nil {
@@ -503,41 +506,24 @@ func (r *Runner) runAutopilotLoop(ctx context.Context, sess *autopilotSession, r
 
 			// 4. 自动质检与手术式局部润色
 			if req.AutoPolish && r.styleStore != nil && ctx.Err() == nil {
-				var latestAudit domain.ChapterAudit
-				if audit, lintErr := r.LintChapterLocal(ctx, chap.ID); lintErr == nil {
-					latestAudit = audit
-				}
-				if _, _, routeErr := r.resolveStageRouteAndProvider(ctx, domain.StageCritic); routeErr == nil && ctx.Err() == nil {
-					addLog(chap.GlobalSeq, domain.AutopilotStepCritiquing, "info", fmt.Sprintf("第 %d 章正在进行 AI 审校…", chap.GlobalSeq))
-					if criticAudit, cErr := r.RunCriticAudit(ctx, chap.ID); cErr == nil {
-						latestAudit = criticAudit
-					} else if ctx.Err() == nil {
-						addLog(chap.GlobalSeq, domain.AutopilotStepCritiquing, "warn", "AI 审校跳过："+cErr.Error())
-					}
-				}
-				if (len(latestAudit.LintIssues) > 0 || len(latestAudit.CriticFindings) > 0) && ctx.Err() == nil {
-					if _, _, pErr := r.resolveStageRouteAndProvider(ctx, domain.StagePolish); pErr == nil {
-						addLog(chap.GlobalSeq, domain.AutopilotStepPolishing, "info", fmt.Sprintf("第 %d 章正在局部润色…", chap.GlobalSeq))
-						if diffAudit, dErr := r.GenerateSurgicalDiffs(ctx, chap.ID, nil); dErr == nil {
-							applied := 0
-							for _, d := range diffAudit.Diffs {
-								if d.Status == domain.DiffStatusPending {
-									if _, aErr := r.ApplySurgicalDiff(ctx, domain.ApplySurgicalDiffInput{
-										ChapterID: chap.ID,
-										DiffID:    d.ID,
-										Accept:    true,
-									}); aErr == nil {
-										applied++
-									}
-								}
-							}
-							if applied > 0 {
-								addLog(chap.GlobalSeq, domain.AutopilotStepPolishing, "ok", fmt.Sprintf("第 %d 章已自动润色 %d 处段落（已存修改前快照）", chap.GlobalSeq, applied))
-							}
-						} else if ctx.Err() == nil {
-							addLog(chap.GlobalSeq, domain.AutopilotStepPolishing, "warn", "局部润色跳过："+dErr.Error())
+				passRes, _ := r.runPolishPass(ctx, chap.ID, false, func(step domain.BatchItemState, msg string) {
+					switch step {
+					case domain.BatchItemCritiquing:
+						tone := "info"
+						if strings.HasPrefix(msg, "AI 审校跳过：") {
+							tone = "warn"
 						}
+						addLog(chap.GlobalSeq, domain.AutopilotStepCritiquing, tone, fmt.Sprintf("第 %d 章 %s", chap.GlobalSeq, msg))
+					case domain.BatchItemPolishing:
+						tone := "info"
+						if strings.HasPrefix(msg, "局部润色跳过：") {
+							tone = "warn"
+						}
+						addLog(chap.GlobalSeq, domain.AutopilotStepPolishing, tone, fmt.Sprintf("第 %d 章 %s", chap.GlobalSeq, msg))
 					}
+				})
+				if passRes.AppliedDiffs > 0 {
+					addLog(chap.GlobalSeq, domain.AutopilotStepPolishing, "ok", fmt.Sprintf("第 %d 章已自动润色 %d 处段落（已存修改前快照）", chap.GlobalSeq, passRes.AppliedDiffs))
 				}
 			}
 
@@ -621,26 +607,15 @@ func (r *Runner) runAutopilotLoop(ctx context.Context, sess *autopilotSession, r
 func (r *Runner) draftChapterWithSelfHeal(
 	ctx context.Context,
 	chapterID int64,
-	onUsage func(domain.TokenUsage),
 ) (domain.Chapter, error) {
 	opts := domain.GenerateChapterOptions{
 		Briefing: domain.BriefingOptions{
 			IncludePending: true,
 		},
 	}
-	var lastUsage domain.TokenUsage
-	chunkCb := func(chunk domain.GenChunk) error {
-		if chunk.Usage != nil {
-			lastUsage = *chunk.Usage
-		}
-		return nil
-	}
 
-	chap, err := r.GenerateChapter(ctx, chapterID, opts, chunkCb)
+	chap, err := r.GenerateChapter(ctx, chapterID, opts, nil)
 	if err == nil {
-		if onUsage != nil {
-			onUsage(lastUsage)
-		}
 		return chap, nil
 	}
 	if errors.Is(err, domain.ErrGenerationCanceled) || errors.Is(err, context.Canceled) || errors.Is(err, domain.ErrValidation) || ctx.Err() != nil {
@@ -653,11 +628,7 @@ func (r *Runner) draftChapterWithSelfHeal(
 		return chap, domain.ErrGenerationCanceled
 	case <-time.After(autopilotRetryDelay):
 	}
-	chap, err = r.GenerateChapter(ctx, chapterID, opts, chunkCb)
-	if onUsage != nil && lastUsage.TotalTokens > 0 {
-		onUsage(lastUsage)
-	}
-	return chap, err
+	return r.GenerateChapter(ctx, chapterID, opts, nil)
 }
 
 func (r *Runner) ensureAutopilotVolume(

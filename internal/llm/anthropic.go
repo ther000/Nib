@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"nib/internal/domain"
@@ -205,7 +206,6 @@ func parseAnthropicStream(
 		args strings.Builder
 	}
 	toolBlocks := make(map[int]*antToolAcc)
-	maxBlockIdx := -1
 
 	err := readSSE(body, func(ev sseEvent) error {
 		data := strings.TrimSpace(ev.Data)
@@ -251,9 +251,6 @@ func parseAnthropicStream(
 					acc.args.Write(payload.ContentBlock.Input)
 				}
 				toolBlocks[payload.Index] = acc
-				if payload.Index > maxBlockIdx {
-					maxBlockIdx = payload.Index
-				}
 			}
 		case "content_block_delta":
 			if payload.Delta != nil && payload.Delta.Type == "input_json_delta" {
@@ -308,9 +305,16 @@ func parseAnthropicStream(
 		return usage, err
 	}
 	if len(toolBlocks) > 0 {
+		keys := make([]int, 0, len(toolBlocks))
+		for k := range toolBlocks {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+
 		calls := make([]ToolCall, 0, len(toolBlocks))
-		for i := 0; i <= maxBlockIdx; i++ {
-			if acc, ok := toolBlocks[i]; ok && strings.TrimSpace(acc.name) != "" {
+		for _, i := range keys {
+			acc := toolBlocks[i]
+			if acc != nil && strings.TrimSpace(acc.name) != "" {
 				args := strings.TrimSpace(acc.args.String())
 				if args == "" {
 					args = "{}"

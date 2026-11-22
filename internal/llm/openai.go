@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"nib/internal/domain"
@@ -171,7 +172,6 @@ func parseOpenAIStream(
 		args strings.Builder
 	}
 	toolMap := make(map[int]*toolAcc)
-	maxToolIdx := -1
 
 	err := readSSE(body, func(ev sseEvent) error {
 		data := strings.TrimSpace(ev.Data)
@@ -207,9 +207,6 @@ func parseOpenAIStream(
 				if !ok {
 					acc = &toolAcc{}
 					toolMap[tc.Index] = acc
-				}
-				if tc.Index > maxToolIdx {
-					maxToolIdx = tc.Index
 				}
 				if tc.ID != "" {
 					acc.id = tc.ID
@@ -275,9 +272,16 @@ func parseOpenAIStream(
 		return usage, err
 	}
 	if len(toolMap) > 0 {
+		keys := make([]int, 0, len(toolMap))
+		for k := range toolMap {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+
 		calls := make([]ToolCall, 0, len(toolMap))
-		for i := 0; i <= maxToolIdx; i++ {
-			if acc, ok := toolMap[i]; ok && strings.TrimSpace(acc.name) != "" {
+		for _, i := range keys {
+			acc := toolMap[i]
+			if acc != nil && strings.TrimSpace(acc.name) != "" {
 				id := acc.id
 				if id == "" {
 					id = fmt.Sprintf("call_%d", i+1)

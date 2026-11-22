@@ -273,14 +273,8 @@ func (s *StyleService) ApplySurgicalDiff(ctx context.Context, in domain.ApplySur
 
 	// 若采纳了润色替换且配置了导出器与书籍导出目录，同步刷新单向 Markdown 镜像。
 	if in.Accept {
-		if exp := s.rt.exporter(); exp != nil {
-			if st, stErr := s.rt.store(); stErr == nil {
-				if book, bErr := st.GetBook(ctx, res.Chapter.BookID); bErr == nil && strings.TrimSpace(book.ExportDir) != "" {
-					if _, expErr := exp.ExportChapter(ctx, res.Chapter.ID); expErr != nil {
-						return res, expErr
-					}
-				}
-			}
+		if expErr := s.rt.syncChapterMarkdownIfConfigured(ctx, res.Chapter); expErr != nil {
+			return res, expErr
 		}
 	}
 	return res, nil

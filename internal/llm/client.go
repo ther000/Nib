@@ -113,15 +113,15 @@ func (c *Client) Stream(
 			return lastUsage, classifyContextError(ctx.Err())
 		}
 
-		usage, hasDelta, cbErr, err := c.streamOnce(ctx, provider, req, onEvent)
+		usage, hasOutput, cbErr, err := c.streamOnce(ctx, provider, req, onEvent)
 		lastUsage = usage
 		if err == nil {
 			return usage, nil
 		}
 		lastErr = err
 
-		// 回调主动中止、上下文取消、或已经输出正文分片后严禁重试（避免正文重复拼接）。
-		if cbErr != nil || ctx.Err() != nil || hasDelta || !IsRetryable(err) {
+		// 回调主动中止、上下文取消、或已经输出文本/思考/工具调用后严禁重试（避免内容重复）。
+		if cbErr != nil || ctx.Err() != nil || hasOutput || !IsRetryable(err) {
 			return usage, err
 		}
 
@@ -207,7 +207,7 @@ func (c *Client) streamOnce(
 	provider domain.Provider,
 	req ChatRequest,
 	onEvent func(StreamEvent) error,
-) (usage domain.TokenUsage, hasDelta bool, callbackErr error, retErr error) {
+) (usage domain.TokenUsage, hasOutput bool, callbackErr error, retErr error) {
 	httpReq, err := buildProtocolRequest(ctx, provider, req)
 	if err != nil {
 		return domain.TokenUsage{}, false, nil, &APIError{
@@ -237,8 +237,8 @@ func (c *Client) streamOnce(
 		if ctx.Err() != nil {
 			return classifyContextError(ctx.Err())
 		}
-		if ev.Delta != "" {
-			hasDelta = true
+		if ev.Delta != "" || ev.ReasoningDelta != "" || len(ev.ToolCalls) > 0 {
+			hasOutput = true
 		}
 		if onEvent == nil {
 			return nil
@@ -263,19 +263,19 @@ func (c *Client) streamOnce(
 	}
 
 	if parseErr == nil {
-		return usage, hasDelta, nil, nil
+		return usage, hasOutput, nil, nil
 	}
 	if callbackErr != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
-			return usage, hasDelta, callbackErr, domain.ErrGenerationCanceled
+			return usage, hasOutput, callbackErr, domain.ErrGenerationCanceled
 		}
-		return usage, hasDelta, callbackErr, callbackErr
+		return usage, hasOutput, callbackErr, callbackErr
 	}
 	var apiErr *APIError
 	if errors.As(parseErr, &apiErr) {
-		return usage, hasDelta, nil, parseErr
+		return usage, hasOutput, nil, parseErr
 	}
-	return usage, hasDelta, nil, classifyTransportError(ctx, provider.Protocol, parseErr, provider.APIKey)
+	return usage, hasOutput, nil, classifyTransportError(ctx, provider.Protocol, parseErr, provider.APIKey)
 }
 
 func buildProtocolRequest(ctx context.Context, provider domain.Provider, req ChatRequest) (*http.Request, error) {

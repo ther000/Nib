@@ -4,22 +4,46 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 )
+
+const maxSSELineBytes = 4 * 1024 * 1024
 
 type sseEvent struct {
 	Event string
 	Data  string
 }
 
+func readBoundedSSELine(br *bufio.Reader, scratch []byte) (string, []byte, error) {
+	frag, err := br.ReadSlice('\n')
+	if !errors.Is(err, bufio.ErrBufferFull) {
+		if len(frag) > maxSSELineBytes {
+			return "", scratch, fmt.Errorf("SSE single line exceeds max size (%d bytes)", maxSSELineBytes)
+		}
+		return string(frag), scratch, err
+	}
+
+	scratch = append(scratch[:0], frag...)
+	for errors.Is(err, bufio.ErrBufferFull) {
+		frag, err = br.ReadSlice('\n')
+		if len(scratch)+len(frag) > maxSSELineBytes {
+			return "", scratch, fmt.Errorf("SSE single line exceeds max size (%d bytes)", maxSSELineBytes)
+		}
+		scratch = append(scratch, frag...)
+	}
+	return string(scratch), scratch, err
+}
+
 // readSSE 容错解析 Server-Sent Events 流。
-// 使用 bufio.Reader 规避 bufio.Scanner 64KB 单行上限，兼容 \r\n、: keepalive 注释、
+// 使用有界行读取（单行上限 4 MiB）避免超长异常行引发 OOM，同时兼容 \r\n、: keepalive 注释、
 // 空行分隔与部分中转站省略空行的连续 data: 行。
 func readSSE(r io.Reader, handle func(sseEvent) error) error {
 	br := bufio.NewReaderSize(r, 64*1024)
 	var eventName string
 	var dataLines []string
+	var lineBuf []byte
 
 	flush := func() error {
 		if len(dataLines) == 0 {
@@ -36,7 +60,9 @@ func readSSE(r io.Reader, handle func(sseEvent) error) error {
 	}
 
 	for {
-		line, readErr := br.ReadString('\n')
+		var line string
+		var readErr error
+		line, lineBuf, readErr = readBoundedSSELine(br, lineBuf)
 		if readErr != nil && !errors.Is(readErr, io.EOF) {
 			return readErr
 		}

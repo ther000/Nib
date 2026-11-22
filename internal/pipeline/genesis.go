@@ -59,12 +59,9 @@ func (r *Runner) GenerateBookGenesis(
 	}
 
 	// 优先使用 outline 路由；若用户仅配置了 draft 路由则自动回退，降低开书门槛。
-	route, provider, err := r.resolveStageRouteAndProvider(ctx, domain.StageOutline)
+	route, provider, err := r.resolveFirstAvailableStageRoute(ctx, domain.StageOutline, domain.StageDraft)
 	if err != nil {
-		route, provider, err = r.resolveStageRouteAndProvider(ctx, domain.StageDraft)
-		if err != nil {
-			return domain.BookGenesisPlan{}, err
-		}
+		return domain.BookGenesisPlan{}, err
 	}
 
 	if err := send(domain.GenesisChunk{Kind: domain.GenChunkStarted}); err != nil {
@@ -87,7 +84,7 @@ func (r *Runner) GenerateBookGenesis(
 
 	var buf strings.Builder
 	var finalUsage domain.TokenUsage
-	streamUsage, streamErr := r.llm.Stream(ctx, provider, chatReq, func(ev llm.StreamEvent) error {
+	usedProv, _, streamUsage, streamErr := r.streamWithFallback(ctx, route, provider, chatReq, func(ev llm.StreamEvent) error {
 		if ev.Delta != "" {
 			buf.WriteString(ev.Delta)
 			if err := send(domain.GenesisChunk{Kind: domain.GenChunkDelta, Delta: ev.Delta}); err != nil {
@@ -107,26 +104,26 @@ func (r *Runner) GenerateBookGenesis(
 		return domain.BookGenesisPlan{}, streamErr
 	}
 
-	plan, parseErr := parseBookGenesisPayload(buf.String(), genreID, chapterCount, targetWords)
+	plan, parseErr := parseOrRepairStageJSON(
+		ctx,
+		r,
+		0,
+		0,
+		domain.StageOutline,
+		usedProv,
+		route,
+		defaultGenesisMaxTokens,
+		`开书企划 JSON（需包含 title, premise, golden_finger, entities, first_volume, initial_outlines）`,
+		buf.String(),
+		func(raw string) (domain.BookGenesisPlan, error) {
+			return parseBookGenesisPayload(raw, genreID, chapterCount, targetWords)
+		},
+	)
 	if parseErr != nil {
-		if ctx.Err() != nil {
-			return domain.BookGenesisPlan{}, domain.ErrGenerationCanceled
-		}
-		repSys, repUser := buildStyleJSONRepairPrompts(
-			`开书企划 JSON（需包含 title, premise, golden_finger, entities, first_volume, initial_outlines）`,
-			buf.String(),
-			parseErr,
-		)
-		repResp, repErr := r.collectStageLLMResponse(ctx, 0, 0, domain.StageOutline, provider, route, defaultGenesisMaxTokens, repSys, repUser)
-		if repErr != nil {
-			_ = send(domain.GenesisChunk{Kind: domain.GenChunkError, Error: repErr.Error()})
-			return domain.BookGenesisPlan{}, fmt.Errorf("开书企划 JSON 纠错请求失败: %w", repErr)
-		}
-		plan, parseErr = parseBookGenesisPayload(repResp, genreID, chapterCount, targetWords)
-		if parseErr != nil {
+		if !errors.Is(parseErr, domain.ErrGenerationCanceled) {
 			_ = send(domain.GenesisChunk{Kind: domain.GenChunkError, Error: parseErr.Error()})
-			return domain.BookGenesisPlan{}, fmt.Errorf("开书企划 JSON 解析失败（重试后仍无效）: %w", parseErr)
 		}
+		return domain.BookGenesisPlan{}, parseErr
 	}
 
 	planCopy := plan
@@ -387,7 +384,7 @@ func parseBookGenesisPayload(raw string, genreID domain.GenreID, expectedChapter
 	if trimmed == "" {
 		return domain.BookGenesisPlan{}, errors.New("empty book genesis response")
 	}
-	jsonStr, err := extractStyleJSONObject(trimmed)
+	jsonStr, err := llm.ExtractJSONObject(trimmed)
 	if err != nil {
 		return domain.BookGenesisPlan{}, err
 	}

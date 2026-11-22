@@ -101,6 +101,8 @@ func (r *Runner) recordTokenUsage(
 	usage domain.TokenUsage,
 	latencyMs int64,
 ) {
+	domain.NotifyUsageObserver(ctx, usage)
+
 	if r == nil || r.batchStore == nil || bookID <= 0 {
 		return
 	}
@@ -200,7 +202,7 @@ func (r *Runner) BatchGenerateOutlines(
 	start := time.Now()
 	var buf strings.Builder
 	var finalUsage domain.TokenUsage
-	streamUsage, streamErr := r.llm.Stream(ctx, provider, chatReq, func(ev llm.StreamEvent) error {
+	usedProv, usedModel, streamUsage, streamErr := r.streamWithFallback(ctx, route, provider, chatReq, func(ev llm.StreamEvent) error {
 		if ev.Delta != "" {
 			buf.WriteString(ev.Delta)
 			if err := send(domain.OutlineChunk{Kind: domain.GenChunkDelta, Delta: ev.Delta}); err != nil {
@@ -219,28 +221,28 @@ func (r *Runner) BatchGenerateOutlines(
 		_ = send(domain.OutlineChunk{Kind: domain.GenChunkError, Error: streamErr.Error()})
 		return nil, streamErr
 	}
-	r.recordTokenUsage(ctx, book.ID, 0, domain.StageOutline, provider.Name, route.ModelName, finalUsage, time.Since(start).Milliseconds())
+	r.recordTokenUsage(ctx, book.ID, 0, domain.StageOutline, usedProv.Name, usedModel, finalUsage, time.Since(start).Milliseconds())
 
-	outlines, parseErr := parseBatchOutlinesPayload(buf.String(), count)
+	outlines, parseErr := parseOrRepairStageJSON(
+		ctx,
+		r,
+		book.ID,
+		0,
+		domain.StageOutline,
+		usedProv,
+		route,
+		defaultOutlineMaxTokens,
+		`批量章纲 JSON（需包含 "outlines" 数组，每章含 title, emotion_tag, hook_type, hook_note, outline_summary, beats）`,
+		buf.String(),
+		func(raw string) ([]domain.GeneratedChapterOutline, error) {
+			return parseBatchOutlinesPayload(raw, count)
+		},
+	)
 	if parseErr != nil {
-		if ctx.Err() != nil {
-			return nil, domain.ErrGenerationCanceled
-		}
-		repSys, repUser := buildStyleJSONRepairPrompts(
-			`批量章纲 JSON（需包含 "outlines" 数组，每章含 title, emotion_tag, hook_type, hook_note, outline_summary, beats）`,
-			buf.String(),
-			parseErr,
-		)
-		repResp, repErr := r.collectStageLLMResponse(ctx, book.ID, 0, domain.StageOutline, provider, route, defaultOutlineMaxTokens, repSys, repUser)
-		if repErr != nil {
-			_ = send(domain.OutlineChunk{Kind: domain.GenChunkError, Error: repErr.Error()})
-			return nil, fmt.Errorf("批量章纲 JSON 纠错请求失败: %w", repErr)
-		}
-		outlines, parseErr = parseBatchOutlinesPayload(repResp, count)
-		if parseErr != nil {
+		if !errors.Is(parseErr, domain.ErrGenerationCanceled) {
 			_ = send(domain.OutlineChunk{Kind: domain.GenChunkError, Error: parseErr.Error()})
-			return nil, fmt.Errorf("批量章纲 JSON 解析失败（自动纠错重试 1 次后仍无效）: %w", parseErr)
 		}
+		return nil, parseErr
 	}
 
 	// 将生成的结构化章纲与节拍卡落库至指定卷。
@@ -542,67 +544,27 @@ func (r *Runner) executeBatchRun(ctx context.Context, batchID int64, retryItemID
 			return
 		}
 
-		// 3. linting（0 成本本地去 AI 味扫描）
-		var latestAudit domain.ChapterAudit
+		// 3~4. 本地扫描 + (draft_and_polish / full_pipeline: Critic 盲审与手术式局部润色)
 		if r.styleStore != nil {
-			updateItem(it, domain.BatchItemLinting, inputHash, "", fmt.Sprintf("第%d章《%s》本地 AI 味扫描…", it.ChapterGlobalSeq, it.ChapterTitle))
-			if audit, lintErr := r.LintChapterLocal(ctx, it.ChapterID); lintErr == nil {
-				latestAudit = audit
-			}
-		}
-
-		// 4. draft_and_polish / full_pipeline：Critic 盲审 + 手术式局部润色
-		if run.Mode == domain.BatchModeDraftAndPolish || run.Mode == domain.BatchModeFullPipeline {
-			if ctx.Err() != nil {
-				r.markRemainingCanceled(run, idx, doneCount)
-				return
-			}
-			if r.styleStore != nil {
-				if _, _, routeErr := r.resolveStageRouteAndProvider(ctx, domain.StageCritic); routeErr == nil {
-					updateItem(it, domain.BatchItemCritiquing, inputHash, "", fmt.Sprintf("第%d章《%s》Critic 独立盲审…", it.ChapterGlobalSeq, it.ChapterTitle))
-					criticAudit, criticErr := r.RunCriticAudit(ctx, it.ChapterID)
-					if criticErr != nil {
-						if errors.Is(criticErr, domain.ErrGenerationCanceled) || ctx.Err() != nil {
-							r.markRemainingCanceled(run, idx, doneCount)
-							return
-						}
-						uCtx, cancel := dbCtx()
-						_ = r.batchStore.UpdateBatchItemState(uCtx, it.ID, domain.BatchItemFailed, inputHash, criticErr.Error())
-						_ = r.batchStore.UpdateBatchRunStatus(uCtx, run.ID, domain.BatchRunFailed, doneCount)
-						cancel()
-						emitState(domain.BatchRunFailed, it, domain.BatchItemFailed, fmt.Sprintf("第%d章 Critic 审校失败：%v", it.ChapterGlobalSeq, criticErr))
+			if run.Mode == domain.BatchModeDraftAndPolish || run.Mode == domain.BatchModeFullPipeline {
+				_, passErr := r.runPolishPass(ctx, it.ChapterID, true, func(step domain.BatchItemState, msg string) {
+					updateItem(it, step, inputHash, "", fmt.Sprintf("第%d章《%s》%s", it.ChapterGlobalSeq, it.ChapterTitle, msg))
+				})
+				if passErr != nil {
+					if errors.Is(passErr, domain.ErrGenerationCanceled) || ctx.Err() != nil {
+						r.markRemainingCanceled(run, idx, doneCount)
 						return
 					}
-					latestAudit = criticAudit
+					uCtx, cancel := dbCtx()
+					_ = r.batchStore.UpdateBatchItemState(uCtx, it.ID, domain.BatchItemFailed, inputHash, passErr.Error())
+					_ = r.batchStore.UpdateBatchRunStatus(uCtx, run.ID, domain.BatchRunFailed, doneCount)
+					cancel()
+					emitState(domain.BatchRunFailed, it, domain.BatchItemFailed, fmt.Sprintf("第%d章质检润色失败：%v", it.ChapterGlobalSeq, passErr))
+					return
 				}
-
-				if len(latestAudit.LintIssues) > 0 || len(latestAudit.CriticFindings) > 0 {
-					if _, _, polishRouteErr := r.resolveStageRouteAndProvider(ctx, domain.StagePolish); polishRouteErr == nil {
-						updateItem(it, domain.BatchItemPolishing, inputHash, "", fmt.Sprintf("第%d章《%s》手术式局部润色…", it.ChapterGlobalSeq, it.ChapterTitle))
-						diffAudit, diffErr := r.GenerateSurgicalDiffs(ctx, it.ChapterID, nil)
-						if diffErr != nil {
-							if errors.Is(diffErr, domain.ErrGenerationCanceled) || ctx.Err() != nil {
-								r.markRemainingCanceled(run, idx, doneCount)
-								return
-							}
-							uCtx, cancel := dbCtx()
-							_ = r.batchStore.UpdateBatchItemState(uCtx, it.ID, domain.BatchItemFailed, inputHash, diffErr.Error())
-							_ = r.batchStore.UpdateBatchRunStatus(uCtx, run.ID, domain.BatchRunFailed, doneCount)
-							cancel()
-							emitState(domain.BatchRunFailed, it, domain.BatchItemFailed, fmt.Sprintf("第%d章手术润色失败：%v", it.ChapterGlobalSeq, diffErr))
-							return
-						}
-						for _, d := range diffAudit.Diffs {
-							if d.Status == domain.DiffStatusPending {
-								_, _ = r.ApplySurgicalDiff(ctx, domain.ApplySurgicalDiffInput{
-									ChapterID: it.ChapterID,
-									DiffID:    d.ID,
-									Accept:    true,
-								})
-							}
-						}
-					}
-				}
+			} else {
+				updateItem(it, domain.BatchItemLinting, inputHash, "", fmt.Sprintf("第%d章《%s》本地 AI 味扫描…", it.ChapterGlobalSeq, it.ChapterTitle))
+				_, _ = r.LintChapterLocal(ctx, it.ChapterID)
 			}
 		}
 
@@ -819,7 +781,7 @@ func parseBatchOutlinesPayload(raw string, expectedCount int) ([]domain.Generate
 
 	var rawList []rawOutlineDTO
 
-	if jsonStr, err := extractStyleJSONObject(trimmed); err == nil {
+	if jsonStr, err := llm.ExtractJSONObject(trimmed); err == nil {
 		var wrap struct {
 			Outlines []rawOutlineDTO `json:"outlines"`
 			Chapters []rawOutlineDTO `json:"chapters"`
@@ -831,18 +793,10 @@ func parseBatchOutlinesPayload(raw string, expectedCount int) ([]domain.Generate
 		if len(rawList) == 0 {
 			rawList = wrap.Chapters
 		}
-	} else {
+	} else if arrStr, arrErr := llm.ExtractJSONArray(trimmed); arrErr == nil {
 		// 兼容模型直接返回顶层 JSON 数组 [...]
-		candidate := trimmed
-		if matches := reStyleCodeFence.FindStringSubmatch(trimmed); len(matches) == 2 {
-			candidate = strings.TrimSpace(matches[1])
-		}
-		startIdx := strings.IndexByte(candidate, '[')
-		endIdx := strings.LastIndexByte(candidate, ']')
-		if startIdx >= 0 && endIdx > startIdx {
-			if err := json.Unmarshal([]byte(candidate[startIdx:endIdx+1]), &rawList); err != nil {
-				return nil, fmt.Errorf("unmarshal batch outlines array: %w", err)
-			}
+		if err := json.Unmarshal([]byte(arrStr), &rawList); err != nil {
+			return nil, fmt.Errorf("unmarshal batch outlines array: %w", err)
 		}
 	}
 

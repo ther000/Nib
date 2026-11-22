@@ -206,7 +206,7 @@ func (r *Runner) GenerateChapter(
 		return domain.Chapter{}, fmt.Errorf("load volume %d: %w", chap.VolumeID, err)
 	}
 
-	route, provider, err := r.resolveDraftRouteAndProvider(ctx)
+	route, provider, err := r.resolveStageRouteAndProvider(ctx, domain.StageDraft)
 	if err != nil {
 		return domain.Chapter{}, err
 	}
@@ -274,60 +274,72 @@ func (r *Runner) GenerateChapter(
 	draftStart := time.Now()
 	activeModel := route.ModelName
 	activeProviderName := provider.Name
+	basePrefixWords := 0
+	if isContinue {
+		basePrefixWords = domain.CountWords(basePrefix)
+	}
+	runningDeltaWords := 0
 
-	usedProv, usedModel, streamUsage, streamErr := r.streamWithFallback(ctx, route, provider, chatReq, func(ev llm.StreamEvent) error {
-		if ev.FinishReason != "" {
-			finishReason = ev.FinishReason
-		}
-		if ev.ReasoningDelta != "" {
-			if err := emit(domain.GenChunk{
-				Kind:           domain.GenChunkThinking,
-				ChapterID:      chapterID,
-				ReasoningDelta: ev.ReasoningDelta,
-				Status:         domain.ChapterStatusDrafting,
-				ModelName:      activeModel,
-				ProviderName:   activeProviderName,
-			}); err != nil {
-				stoppedByCallback = true
-				return err
+	usedProv, usedModel, streamUsage, streamErr := r.streamWithFallbackNotify(
+		ctx,
+		route,
+		provider,
+		chatReq,
+		func(ev llm.StreamEvent) error {
+			if ev.FinishReason != "" {
+				finishReason = ev.FinishReason
 			}
-		}
-		if ev.Delta != "" {
-			contentBuf.WriteString(ev.Delta)
-			liveText := contentBuf.String()
-			if isContinue {
-				liveText = joinContinuation(basePrefix, liveText)
+			if ev.ReasoningDelta != "" {
+				if err := emit(domain.GenChunk{
+					Kind:           domain.GenChunkThinking,
+					ChapterID:      chapterID,
+					ReasoningDelta: ev.ReasoningDelta,
+					Status:         domain.ChapterStatusDrafting,
+					ModelName:      activeModel,
+					ProviderName:   activeProviderName,
+				}); err != nil {
+					stoppedByCallback = true
+					return err
+				}
 			}
-			if err := emit(domain.GenChunk{
-				Kind:         domain.GenChunkDelta,
-				ChapterID:    chapterID,
-				Delta:        ev.Delta,
-				WordCount:    domain.CountWords(liveText),
-				Status:       domain.ChapterStatusDrafting,
-				ModelName:    activeModel,
-				ProviderName: activeProviderName,
-			}); err != nil {
-				stoppedByCallback = true
-				return err
+			if ev.Delta != "" {
+				contentBuf.WriteString(ev.Delta)
+				runningDeltaWords += domain.CountWords(ev.Delta)
+				if err := emit(domain.GenChunk{
+					Kind:         domain.GenChunkDelta,
+					ChapterID:    chapterID,
+					Delta:        ev.Delta,
+					WordCount:    basePrefixWords + runningDeltaWords,
+					Status:       domain.ChapterStatusDrafting,
+					ModelName:    activeModel,
+					ProviderName: activeProviderName,
+				}); err != nil {
+					stoppedByCallback = true
+					return err
+				}
 			}
-		}
-		if ev.Usage != nil {
-			finalUsage = *ev.Usage
-			uCopy := *ev.Usage
-			if err := emit(domain.GenChunk{
-				Kind:         domain.GenChunkUsage,
-				ChapterID:    chapterID,
-				Usage:        &uCopy,
-				FinishReason: finishReason,
-				ModelName:    activeModel,
-				ProviderName: activeProviderName,
-			}); err != nil {
-				stoppedByCallback = true
-				return err
+			if ev.Usage != nil {
+				finalUsage = *ev.Usage
+				uCopy := *ev.Usage
+				if err := emit(domain.GenChunk{
+					Kind:         domain.GenChunkUsage,
+					ChapterID:    chapterID,
+					Usage:        &uCopy,
+					FinishReason: finishReason,
+					ModelName:    activeModel,
+					ProviderName: activeProviderName,
+				}); err != nil {
+					stoppedByCallback = true
+					return err
+				}
 			}
-		}
-		return nil
-	})
+			return nil
+		},
+		func(fbProv domain.Provider, fbModel string) {
+			activeModel = fbModel
+			activeProviderName = fbProv.Name
+		},
+	)
 	if usedModel != "" {
 		route.ModelName = usedModel
 	}
@@ -465,31 +477,6 @@ func (r *Runner) GenerateChapter(
 	return savedChap, nil
 }
 
-func (r *Runner) resolveDraftRouteAndProvider(ctx context.Context) (domain.ModelRoute, domain.Provider, error) {
-	route, err := r.store.GetModelRoute(ctx, domain.StageDraft)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return domain.ModelRoute{}, domain.Provider{}, domain.ErrRouteNotConfigured
-		}
-		return domain.ModelRoute{}, domain.Provider{}, fmt.Errorf("load draft model route: %w", err)
-	}
-	if route.ProviderID == nil || *route.ProviderID <= 0 || strings.TrimSpace(route.ModelName) == "" {
-		return domain.ModelRoute{}, domain.Provider{}, domain.ErrRouteNotConfigured
-	}
-
-	provider, err := r.store.GetProvider(ctx, *route.ProviderID)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return domain.ModelRoute{}, domain.Provider{}, domain.ErrProviderNotConfigured
-		}
-		return domain.ModelRoute{}, domain.Provider{}, fmt.Errorf("load provider %d: %w", *route.ProviderID, err)
-	}
-	if !provider.Enabled || strings.TrimSpace(provider.BaseURL) == "" {
-		return domain.ModelRoute{}, domain.Provider{}, domain.ErrProviderNotConfigured
-	}
-	return route, provider, nil
-}
-
 func (r *Runner) savePartialDetached(
 	ctx context.Context,
 	book domain.Book,
@@ -617,12 +604,9 @@ func (r *Runner) RewriteSelection(
 	}
 
 	// 优先使用 polish 路由，未配置时回退 draft 路由。
-	route, provider, err := r.resolveStageRouteAndProvider(ctx, domain.StagePolish)
+	route, provider, err := r.resolveFirstAvailableStageRoute(ctx, domain.StagePolish, domain.StageDraft)
 	if err != nil {
-		route, provider, err = r.resolveDraftRouteAndProvider(ctx)
-		if err != nil {
-			return domain.RewriteSelectionResult{}, err
-		}
+		return domain.RewriteSelectionResult{}, err
 	}
 
 	actionGuide := selectionActionGuide(req.Action, req.CustomInstruction)
@@ -669,37 +653,52 @@ func (r *Runner) RewriteSelection(
 	var outBuf strings.Builder
 	var finalUsage domain.TokenUsage
 	start := time.Now()
-	streamUsage, streamErr := r.llm.Stream(ctx, provider, chatReq, func(ev llm.StreamEvent) error {
-		if ev.ReasoningDelta != "" {
-			return emit(domain.GenChunk{
-				Kind:           domain.GenChunkThinking,
-				ChapterID:      req.ChapterID,
-				ReasoningDelta: ev.ReasoningDelta,
-				ModelName:      route.ModelName,
-				ProviderName:   provider.Name,
-			})
-		}
-		if ev.Delta != "" {
-			outBuf.WriteString(ev.Delta)
-			return emit(domain.GenChunk{
-				Kind:         domain.GenChunkDelta,
-				ChapterID:    req.ChapterID,
-				Delta:        ev.Delta,
-				WordCount:    domain.CountWords(outBuf.String()),
-				ModelName:    route.ModelName,
-				ProviderName: provider.Name,
-			})
-		}
-		if ev.Usage != nil {
-			finalUsage = *ev.Usage
-		}
-		return nil
-	})
+	activeModel := route.ModelName
+	activeProviderName := provider.Name
+	runningWords := 0
+
+	usedProv, usedModel, streamUsage, streamErr := r.streamWithFallbackNotify(
+		ctx,
+		route,
+		provider,
+		chatReq,
+		func(ev llm.StreamEvent) error {
+			if ev.ReasoningDelta != "" {
+				return emit(domain.GenChunk{
+					Kind:           domain.GenChunkThinking,
+					ChapterID:      req.ChapterID,
+					ReasoningDelta: ev.ReasoningDelta,
+					ModelName:      activeModel,
+					ProviderName:   activeProviderName,
+				})
+			}
+			if ev.Delta != "" {
+				outBuf.WriteString(ev.Delta)
+				runningWords += domain.CountWords(ev.Delta)
+				return emit(domain.GenChunk{
+					Kind:         domain.GenChunkDelta,
+					ChapterID:    req.ChapterID,
+					Delta:        ev.Delta,
+					WordCount:    runningWords,
+					ModelName:    activeModel,
+					ProviderName: activeProviderName,
+				})
+			}
+			if ev.Usage != nil {
+				finalUsage = *ev.Usage
+			}
+			return nil
+		},
+		func(fbProv domain.Provider, fbModel string) {
+			activeModel = fbModel
+			activeProviderName = fbProv.Name
+		},
+	)
 	if hasUsage(streamUsage) {
 		finalUsage = streamUsage
 	}
 	if hasUsage(finalUsage) {
-		r.recordTokenUsage(ctx, chap.BookID, chap.ID, domain.StagePolish, provider.Name, route.ModelName, finalUsage, time.Since(start).Milliseconds())
+		r.recordTokenUsage(ctx, chap.BookID, chap.ID, domain.StagePolish, usedProv.Name, usedModel, finalUsage, time.Since(start).Milliseconds())
 	}
 	if streamErr != nil {
 		if errors.Is(streamErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
@@ -716,14 +715,14 @@ func (r *Runner) RewriteSelection(
 		Kind:         domain.GenChunkCompleted,
 		ChapterID:    req.ChapterID,
 		WordCount:    domain.CountWords(rewritten),
-		ModelName:    route.ModelName,
-		ProviderName: provider.Name,
+		ModelName:    usedModel,
+		ProviderName: usedProv.Name,
 		Usage:        usagePtrOrNil(finalUsage),
 	})
 	return domain.RewriteSelectionResult{
 		RewrittenText: rewritten,
-		ModelName:     route.ModelName,
-		ProviderName:  provider.Name,
+		ModelName:     usedModel,
+		ProviderName:  usedProv.Name,
 		Usage:         usagePtrOrNil(finalUsage),
 	}, nil
 }

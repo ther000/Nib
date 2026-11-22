@@ -77,15 +77,9 @@ func (r *Runner) GenerateArcSummary(ctx context.Context, req domain.GenerateArcS
 	}
 
 	// 优先使用 extract 路由，依次回退 outline / draft。
-	route, provider, err := r.resolveStageRouteAndProvider(ctx, domain.StageExtract)
+	route, provider, err := r.resolveFirstAvailableStageRoute(ctx, domain.StageExtract, domain.StageOutline, domain.StageDraft)
 	if err != nil {
-		route, provider, err = r.resolveStageRouteAndProvider(ctx, domain.StageOutline)
-		if err != nil {
-			route, provider, err = r.resolveDraftRouteAndProvider(ctx)
-			if err != nil {
-				return domain.ArcSummary{}, err
-			}
-		}
+		return domain.ArcSummary{}, err
 	}
 
 	var material strings.Builder

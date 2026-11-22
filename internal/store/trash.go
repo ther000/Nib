@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"nib/internal/domain"
@@ -703,6 +702,3 @@ func restoreRelationsTx(ctx context.Context, tx *sql.Tx, bookID int64, relations
 	}
 	return nil
 }
-
-// ensure strings import is used even if future refactors drop other uses.
-var _ = strings.TrimSpace

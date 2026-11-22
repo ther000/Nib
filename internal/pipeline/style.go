@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
-	"time"
 
 	"nib/internal/domain"
 	"nib/internal/genres"
@@ -23,8 +21,6 @@ const (
 	hookVerifyTailRunes      = 200
 	maxStyleRepairPreviewLen = 4000
 )
-
-var reStyleCodeFence = regexp.MustCompile("(?s)```(?:json|JSON)?\\s*\\n?(.*?)\\n?```")
 
 // StyleStore 定义 Phase 3 文风指纹、样章锚点、去 AI 味规则与质检报告持久化契约（直接由 *store.Store 满足）。
 type StyleStore interface {
@@ -85,7 +81,7 @@ func (r *Runner) ExtractStyleProfile(ctx context.Context, bookID int64, sampleTe
 	excerptsToSave := linter.ExtractSceneExcerpts(bookID, cleanSamples)
 
 	// 若配置了任一可用模型路由，尝试调用 LLM 提炼定性语调指令与精选场景样章；失败或未配路由则优雅回退本地提取。
-	if route, provider, ok := r.tryResolveAnyStyleRoute(ctx); ok && r.llm != nil {
+	if route, provider, routeErr := r.resolveFirstAvailableStageRoute(ctx, domain.StageOutline, domain.StageDraft, domain.StageCritic, domain.StagePolish); routeErr == nil && r.llm != nil {
 		if llmRes, llmErr := r.extractQualitativeStyleWithLLM(ctx, provider, route, book, cleanSamples); llmErr == nil {
 			if llmRes.PovRule.Valid() {
 				pov = llmRes.PovRule
@@ -225,21 +221,23 @@ func (r *Runner) RunCriticAudit(ctx context.Context, chapterID int64) (domain.Ch
 		return domain.ChapterAudit{}, err
 	}
 
-	parsed, parseErr := parseCriticPayload(rawResp, len(paragraphs))
+	parsed, parseErr := parseOrRepairStageJSON(
+		ctx,
+		r,
+		chap.BookID,
+		chap.ID,
+		domain.StageCritic,
+		provider,
+		route,
+		defaultCriticMaxTokens,
+		"Critic 审校报告（需包含 hook_passed、hook_verdict、critic_findings）",
+		rawResp,
+		func(raw string) (parsedCriticResult, error) {
+			return parseCriticPayload(raw, len(paragraphs))
+		},
+	)
 	if parseErr != nil {
-		if ctx.Err() != nil {
-			return domain.ChapterAudit{}, domain.ErrGenerationCanceled
-		}
-		// 自动执行 1 次 JSON 纠错重问。
-		repSys, repUser := buildStyleJSONRepairPrompts("Critic 审校报告（需包含 hook_passed、hook_verdict、critic_findings）", rawResp, parseErr)
-		repResp, repErr := r.collectStageLLMResponse(ctx, chap.BookID, chap.ID, domain.StageCritic, provider, route, defaultCriticMaxTokens, repSys, repUser)
-		if repErr != nil {
-			return domain.ChapterAudit{}, fmt.Errorf("Critic 审校 JSON 纠错请求失败: %w", repErr)
-		}
-		parsed, parseErr = parseCriticPayload(repResp, len(paragraphs))
-		if parseErr != nil {
-			return domain.ChapterAudit{}, fmt.Errorf("Critic 审校 JSON 解析失败（自动纠错重试 1 次后仍无效）: %w", parseErr)
-		}
+		return domain.ChapterAudit{}, parseErr
 	}
 
 	audit, err := ss.GetChapterAudit(ctx, chapterID)
@@ -331,20 +329,23 @@ func (r *Runner) GenerateSurgicalDiffs(ctx context.Context, chapterID int64, tar
 		return domain.ChapterAudit{}, err
 	}
 
-	newDiffs, parseErr := parseSurgicalDiffsPayload(rawResp, paragraphs, targets, reasonsByPara)
+	newDiffs, parseErr := parseOrRepairStageJSON(
+		ctx,
+		r,
+		chap.BookID,
+		chap.ID,
+		domain.StagePolish,
+		provider,
+		route,
+		defaultPolishMaxTokens,
+		"手术式局部润色建议（需包含 diffs 数组：paragraph_index, reason, replacement）",
+		rawResp,
+		func(raw string) ([]domain.SurgicalDiff, error) {
+			return parseSurgicalDiffsPayload(raw, paragraphs, targets, reasonsByPara)
+		},
+	)
 	if parseErr != nil {
-		if ctx.Err() != nil {
-			return domain.ChapterAudit{}, domain.ErrGenerationCanceled
-		}
-		repSys, repUser := buildStyleJSONRepairPrompts("手术式局部润色建议（需包含 diffs 数组：paragraph_index, reason, replacement）", rawResp, parseErr)
-		repResp, repErr := r.collectStageLLMResponse(ctx, chap.BookID, chap.ID, domain.StagePolish, provider, route, defaultPolishMaxTokens, repSys, repUser)
-		if repErr != nil {
-			return domain.ChapterAudit{}, fmt.Errorf("手术润色 JSON 纠错请求失败: %w", repErr)
-		}
-		newDiffs, parseErr = parseSurgicalDiffsPayload(repResp, paragraphs, targets, reasonsByPara)
-		if parseErr != nil {
-			return domain.ChapterAudit{}, fmt.Errorf("手术润色 JSON 解析失败（自动纠错重试 1 次后仍无效）: %w", parseErr)
-		}
+		return domain.ChapterAudit{}, parseErr
 	}
 
 	// 将新生成的目标段落 Diff 与既有其它段落的 Diff 合并（同段落覆写为最新 pending 建议）。
@@ -478,21 +479,20 @@ func (r *Runner) ApplySurgicalDiff(ctx context.Context, in domain.ApplySurgicalD
 }
 
 func resolveTargetParagraphIndex(paragraphs []string, diff domain.SurgicalDiff) int {
+	origTrimmed := strings.TrimSpace(diff.Original)
 	if diff.ParagraphIndex >= 0 && diff.ParagraphIndex < len(paragraphs) {
-		if paragraphs[diff.ParagraphIndex] == strings.TrimSpace(diff.Original) {
+		if origTrimmed == "" || paragraphs[diff.ParagraphIndex] == origTrimmed {
 			return diff.ParagraphIndex
 		}
 	}
-	origTrimmed := strings.TrimSpace(diff.Original)
 	if origTrimmed != "" {
 		for i, p := range paragraphs {
 			if p == origTrimmed {
 				return i
 			}
 		}
-	}
-	if diff.ParagraphIndex >= 0 && diff.ParagraphIndex < len(paragraphs) {
-		return diff.ParagraphIndex
+		// 原文不为空且在正文中找不到精确匹配时，绝不盲目覆盖原索引对应的新段落。
+		return -1
 	}
 	return -1
 }
@@ -518,90 +518,6 @@ func (r *Runner) loadStyleProfileAndRules(
 		rules = linter.DefaultRules()
 	}
 	return profile, rules, nil
-}
-
-func (r *Runner) resolveStageRouteAndProvider(
-	ctx context.Context,
-	stage domain.PipelineStage,
-) (domain.ModelRoute, domain.Provider, error) {
-	route, err := r.store.GetModelRoute(ctx, stage)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return domain.ModelRoute{}, domain.Provider{}, domain.ErrRouteNotConfigured
-		}
-		return domain.ModelRoute{}, domain.Provider{}, fmt.Errorf("load %s model route: %w", stage, err)
-	}
-	if route.ProviderID == nil || *route.ProviderID <= 0 || strings.TrimSpace(route.ModelName) == "" {
-		return domain.ModelRoute{}, domain.Provider{}, domain.ErrRouteNotConfigured
-	}
-
-	provider, err := r.store.GetProvider(ctx, *route.ProviderID)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return domain.ModelRoute{}, domain.Provider{}, domain.ErrProviderNotConfigured
-		}
-		return domain.ModelRoute{}, domain.Provider{}, fmt.Errorf("load provider %d: %w", *route.ProviderID, err)
-	}
-	if !provider.Enabled || strings.TrimSpace(provider.BaseURL) == "" {
-		return domain.ModelRoute{}, domain.Provider{}, domain.ErrProviderNotConfigured
-	}
-	return route, provider, nil
-}
-
-func (r *Runner) tryResolveAnyStyleRoute(ctx context.Context) (domain.ModelRoute, domain.Provider, bool) {
-	for _, st := range []domain.PipelineStage{domain.StageOutline, domain.StageDraft, domain.StageCritic, domain.StagePolish} {
-		route, provider, err := r.resolveStageRouteAndProvider(ctx, st)
-		if err == nil {
-			return route, provider, true
-		}
-	}
-	return domain.ModelRoute{}, domain.Provider{}, false
-}
-
-func (r *Runner) collectStageLLMResponse(
-	ctx context.Context,
-	bookID int64,
-	chapterID int64,
-	stage domain.PipelineStage,
-	provider domain.Provider,
-	route domain.ModelRoute,
-	defaultMaxToks int,
-	sysPrompt string,
-	userPrompt string,
-) (string, error) {
-	maxTokens := route.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = defaultMaxToks
-	}
-	req := llm.ChatRequest{
-		Model:       route.ModelName,
-		System:      sysPrompt,
-		Messages:    []llm.ChatMessage{{Role: "user", Content: userPrompt}},
-		Temperature: route.Temperature,
-		MaxTokens:   maxTokens,
-	}
-	start := time.Now()
-	var buf strings.Builder
-	var lastUsage domain.TokenUsage
-	usage, err := r.llm.Stream(ctx, provider, req, func(ev llm.StreamEvent) error {
-		if ev.Delta != "" {
-			buf.WriteString(ev.Delta)
-		}
-		if ev.Usage != nil {
-			lastUsage = *ev.Usage
-		}
-		return nil
-	})
-	if hasUsage(usage) {
-		lastUsage = usage
-	}
-	if err != nil {
-		return "", err
-	}
-	if bookID > 0 && stage.ValidUsageStage() {
-		r.recordTokenUsage(ctx, bookID, chapterID, stage, provider.Name, route.ModelName, lastUsage, time.Since(start).Milliseconds())
-	}
-	return buf.String(), nil
 }
 
 type qualitativeStyleLLMResult struct {
@@ -643,7 +559,7 @@ func (r *Runner) extractQualitativeStyleWithLLM(
 	if err != nil {
 		return qualitativeStyleLLMResult{}, err
 	}
-	jsonStr, err := extractStyleJSONObject(raw)
+	jsonStr, err := llm.ExtractJSONObject(raw)
 	if err != nil {
 		return qualitativeStyleLLMResult{}, err
 	}
@@ -767,7 +683,7 @@ type parsedCriticResult struct {
 }
 
 func parseCriticPayload(raw string, paraCount int) (parsedCriticResult, error) {
-	jsonStr, err := extractStyleJSONObject(raw)
+	jsonStr, err := llm.ExtractJSONObject(raw)
 	if err != nil {
 		return parsedCriticResult{}, err
 	}
@@ -1005,7 +921,7 @@ func parseSurgicalDiffsPayload(
 	targets []int,
 	reasonsByPara map[int]string,
 ) ([]domain.SurgicalDiff, error) {
-	jsonStr, err := extractStyleJSONObject(raw)
+	jsonStr, err := llm.ExtractJSONObject(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -1074,61 +990,6 @@ func parseSurgicalDiffsPayload(
 		return nil, errors.New("no valid paragraph replacement found in diffs response")
 	}
 	return out, nil
-}
-
-func extractStyleJSONObject(raw string) (string, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return "", errors.New("empty LLM response")
-	}
-	if matches := reStyleCodeFence.FindStringSubmatch(trimmed); len(matches) == 2 {
-		candidate := strings.TrimSpace(matches[1])
-		if json.Valid([]byte(candidate)) && strings.HasPrefix(candidate, "{") {
-			return candidate, nil
-		}
-		trimmed = candidate
-	}
-	if strings.HasPrefix(trimmed, "{") && json.Valid([]byte(trimmed)) {
-		return trimmed, nil
-	}
-	start := strings.IndexByte(trimmed, '{')
-	if start < 0 {
-		return "", errors.New("no JSON object found in response")
-	}
-	depth := 0
-	inString := false
-	escaped := false
-	for i := start; i < len(trimmed); i++ {
-		ch := trimmed[i]
-		if escaped {
-			escaped = false
-			continue
-		}
-		if inString {
-			if ch == '\\' {
-				escaped = true
-			} else if ch == '"' {
-				inString = false
-			}
-			continue
-		}
-		switch ch {
-		case '"':
-			inString = true
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				candidate := trimmed[start : i+1]
-				if !json.Valid([]byte(candidate)) {
-					return "", errors.New("extracted JSON object is malformed")
-				}
-				return candidate, nil
-			}
-		}
-	}
-	return "", errors.New("unterminated JSON object in response")
 }
 
 func buildStyleJSONRepairPrompts(targetSchemaDesc, brokenRaw string, parseErr error) (string, string) {

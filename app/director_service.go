@@ -33,18 +33,7 @@ func (s *DirectorService) SendInstruction(
 	}
 	defer release()
 
-	emit := func(ev domain.DirectorEvent) error {
-		if ch == nil {
-			return nil
-		}
-		if sendErr := ch.Send(ev); sendErr != nil {
-			cancel()
-			return sendErr
-		}
-		return nil
-	}
-
-	reply, err := eng.RunDirectorChat(runCtx, req, emit)
+	reply, err := eng.RunDirectorChat(runCtx, req, channelEmitter(runCtx, cancel, ch))
 	if err != nil {
 		return domain.DirectorReply{}, err
 	}

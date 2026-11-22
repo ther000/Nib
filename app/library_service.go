@@ -409,7 +409,7 @@ func (s *LibraryService) SaveChapterDraft(ctx context.Context, input domain.Save
 	if err != nil {
 		return domain.Chapter{}, err
 	}
-	if err := s.syncChapterMarkdownIfConfigured(ctx, st, chap); err != nil {
+	if err := s.rt.syncChapterMarkdownIfConfigured(ctx, chap); err != nil {
 		return chap, err
 	}
 	return chap, nil
@@ -428,7 +428,7 @@ func (s *LibraryService) FinalizeChapter(ctx context.Context, chapterID int64) (
 	if err != nil {
 		return domain.Chapter{}, err
 	}
-	if err := s.syncChapterMarkdownIfConfigured(ctx, st, chap); err != nil {
+	if err := s.rt.syncChapterMarkdownIfConfigured(ctx, chap); err != nil {
 		return chap, err
 	}
 	return chap, nil
@@ -646,18 +646,7 @@ func (s *LibraryService) BatchGenerateOutlines(
 	}
 	defer release()
 
-	emit := func(chunk domain.OutlineChunk) error {
-		if ch == nil {
-			return nil
-		}
-		if sendErr := ch.Send(chunk); sendErr != nil {
-			cancel()
-			return sendErr
-		}
-		return nil
-	}
-
-	chapters, err := eng.BatchGenerateOutlines(genCtx, req, emit)
+	chapters, err := eng.BatchGenerateOutlines(genCtx, req, channelEmitter(genCtx, cancel, ch))
 	if err != nil {
 		return nil, err
 	}
@@ -682,18 +671,7 @@ func (s *LibraryService) GenerateBookGenesis(
 	}
 	defer release()
 
-	emit := func(chunk domain.GenesisChunk) error {
-		if ch == nil {
-			return nil
-		}
-		if sendErr := ch.Send(chunk); sendErr != nil {
-			cancel()
-			return sendErr
-		}
-		return nil
-	}
-
-	return eng.GenerateBookGenesis(genCtx, req, emit)
+	return eng.GenerateBookGenesis(genCtx, req, channelEmitter(genCtx, cancel, ch))
 }
 
 // ApplyBookGenesis 将作者确认后的开书企划一次性写入书库。
@@ -718,20 +696,4 @@ func (s *LibraryService) ApplyBookGenesis(ctx context.Context, in domain.ApplyGe
 		res.Chapters = []domain.Chapter{}
 	}
 	return res, nil
-}
-
-func (s *LibraryService) syncChapterMarkdownIfConfigured(ctx context.Context, st Store, chap domain.Chapter) error {
-	exp := s.rt.exporter()
-	if exp == nil {
-		return nil
-	}
-	book, err := st.GetBook(ctx, chap.BookID)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(book.ExportDir) == "" {
-		return nil
-	}
-	_, err = exp.ExportChapter(ctx, chap.ID)
-	return err
 }

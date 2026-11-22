@@ -70,14 +70,9 @@ func (r *Runner) ReverseExtractBook(
 		return domain.ReverseExtractPreview{}, &domain.ValidationError{Field: "chapters", Message: "所选范围内没有可采样的章节"}
 	}
 
-	route, provider, err := r.resolveStageRouteAndProvider(ctx, domain.StageExtract)
+	route, provider, err := r.resolveFirstAvailableStageRoute(ctx, domain.StageExtract, domain.StageOutline, domain.StageDraft)
 	if err != nil {
-		if route, provider, err = r.resolveStageRouteAndProvider(ctx, domain.StageOutline); err != nil {
-			route, provider, err = r.resolveStageRouteAndProvider(ctx, domain.StageDraft)
-			if err != nil {
-				return domain.ReverseExtractPreview{}, err
-			}
-		}
+		return domain.ReverseExtractPreview{}, err
 	}
 
 	if err := send(domain.ReverseExtractChunk{Kind: "started"}); err != nil {
@@ -100,7 +95,7 @@ func (r *Runner) ReverseExtractBook(
 	start := time.Now()
 	var buf strings.Builder
 	var finalUsage domain.TokenUsage
-	streamUsage, streamErr := r.llm.Stream(ctx, provider, chatReq, func(ev llm.StreamEvent) error {
+	usedProv, usedModel, streamUsage, streamErr := r.streamWithFallback(ctx, route, provider, chatReq, func(ev llm.StreamEvent) error {
 		if ev.Delta != "" {
 			buf.WriteString(ev.Delta)
 			if err := send(domain.ReverseExtractChunk{Kind: "delta", Delta: ev.Delta}); err != nil {
@@ -120,29 +115,27 @@ func (r *Runner) ReverseExtractBook(
 		return domain.ReverseExtractPreview{}, streamErr
 	}
 	if domain.StageExtract.ValidUsageStage() {
-		r.recordTokenUsage(ctx, req.BookID, 0, domain.StageExtract, provider.Name, route.ModelName, finalUsage, time.Since(start).Milliseconds())
+		r.recordTokenUsage(ctx, req.BookID, 0, domain.StageExtract, usedProv.Name, usedModel, finalUsage, time.Since(start).Milliseconds())
 	}
 
-	preview, parseErr := parseReverseExtractPayload(buf.String())
+	preview, parseErr := parseOrRepairStageJSON(
+		ctx,
+		r,
+		req.BookID,
+		0,
+		domain.StageExtract,
+		usedProv,
+		route,
+		defaultReverseExtractMaxTokens,
+		`旧稿反推 JSON（需包含 entities, relations, foreshadowings, arc_summaries）`,
+		buf.String(),
+		parseReverseExtractPayload,
+	)
 	if parseErr != nil {
-		if ctx.Err() != nil {
-			return domain.ReverseExtractPreview{}, domain.ErrGenerationCanceled
-		}
-		repSys, repUser := buildStyleJSONRepairPrompts(
-			`旧稿反推 JSON（需包含 entities, relations, foreshadowings, arc_summaries）`,
-			buf.String(),
-			parseErr,
-		)
-		repResp, repErr := r.collectStageLLMResponse(ctx, req.BookID, 0, domain.StageExtract, provider, route, defaultReverseExtractMaxTokens, repSys, repUser)
-		if repErr != nil {
-			_ = send(domain.ReverseExtractChunk{Kind: "error", Error: repErr.Error()})
-			return domain.ReverseExtractPreview{}, fmt.Errorf("旧稿反推 JSON 纠错请求失败: %w", repErr)
-		}
-		preview, parseErr = parseReverseExtractPayload(repResp)
-		if parseErr != nil {
+		if !errors.Is(parseErr, domain.ErrGenerationCanceled) {
 			_ = send(domain.ReverseExtractChunk{Kind: "error", Error: parseErr.Error()})
-			return domain.ReverseExtractPreview{}, fmt.Errorf("旧稿反推 JSON 解析失败（重试后仍无效）: %w", parseErr)
 		}
+		return domain.ReverseExtractPreview{}, parseErr
 	}
 
 	if err := markExistingEntities(ctx, rs, req.BookID, &preview); err != nil {
@@ -385,7 +378,7 @@ type rawReverseExtractPayload struct {
 }
 
 func parseReverseExtractPayload(raw string) (domain.ReverseExtractPreview, error) {
-	jsonStr, err := extractStyleJSONObject(strings.TrimSpace(raw))
+	jsonStr, err := llm.ExtractJSONObject(raw)
 	if err != nil {
 		return domain.ReverseExtractPreview{}, err
 	}

@@ -219,19 +219,13 @@ func (s *MemoryService) ReverseExtractBook(
 	if err := req.Validate(); err != nil {
 		return domain.ReverseExtractPreview{}, err
 	}
-	eng, genCtx, release, err := s.rt.trackReverseExtractEngine(ctx)
+	eng, genCtx, cancel, release, err := s.rt.trackReverseExtractEngine(ctx)
 	if err != nil {
 		return domain.ReverseExtractPreview{}, err
 	}
 	defer release()
 
-	emit := func(chunk domain.ReverseExtractChunk) error {
-		if ch == nil {
-			return nil
-		}
-		return ch.Send(chunk)
-	}
-	preview, err := eng.ReverseExtractBook(genCtx, req, emit)
+	preview, err := eng.ReverseExtractBook(genCtx, req, channelEmitter(genCtx, cancel, ch))
 	if err != nil {
 		if genCtx.Err() != nil {
 			return domain.ReverseExtractPreview{}, domain.ErrGenerationCanceled

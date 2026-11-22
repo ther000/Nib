@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/egoist/mygo"
@@ -352,81 +353,51 @@ func (r *Runtime) Close() error {
 	return nil
 }
 
-func (r *Runtime) store() (Store, error) {
+func requireDep[T any](r *Runtime, pick func(*RuntimeDeps) (T, bool)) (T, error) {
+	var zero T
 	if r == nil {
-		return nil, ErrRuntimeNotReady
+		return zero, ErrRuntimeNotReady
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.initErr != nil {
-		return nil, fmt.Errorf("%w: %v", ErrRuntimeNotReady, r.initErr)
+		return zero, fmt.Errorf("%w: %v", ErrRuntimeNotReady, r.initErr)
 	}
-	if !r.ready || r.closed || r.deps.Store == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	return r.deps.Store, nil
-}
-
-func (r *Runtime) exporter() Exporter {
-	if r == nil {
-		return nil
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
 	if !r.ready || r.closed {
-		return nil
+		return zero, ErrRuntimeNotReady
 	}
-	return r.deps.Exporter
+	dep, ok := pick(&r.deps)
+	if !ok {
+		return zero, ErrRuntimeNotReady
+	}
+	return dep, nil
 }
 
-func (r *Runtime) requireExporter() (Exporter, error) {
-	exp := r.exporter()
-	if exp == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	return exp, nil
-}
-
-func (r *Runtime) llm() (LLMClient, error) {
+func trackDep[T any](r *Runtime, callCtx context.Context, pick func(*RuntimeDeps) (T, bool)) (T, context.Context, context.CancelFunc, func(), error) {
+	var zero T
 	if r == nil {
-		return nil, ErrRuntimeNotReady
+		return zero, nil, nil, nil, ErrRuntimeNotReady
 	}
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if !r.ready || r.closed || r.deps.LLM == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	return r.deps.LLM, nil
-}
-
-func (r *Runtime) compiler() (BriefingCompiler, error) {
-	if r == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if !r.ready || r.closed || r.deps.Compiler == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	return r.deps.Compiler, nil
-}
-
-func (r *Runtime) trackPipeline(callCtx context.Context) (PipelineRunner, context.Context, context.CancelFunc, func(), error) {
-	if r == nil {
-		return nil, nil, nil, nil, ErrRuntimeNotReady
-	}
-	r.mu.RLock()
-	if !r.ready || r.closed || r.deps.Pipeline == nil {
+	if r.initErr != nil {
 		r.mu.RUnlock()
-		return nil, nil, nil, nil, ErrRuntimeNotReady
+		return zero, nil, nil, nil, fmt.Errorf("%w: %v", ErrRuntimeNotReady, r.initErr)
 	}
-	runner := r.deps.Pipeline
+	if !r.ready || r.closed {
+		r.mu.RUnlock()
+		return zero, nil, nil, nil, ErrRuntimeNotReady
+	}
+	dep, ok := pick(&r.deps)
+	if !ok {
+		r.mu.RUnlock()
+		return zero, nil, nil, nil, ErrRuntimeNotReady
+	}
 	baseCtx := r.baseCtx
 	// 必须在持有 RLock 期间递增计数，防止与 Close() 中的 activeWG.Wait() 产生竞态。
 	r.activeWG.Add(1)
 	r.mu.RUnlock()
 
-	genCtx, cancel := context.WithCancel(callCtx)
+	depCtx, cancel := context.WithCancel(callCtx)
 	var stopWatch func() bool
 	if baseCtx != nil {
 		stopWatch = context.AfterFunc(baseCtx, cancel)
@@ -438,321 +409,204 @@ func (r *Runtime) trackPipeline(callCtx context.Context) (PipelineRunner, contex
 		cancel()
 		r.activeWG.Done()
 	}
-	return runner, genCtx, cancel, release, nil
+	return dep, depCtx, cancel, release, nil
+}
+
+func channelEmitter[T any](ctx context.Context, cancel context.CancelFunc, ch *mygo.Channel[T]) func(T) error {
+	return func(ev T) error {
+		if ctx != nil && ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if ch == nil {
+			return nil
+		}
+		if sendErr := ch.Send(ev); sendErr != nil {
+			if cancel != nil {
+				cancel()
+			}
+			return sendErr
+		}
+		return nil
+	}
+}
+
+func (r *Runtime) syncChapterMarkdownIfConfigured(ctx context.Context, chap domain.Chapter) error {
+	exp := r.exporter()
+	if exp == nil {
+		return nil
+	}
+	st, err := r.store()
+	if err != nil {
+		return err
+	}
+	book, err := st.GetBook(ctx, chap.BookID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(book.ExportDir) == "" {
+		return nil
+	}
+	_, err = exp.ExportChapter(ctx, chap.ID)
+	return err
+}
+
+func (r *Runtime) store() (Store, error) {
+	return requireDep(r, func(d *RuntimeDeps) (Store, bool) {
+		return d.Store, d.Store != nil
+	})
+}
+
+func (r *Runtime) exporter() Exporter {
+	exp, err := r.requireExporter()
+	if err != nil {
+		return nil
+	}
+	return exp
+}
+
+func (r *Runtime) requireExporter() (Exporter, error) {
+	return requireDep(r, func(d *RuntimeDeps) (Exporter, bool) {
+		return d.Exporter, d.Exporter != nil
+	})
+}
+
+func (r *Runtime) llm() (LLMClient, error) {
+	return requireDep(r, func(d *RuntimeDeps) (LLMClient, bool) {
+		return d.LLM, d.LLM != nil
+	})
+}
+
+func (r *Runtime) compiler() (BriefingCompiler, error) {
+	return requireDep(r, func(d *RuntimeDeps) (BriefingCompiler, bool) {
+		return d.Compiler, d.Compiler != nil
+	})
+}
+
+func (r *Runtime) trackPipeline(callCtx context.Context) (PipelineRunner, context.Context, context.CancelFunc, func(), error) {
+	return trackDep(r, callCtx, func(d *RuntimeDeps) (PipelineRunner, bool) {
+		return d.Pipeline, d.Pipeline != nil
+	})
 }
 
 func (r *Runtime) memoryStore() (MemoryStore, error) {
-	if r == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if !r.ready || r.closed || r.deps.MemoryStore == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	return r.deps.MemoryStore, nil
+	return requireDep(r, func(d *RuntimeDeps) (MemoryStore, bool) {
+		return d.MemoryStore, d.MemoryStore != nil
+	})
 }
 
 func (r *Runtime) trackExtractor(callCtx context.Context) (DeltaExtractor, context.Context, func(), error) {
-	if r == nil {
-		return nil, nil, nil, ErrRuntimeNotReady
-	}
-	r.mu.RLock()
-	if !r.ready || r.closed || r.deps.DeltaExtractor == nil {
-		r.mu.RUnlock()
-		return nil, nil, nil, ErrRuntimeNotReady
-	}
-	ext := r.deps.DeltaExtractor
-	baseCtx := r.baseCtx
-	r.activeWG.Add(1)
-	r.mu.RUnlock()
-
-	extCtx, cancel := context.WithCancel(callCtx)
-	var stopWatch func() bool
-	if baseCtx != nil {
-		stopWatch = context.AfterFunc(baseCtx, cancel)
-	}
-	release := func() {
-		if stopWatch != nil {
-			stopWatch()
-		}
-		cancel()
-		r.activeWG.Done()
-	}
-	return ext, extCtx, release, nil
+	ext, ctx, _, release, err := trackDep(r, callCtx, func(d *RuntimeDeps) (DeltaExtractor, bool) {
+		return d.DeltaExtractor, d.DeltaExtractor != nil
+	})
+	return ext, ctx, release, err
 }
 
 func (r *Runtime) styleStore() (StyleStore, error) {
-	if r == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if !r.ready || r.closed || r.deps.StyleStore == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	return r.deps.StyleStore, nil
+	return requireDep(r, func(d *RuntimeDeps) (StyleStore, bool) {
+		return d.StyleStore, d.StyleStore != nil
+	})
 }
 
 func (r *Runtime) styleEngine() (StyleEngine, error) {
-	if r == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if !r.ready || r.closed || r.deps.StyleEngine == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	return r.deps.StyleEngine, nil
+	return requireDep(r, func(d *RuntimeDeps) (StyleEngine, bool) {
+		return d.StyleEngine, d.StyleEngine != nil
+	})
 }
 
 func (r *Runtime) trackStyleEngine(callCtx context.Context) (StyleEngine, context.Context, func(), error) {
-	if r == nil {
-		return nil, nil, nil, ErrRuntimeNotReady
-	}
-	r.mu.RLock()
-	if !r.ready || r.closed || r.deps.StyleEngine == nil {
-		r.mu.RUnlock()
-		return nil, nil, nil, ErrRuntimeNotReady
-	}
-	eng := r.deps.StyleEngine
-	baseCtx := r.baseCtx
-	r.activeWG.Add(1)
-	r.mu.RUnlock()
-
-	engCtx, cancel := context.WithCancel(callCtx)
-	var stopWatch func() bool
-	if baseCtx != nil {
-		stopWatch = context.AfterFunc(baseCtx, cancel)
-	}
-	release := func() {
-		if stopWatch != nil {
-			stopWatch()
-		}
-		cancel()
-		r.activeWG.Done()
-	}
-	return eng, engCtx, release, nil
+	eng, ctx, _, release, err := trackDep(r, callCtx, func(d *RuntimeDeps) (StyleEngine, bool) {
+		return d.StyleEngine, d.StyleEngine != nil
+	})
+	return eng, ctx, release, err
 }
 
 func (r *Runtime) batchStore() (BatchStore, error) {
-	if r == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if !r.ready || r.closed || r.deps.BatchStore == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	return r.deps.BatchStore, nil
+	return requireDep(r, func(d *RuntimeDeps) (BatchStore, bool) {
+		return d.BatchStore, d.BatchStore != nil
+	})
 }
 
 func (r *Runtime) batchEngine() (BatchEngine, error) {
-	if r == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if !r.ready || r.closed || r.deps.BatchEngine == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	return r.deps.BatchEngine, nil
+	return requireDep(r, func(d *RuntimeDeps) (BatchEngine, bool) {
+		return d.BatchEngine, d.BatchEngine != nil
+	})
 }
 
 func (r *Runtime) trackBatchEngine(callCtx context.Context) (BatchEngine, context.Context, context.CancelFunc, func(), error) {
-	if r == nil {
-		return nil, nil, nil, nil, ErrRuntimeNotReady
-	}
-	r.mu.RLock()
-	if !r.ready || r.closed || r.deps.BatchEngine == nil {
-		r.mu.RUnlock()
-		return nil, nil, nil, nil, ErrRuntimeNotReady
-	}
-	eng := r.deps.BatchEngine
-	baseCtx := r.baseCtx
-	r.activeWG.Add(1)
-	r.mu.RUnlock()
-
-	engCtx, cancel := context.WithCancel(callCtx)
-	var stopWatch func() bool
-	if baseCtx != nil {
-		stopWatch = context.AfterFunc(baseCtx, cancel)
-	}
-	release := func() {
-		if stopWatch != nil {
-			stopWatch()
-		}
-		cancel()
-		r.activeWG.Done()
-	}
-	return eng, engCtx, cancel, release, nil
+	return trackDep(r, callCtx, func(d *RuntimeDeps) (BatchEngine, bool) {
+		return d.BatchEngine, d.BatchEngine != nil
+	})
 }
 
 func (r *Runtime) trackGenesisEngine(callCtx context.Context) (GenesisEngine, context.Context, context.CancelFunc, func(), error) {
-	if r == nil {
-		return nil, nil, nil, nil, ErrRuntimeNotReady
-	}
-	r.mu.RLock()
-	if !r.ready || r.closed {
-		r.mu.RUnlock()
-		return nil, nil, nil, nil, ErrRuntimeNotReady
-	}
-	eng := r.deps.GenesisEngine
-	if eng == nil {
-		if ge, ok := r.deps.BatchEngine.(GenesisEngine); ok {
-			eng = ge
-		} else if ge, ok := r.deps.Pipeline.(GenesisEngine); ok {
-			eng = ge
+	return trackDep(r, callCtx, func(d *RuntimeDeps) (GenesisEngine, bool) {
+		if d.GenesisEngine != nil {
+			return d.GenesisEngine, true
 		}
-	}
-	if eng == nil {
-		r.mu.RUnlock()
-		return nil, nil, nil, nil, ErrRuntimeNotReady
-	}
-	baseCtx := r.baseCtx
-	r.activeWG.Add(1)
-	r.mu.RUnlock()
-
-	engCtx, cancel := context.WithCancel(callCtx)
-	var stopWatch func() bool
-	if baseCtx != nil {
-		stopWatch = context.AfterFunc(baseCtx, cancel)
-	}
-	release := func() {
-		if stopWatch != nil {
-			stopWatch()
+		if ge, ok := d.BatchEngine.(GenesisEngine); ok {
+			return ge, true
 		}
-		cancel()
-		r.activeWG.Done()
-	}
-	return eng, engCtx, cancel, release, nil
+		if ge, ok := d.Pipeline.(GenesisEngine); ok {
+			return ge, true
+		}
+		return nil, false
+	})
 }
 
 func (r *Runtime) autopilotEngine() (AutopilotEngine, error) {
-	if r == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if !r.ready || r.closed {
-		return nil, ErrRuntimeNotReady
-	}
-	if r.deps.AutopilotEngine != nil {
-		return r.deps.AutopilotEngine, nil
-	}
-	if ae, ok := r.deps.BatchEngine.(AutopilotEngine); ok {
-		return ae, nil
-	}
-	if ae, ok := r.deps.Pipeline.(AutopilotEngine); ok {
-		return ae, nil
-	}
-	return nil, ErrRuntimeNotReady
+	return requireDep(r, func(d *RuntimeDeps) (AutopilotEngine, bool) {
+		if d.AutopilotEngine != nil {
+			return d.AutopilotEngine, true
+		}
+		if ae, ok := d.BatchEngine.(AutopilotEngine); ok {
+			return ae, true
+		}
+		if ae, ok := d.Pipeline.(AutopilotEngine); ok {
+			return ae, true
+		}
+		return nil, false
+	})
 }
 
 func (r *Runtime) reverseExtractEngine() (ReverseExtractEngine, error) {
-	if r == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if !r.ready || r.closed {
-		return nil, ErrRuntimeNotReady
-	}
-	if eng, ok := r.deps.Pipeline.(ReverseExtractEngine); ok {
-		return eng, nil
-	}
-	return nil, ErrRuntimeNotReady
+	return requireDep(r, func(d *RuntimeDeps) (ReverseExtractEngine, bool) {
+		eng, ok := d.Pipeline.(ReverseExtractEngine)
+		return eng, ok && eng != nil
+	})
 }
 
-func (r *Runtime) trackReverseExtractEngine(callCtx context.Context) (ReverseExtractEngine, context.Context, func(), error) {
-	if r == nil {
-		return nil, nil, nil, ErrRuntimeNotReady
-	}
-	r.mu.RLock()
-	if !r.ready || r.closed {
-		r.mu.RUnlock()
-		return nil, nil, nil, ErrRuntimeNotReady
-	}
-	eng, ok := r.deps.Pipeline.(ReverseExtractEngine)
-	if !ok || eng == nil {
-		r.mu.RUnlock()
-		return nil, nil, nil, ErrRuntimeNotReady
-	}
-	baseCtx := r.baseCtx
-	r.activeWG.Add(1)
-	r.mu.RUnlock()
-
-	engCtx, cancel := context.WithCancel(callCtx)
-	var stopWatch func() bool
-	if baseCtx != nil {
-		stopWatch = context.AfterFunc(baseCtx, cancel)
-	}
-	release := func() {
-		if stopWatch != nil {
-			stopWatch()
-		}
-		cancel()
-		r.activeWG.Done()
-	}
-	return eng, engCtx, release, nil
+func (r *Runtime) trackReverseExtractEngine(callCtx context.Context) (ReverseExtractEngine, context.Context, context.CancelFunc, func(), error) {
+	return trackDep(r, callCtx, func(d *RuntimeDeps) (ReverseExtractEngine, bool) {
+		eng, ok := d.Pipeline.(ReverseExtractEngine)
+		return eng, ok && eng != nil
+	})
 }
 
 func (r *Runtime) arcSummaryGenerator() (ArcSummaryGenerator, error) {
-	if r == nil {
-		return nil, ErrRuntimeNotReady
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if !r.ready || r.closed {
-		return nil, ErrRuntimeNotReady
-	}
-	if gen, ok := r.deps.Pipeline.(ArcSummaryGenerator); ok {
-		return gen, nil
-	}
-	if gen, ok := r.deps.AutopilotEngine.(ArcSummaryGenerator); ok {
-		return gen, nil
-	}
-	return nil, ErrRuntimeNotReady
+	return requireDep(r, func(d *RuntimeDeps) (ArcSummaryGenerator, bool) {
+		if gen, ok := d.Pipeline.(ArcSummaryGenerator); ok {
+			return gen, true
+		}
+		if gen, ok := d.AutopilotEngine.(ArcSummaryGenerator); ok {
+			return gen, true
+		}
+		return nil, false
+	})
 }
 
 func (r *Runtime) trackDirectorEngine(callCtx context.Context) (DirectorEngine, context.Context, context.CancelFunc, func(), error) {
-	if r == nil {
-		return nil, nil, nil, nil, ErrRuntimeNotReady
-	}
-	r.mu.RLock()
-	if !r.ready || r.closed {
-		r.mu.RUnlock()
-		return nil, nil, nil, nil, ErrRuntimeNotReady
-	}
-	eng := r.deps.DirectorEngine
-	if eng == nil {
-		if de, ok := r.deps.BatchEngine.(DirectorEngine); ok {
-			eng = de
-		} else if de, ok := r.deps.Pipeline.(DirectorEngine); ok {
-			eng = de
+	return trackDep(r, callCtx, func(d *RuntimeDeps) (DirectorEngine, bool) {
+		if d.DirectorEngine != nil {
+			return d.DirectorEngine, true
 		}
-	}
-	if eng == nil {
-		r.mu.RUnlock()
-		return nil, nil, nil, nil, ErrRuntimeNotReady
-	}
-	baseCtx := r.baseCtx
-	r.activeWG.Add(1)
-	r.mu.RUnlock()
-
-	engCtx, cancel := context.WithCancel(callCtx)
-	var stopWatch func() bool
-	if baseCtx != nil {
-		stopWatch = context.AfterFunc(baseCtx, cancel)
-	}
-	release := func() {
-		if stopWatch != nil {
-			stopWatch()
+		if de, ok := d.BatchEngine.(DirectorEngine); ok {
+			return de, true
 		}
-		cancel()
-		r.activeWG.Done()
-	}
-	return eng, engCtx, cancel, release, nil
+		if de, ok := d.Pipeline.(DirectorEngine); ok {
+			return de, true
+		}
+		return nil, false
+	})
 }
 
 func (r *Runtime) dirPicker() DirPickerFunc {
