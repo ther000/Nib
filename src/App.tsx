@@ -23,6 +23,9 @@ const StudioView = lazy(() =>
 const AtlasView = lazy(() =>
   import("./views/AtlasView").then((m) => ({ default: m.AtlasView }))
 );
+const BookSettingsView = lazy(() =>
+  import("./views/BookSettingsView").then((m) => ({ default: m.BookSettingsView }))
+);
 const SettingsModal = lazy(() =>
   import("./views/SettingsModal").then((m) => ({ default: m.SettingsModal }))
 );
@@ -170,6 +173,11 @@ function NibShell() {
         setActiveTab("atlas");
         return;
       }
+      if ((e.key === "4" || e.code === "Digit4") && !modalOpen && inWorkspace) {
+        e.preventDefault();
+        setActiveTab("book_settings");
+        return;
+      }
       if ((e.key === "\\" || e.code === "Backslash") && !modalOpen && inWorkspace) {
         e.preventDefault();
         toggleStudioDrawer();
@@ -248,6 +256,8 @@ function NibShell() {
                 <ArchitectView />
               ) : activeTab === "studio" ? (
                 <StudioView />
+              ) : activeTab === "book_settings" ? (
+                <BookSettingsView />
               ) : (
                 <AtlasView />
               )}

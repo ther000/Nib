@@ -624,7 +624,13 @@ export function HomeView() {
               <span>近 14 天码字趋势</span>
               <button
                 type="button"
-                onClick={() => openSettings("workspace")}
+                onClick={() => {
+                  if (featuredBook) {
+                    void openBook(featuredBook.id, "book_settings");
+                  } else {
+                    openSettings("workspace");
+                  }
+                }}
                 className="flex items-center gap-1 text-ink-secondary transition-colors hover:text-ink-primary"
               >
                 <SlidersHorizontal className="h-3 w-3" />

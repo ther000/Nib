@@ -24,6 +24,7 @@ const WORKSPACE_TABS: Array<{ id: WorkspaceTab; label: string; shortcut: string 
   { id: "architect", label: "大纲", shortcut: "Ctrl+1" },
   { id: "studio", label: "写作", shortcut: "Ctrl+2" },
   { id: "atlas", label: "设定", shortcut: "Ctrl+3" },
+  { id: "book_settings", label: "设置", shortcut: "Ctrl+4" },
 ];
 
 export function TopBar() {
@@ -353,8 +354,8 @@ export function TopBar() {
         <button
           type="button"
           onClick={() => openSettings("providers")}
-          title="设置"
-          aria-label="设置"
+          title="全局设置"
+          aria-label="全局设置"
           className="flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
         >
           <Settings className="h-3.5 w-3.5" />

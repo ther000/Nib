@@ -1557,8 +1557,8 @@ export function StudioView() {
       notify({
         tone: "warn",
         message: "尚未设置本地 Markdown 导出目录",
-        actionLabel: "前往设置",
-        onAction: () => openSettings("workspace"),
+        actionLabel: "前往本书设置",
+        onAction: () => setActiveTab("book_settings"),
       });
       return;
     }
@@ -1579,7 +1579,7 @@ export function StudioView() {
     } finally {
       setExporting(false);
     }
-  }, [activeBook, notify, openSettings]);
+  }, [activeBook, notify, setActiveTab]);
 
   const toggleGenerate = useCallback(() => {
     if (generating) stopGeneration();

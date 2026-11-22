@@ -19,7 +19,7 @@ import type {
   VersionSource,
 } from "../mygo";
 
-export type WorkspaceTab = "architect" | "studio" | "atlas";
+export type WorkspaceTab = "architect" | "studio" | "atlas" | "book_settings";
 export type AtlasSubTab = "entities" | "relations" | "foreshadowings" | "summaries" | "style" | "audit";
 
 export interface OptionMeta<T extends string = string> {

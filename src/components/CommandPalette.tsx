@@ -38,8 +38,8 @@ interface PaletteCommand {
 
 const SHORTCUT_ITEMS: Array<{ keys: string; desc: string; scope: string }> = [
   { keys: "Ctrl + Shift + P", desc: "打开命令面板 / 快捷键速查", scope: "全局" },
-  { keys: "Ctrl + 1 / 2 / 3", desc: "切换 大纲 / 写作 / 设定", scope: "工作区" },
-  { keys: "Ctrl + S", desc: "保存当前章节正文或大纲节拍", scope: "工作区" },
+  { keys: "Ctrl + 1 / 2 / 3 / 4", desc: "切换 大纲 / 写作 / 设定 / 本书设置", scope: "工作区" },
+  { keys: "Ctrl + S", desc: "保存当前正文、大纲或本书设置", scope: "工作区" },
   { keys: "Ctrl + Enter", desc: "开始或停止 AI 生成本章", scope: "写作" },
   { keys: "Ctrl + H", desc: "打开本章 / 全书查找与替换", scope: "写作" },
   { keys: "F11 / Ctrl+Shift+Z", desc: "进入或退出专注写作模式", scope: "写作" },
@@ -126,6 +126,15 @@ function CommandPaletteBody() {
           shortcut: "Ctrl+3",
           icon: <BookMarked className="h-3.5 w-3.5" />,
           run: () => openAtlasSubTab("entities"),
+        },
+        {
+          id: "nav-book-settings",
+          group: "视图切换",
+          label: "切换到本书设置",
+          keywords: "shezhi benshu book settings daochu rigeng",
+          shortcut: "Ctrl+4",
+          icon: <Settings className="h-3.5 w-3.5" />,
+          run: () => setActiveTab("book_settings"),
         },
         {
           id: "nav-audit",
@@ -266,16 +275,16 @@ function CommandPaletteBody() {
       {
         id: "open-settings-workspace",
         group: "全局操作",
-        label: "打开写作排版与备份设置",
-        keywords: "shezhi paiban zihao beifen settings",
+        label: "打开全局设置（通用与备份）",
+        keywords: "shezhi paiban zihao beifen settings quanju",
         icon: <Settings className="h-3.5 w-3.5" />,
         run: () => openSettings("workspace"),
       },
       {
         id: "open-settings-providers",
         group: "全局操作",
-        label: "打开模型服务与路由设置",
-        keywords: "moxing api settings",
+        label: "打开全局设置（模型服务）",
+        keywords: "moxing api settings quanju",
         icon: <Settings className="h-3.5 w-3.5" />,
         run: () => openSettings("providers"),
       }

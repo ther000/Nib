@@ -21,7 +21,7 @@ const TAB_ITEMS: Array<{
 }> = [
   { id: "providers", label: "模型服务", title: "模型服务与密钥", icon: KeyRound },
   { id: "routes", label: "模型分配", title: "各环节模型分配", icon: GitBranch },
-  { id: "workspace", label: "写作与备份", title: "写作偏好、阅读排版与本地备份", icon: Sliders },
+  { id: "workspace", label: "通用与备份", title: "界面主题、阅读排版与书库备份", icon: Sliders },
   { id: "usage", label: "用量统计", title: "AI 调用与用量统计", icon: BarChart3 },
 ];
 
@@ -57,7 +57,7 @@ function SettingsModalBody({
         {/* Left Navigation Rail */}
         <aside className="flex w-44 shrink-0 flex-col border-r border-border-subtle bg-surface p-3">
           <div className="mb-3 px-2.5 pt-1 text-[13px] font-medium text-ink-primary">
-            设置
+            全局设置
           </div>
           <nav className="flex flex-col gap-1">
             {TAB_ITEMS.map((item) => {
