@@ -189,3 +189,119 @@ export function formatWebNovelProse(raw: string): { text: string; changed: boole
     changed: formatted !== raw,
   };
 }
+
+export interface InlineDiffSegment {
+  kind: DiffKind;
+  text: string;
+}
+
+function tokenizeInline(text: string): string[] {
+  if (!text) return [];
+  const tokens: string[] = [];
+  // 连续英文/数字合并为 1 token，单个空白或单个汉字/标点各自成 token（兼容 UTF-16 代理对）
+  const re = /[A-Za-z0-9_]+|[\s]|[\uD800-\uDBFF][\uDC00-\uDFFF]|./g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) !== null) {
+    tokens.push(match[0]);
+  }
+  return tokens;
+}
+
+function pushMergedInline(out: InlineDiffSegment[], kind: DiffKind, text: string) {
+  if (!text) return;
+  const last = out[out.length - 1];
+  if (last && last.kind === kind) {
+    last.text += text;
+  } else {
+    out.push({ kind, text });
+  }
+}
+
+/**
+ * 词/字级 LCS Diff：用于划词改写预览与局部替换高亮对比。
+ * 当 token 乘积超过上限时降级为首尾公共前后缀 + 整段增删对比。
+ */
+export function diffInlineTokens(oldText: string, newText: string): InlineDiffSegment[] {
+  if (!oldText && !newText) return [];
+  if (oldText === newText) return [{ kind: "equal", text: newText }];
+  if (!oldText) return [{ kind: "added", text: newText }];
+  if (!newText) return [{ kind: "removed", text: oldText }];
+
+  const a = tokenizeInline(oldText);
+  const b = tokenizeInline(newText);
+  const n = a.length;
+  const m = b.length;
+
+  let prefix = 0;
+  while (prefix < n && prefix < m && a[prefix] === b[prefix]) {
+    prefix++;
+  }
+  let suffix = 0;
+  while (
+    suffix < n - prefix &&
+    suffix < m - prefix &&
+    a[n - 1 - suffix] === b[m - 1 - suffix]
+  ) {
+    suffix++;
+  }
+
+  const out: InlineDiffSegment[] = [];
+  for (let i = 0; i < prefix; i++) {
+    pushMergedInline(out, "equal", a[i]!);
+  }
+
+  const midA = a.slice(prefix, n - suffix);
+  const midB = b.slice(prefix, m - suffix);
+  const na = midA.length;
+  const mb = midB.length;
+
+  if (na > 0 || mb > 0) {
+    if (na * mb > 160_000) {
+      if (na > 0) pushMergedInline(out, "removed", midA.join(""));
+      if (mb > 0) pushMergedInline(out, "added", midB.join(""));
+    } else {
+      const dp = new Uint32Array((na + 1) * (mb + 1));
+      const stride = mb + 1;
+      for (let i = na - 1; i >= 0; i--) {
+        for (let j = mb - 1; j >= 0; j--) {
+          if (midA[i] === midB[j]) {
+            dp[i * stride + j] = (dp[(i + 1) * stride + (j + 1)] ?? 0) + 1;
+          } else {
+            const down = dp[(i + 1) * stride + j] ?? 0;
+            const right = dp[i * stride + (j + 1)] ?? 0;
+            dp[i * stride + j] = down >= right ? down : right;
+          }
+        }
+      }
+
+      let i = 0;
+      let j = 0;
+      while (i < na && j < mb) {
+        if (midA[i] === midB[j]) {
+          pushMergedInline(out, "equal", midA[i]!);
+          i++;
+          j++;
+        } else if ((dp[(i + 1) * stride + j] ?? 0) >= (dp[i * stride + (j + 1)] ?? 0)) {
+          pushMergedInline(out, "removed", midA[i]!);
+          i++;
+        } else {
+          pushMergedInline(out, "added", midB[j]!);
+          j++;
+        }
+      }
+      while (i < na) {
+        pushMergedInline(out, "removed", midA[i]!);
+        i++;
+      }
+      while (j < mb) {
+        pushMergedInline(out, "added", midB[j]!);
+        j++;
+      }
+    }
+  }
+
+  for (let k = 0; k < suffix; k++) {
+    pushMergedInline(out, "equal", a[n - suffix + k]!);
+  }
+  return out;
+}

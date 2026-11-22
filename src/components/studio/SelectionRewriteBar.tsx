@@ -1,5 +1,8 @@
-import { Sparkles, X } from "lucide-react";
+import { useMemo, useState } from "react";
+import { BookmarkPlus, Sparkles, Trash2, X } from "lucide-react";
+import type { RewritePreset } from "../../mygo";
 import { countWords, isIMEComposing } from "../../lib/constants";
+import { diffInlineTokens } from "../../lib/textDiff";
 
 type RewriteAction = "expand" | "condense" | "dialogue" | "vivid" | "deai" | "custom";
 
@@ -9,8 +12,11 @@ interface SelectionRewriteBarProps {
   selectionRewriting: boolean;
   selectionCustomPrompt: string;
   selectionPreview: string | null;
+  presets: RewritePreset[];
   onChangeCustomPrompt: (value: string) => void;
-  onRunAction: (action: RewriteAction) => void;
+  onRunAction: (action: RewriteAction, customOverride?: string) => void;
+  onSavePreset: (label: string, instruction: string) => Promise<boolean>;
+  onDeletePreset: (id: number) => Promise<void>;
   onDismissBar: () => void;
   onCancelPreview: () => void;
   onApplyPreview: () => void;
@@ -30,12 +36,48 @@ export function SelectionRewriteBar({
   selectionRewriting,
   selectionCustomPrompt,
   selectionPreview,
+  presets,
   onChangeCustomPrompt,
   onRunAction,
+  onSavePreset,
+  onDeletePreset,
   onDismissBar,
   onCancelPreview,
   onApplyPreview,
 }: SelectionRewriteBarProps) {
+  const [savingFormOpen, setSavingFormOpen] = useState(false);
+  const [presetLabel, setPresetLabel] = useState("");
+  const [savingPreset, setSavingPreset] = useState(false);
+  const [previewMode, setPreviewMode] = useState<"diff" | "clean">("diff");
+
+  const inlineDiff = useMemo(() => {
+    if (selectionPreview === null || selectionRewriting) return [];
+    return diffInlineTokens(selectedText, selectionPreview);
+  }, [selectedText, selectionPreview, selectionRewriting]);
+
+  const openSaveForm = () => {
+    const trimmed = selectionCustomPrompt.trim();
+    if (!trimmed) return;
+    setPresetLabel(trimmed.slice(0, 8));
+    setSavingFormOpen(true);
+  };
+
+  const handleConfirmSavePreset = async () => {
+    const label = presetLabel.trim();
+    const instruction = selectionCustomPrompt.trim();
+    if (!label || !instruction || savingPreset) return;
+    setSavingPreset(true);
+    try {
+      const ok = await onSavePreset(label, instruction);
+      if (ok) {
+        setSavingFormOpen(false);
+        setPresetLabel("");
+      }
+    } finally {
+      setSavingPreset(false);
+    }
+  };
+
   return (
     <div className="mb-4 flex flex-col gap-2.5 rounded-xl border border-accent/35 bg-surface p-3 text-xs">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -68,6 +110,37 @@ export function SelectionRewriteBar({
         </div>
       </div>
 
+      {presets.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] text-ink-muted">常用：</span>
+          {presets.map((preset) => (
+            <div
+              key={preset.id}
+              className="group inline-flex items-center overflow-hidden rounded-md border border-border-subtle bg-canvas/80 text-xs"
+            >
+              <button
+                type="button"
+                disabled={selectionRewriting}
+                title={preset.instruction}
+                onClick={() => onRunAction("custom", preset.instruction)}
+                className="px-2 py-0.5 text-ink-primary transition-colors hover:bg-accent-soft hover:text-accent disabled:opacity-40"
+              >
+                {preset.label}
+              </button>
+              <button
+                type="button"
+                disabled={selectionRewriting}
+                onClick={() => void onDeletePreset(preset.id)}
+                title="删除此常用指令"
+                className="border-l border-border-subtle px-1 py-0.5 text-ink-muted transition-colors hover:bg-danger-soft hover:text-danger disabled:opacity-40"
+              >
+                <Trash2 className="h-2.5 w-2.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="flex items-center gap-2">
         <input
           type="text"
@@ -87,6 +160,18 @@ export function SelectionRewriteBar({
           placeholder="或输入自定义修改要求（例如：改成冷嘲热讽语气、加入拔剑动作）"
           className="min-w-0 flex-1 rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
         />
+        {selectionCustomPrompt.trim() && (
+          <button
+            type="button"
+            disabled={selectionRewriting}
+            onClick={openSaveForm}
+            title="将当前自定义要求保存为常用按钮"
+            className="flex items-center gap-1 rounded-lg border border-border-subtle bg-elevated px-2.5 py-1.5 text-xs text-ink-secondary transition-colors hover:border-accent/50 hover:text-accent disabled:opacity-40"
+          >
+            <BookmarkPlus className="h-3.5 w-3.5" />
+            <span>存为常用</span>
+          </button>
+        )}
         <button
           type="button"
           disabled={selectionRewriting || !selectionCustomPrompt.trim()}
@@ -97,12 +182,108 @@ export function SelectionRewriteBar({
         </button>
       </div>
 
+      {savingFormOpen && (
+        <div className="flex items-center gap-2 rounded-lg border border-border-subtle bg-canvas/80 px-2.5 py-2">
+          <span className="shrink-0 text-[11px] text-ink-secondary">按钮名称</span>
+          <input
+            type="text"
+            autoFocus
+            maxLength={30}
+            value={presetLabel}
+            onChange={(e) => setPresetLabel(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !isIMEComposing(e)) {
+                e.preventDefault();
+                void handleConfirmSavePreset();
+              } else if (e.key === "Escape") {
+                setSavingFormOpen(false);
+              }
+            }}
+            placeholder="例如：冷峻压迫感"
+            className="min-w-0 flex-1 rounded border border-border-subtle bg-surface px-2 py-1 text-xs text-ink-primary focus:border-accent focus:outline-none"
+          />
+          <button
+            type="button"
+            disabled={savingPreset || !presetLabel.trim()}
+            onClick={() => void handleConfirmSavePreset()}
+            className="rounded bg-accent px-2.5 py-1 text-[11px] font-medium text-canvas disabled:opacity-40"
+          >
+            {savingPreset ? "保存中…" : "保存"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setSavingFormOpen(false)}
+            className="rounded px-2 py-1 text-[11px] text-ink-muted hover:text-ink-primary"
+          >
+            取消
+          </button>
+        </div>
+      )}
+
       {selectionPreview !== null && (
         <div className="flex flex-col gap-2 rounded-lg border border-border-subtle bg-canvas p-3">
-          <div className="text-xs font-medium text-ink-secondary">改写预览</div>
-          <div className="max-h-48 overflow-y-auto whitespace-pre-wrap text-[13px] leading-relaxed text-ink-primary">
-            {selectionPreview || "正在生成…"}
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs font-medium text-ink-secondary">
+              {selectionRewriting ? "正在生成改写预览…" : "改写预览"}
+            </div>
+            {!selectionRewriting && selectionPreview && (
+              <div className="flex items-center gap-1 rounded border border-border-subtle bg-surface p-0.5 text-[10.5px]">
+                <button
+                  type="button"
+                  onClick={() => setPreviewMode("diff")}
+                  className={`rounded px-1.5 py-0.5 transition-colors ${
+                    previewMode === "diff"
+                      ? "bg-accent-soft font-medium text-accent"
+                      : "text-ink-secondary hover:text-ink-primary"
+                  }`}
+                >
+                  词级对比
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewMode("clean")}
+                  className={`rounded px-1.5 py-0.5 transition-colors ${
+                    previewMode === "clean"
+                      ? "bg-accent-soft font-medium text-accent"
+                      : "text-ink-secondary hover:text-ink-primary"
+                  }`}
+                >
+                  纯净译文
+                </button>
+              </div>
+            )}
           </div>
+
+          <div className="max-h-52 overflow-y-auto whitespace-pre-wrap text-[13px] leading-relaxed text-ink-primary">
+            {selectionRewriting || previewMode === "clean" ? (
+              selectionPreview || "正在生成…"
+            ) : (
+              inlineDiff.map((seg, i) => {
+                if (seg.kind === "equal") {
+                  return <span key={i}>{seg.text}</span>;
+                }
+                if (seg.kind === "removed") {
+                  return (
+                    <del
+                      key={i}
+                      className="rounded-sm bg-danger-soft/75 px-0.5 text-danger line-through"
+                    >
+                      {seg.text}
+                    </del>
+                  );
+                }
+                return (
+                  <ins
+                    key={i}
+                    className="rounded-sm bg-ok-soft/75 px-0.5 text-ok no-underline"
+                  >
+                    {seg.text}
+                  </ins>
+                );
+              })
+            )}
+          </div>
+
           <div className="flex items-center justify-end gap-2">
             <button
               type="button"

@@ -35,6 +35,7 @@ import {
   getLintSeverityMeta,
   getSceneTypeLabel,
 } from "../../lib/constants";
+import { parseSensitiveImportLines } from "../../lib/studioHelpers";
 
 interface SampleEditorState {
   id: number;
@@ -52,6 +53,7 @@ interface RuleEditorState {
   severity: LintSeverity;
   maxPerChapter: string;
   hint: string;
+  replacement: string;
   enabled: boolean;
 }
 
@@ -290,6 +292,7 @@ export function StyleRulesBoard() {
         severity: rule.severity,
         maxPerChapter: rule.maxPerChapter,
         hint: rule.hint,
+        replacement: rule.replacement ?? "",
         enabled: !rule.enabled,
       });
       await loadRules();
@@ -316,11 +319,12 @@ export function StyleRulesBoard() {
         severity: ruleEditor.severity,
         maxPerChapter: maxPer,
         hint: ruleEditor.hint.trim(),
+        replacement: ruleEditor.replacement.trim(),
         enabled: ruleEditor.enabled,
       });
       await loadRules();
       setRuleEditor(null);
-      notify({ tone: "ok", message: "去 AI 味规则已保存" });
+      notify({ tone: "ok", message: "规则已保存" });
     } catch (err) {
       notify({ tone: "danger", message: "保存规则失败", detail: formatErrorMessage(err) });
     } finally {
@@ -341,12 +345,9 @@ export function StyleRulesBoard() {
 
   const handleImportSensitiveWords = async () => {
     if (!activeBook || importingSensitive) return;
-    const rawWords = sensitiveText
-      .split(/[\r\n,，、;；]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const entries = parseSensitiveImportLines(sensitiveText);
     const existing = new Set(rules.map((r) => r.pattern.trim()));
-    const toAdd = Array.from(new Set(rawWords)).filter((w) => !existing.has(w));
+    const toAdd = entries.filter((e) => !existing.has(e.pattern));
     if (toAdd.length === 0) {
       notify({ tone: "warn", message: "没有需要新增的敏感词或禁词（可能均已存在）" });
       return;
@@ -354,16 +355,19 @@ export function StyleRulesBoard() {
     setImportingSensitive(true);
     try {
       let added = 0;
-      for (const word of toAdd) {
+      for (const entry of toAdd) {
         await StyleService.upsertDeaiRule({
           id: 0,
           bookId: activeBook.id,
-          category: "cliche",
-          pattern: word,
+          category: "sensitive",
+          pattern: entry.pattern,
           isRegex: false,
           severity: "error",
           maxPerChapter: 0,
-          hint: "发文敏感/违禁词：请替换或删改后再发布",
+          hint: entry.replacement
+            ? `敏感/违禁词：建议一键替换为「${entry.replacement}」`
+            : "发文敏感/违禁词：请替换或删改后再发布",
+          replacement: entry.replacement,
           enabled: true,
         });
         added++;
@@ -375,7 +379,7 @@ export function StyleRulesBoard() {
       notify({
         tone: "ok",
         message: `已批量导入 ${added} 条敏感/违禁词规则`,
-        detail: "写作台本地扫描将 0 成本实时标红告警",
+        detail: "写作台本地扫描将 0 成本实时标红告警并支持一键替换",
       });
     } catch (err) {
       notify({ tone: "danger", message: "批量导入敏感词失败", detail: formatErrorMessage(err) });
@@ -386,11 +390,6 @@ export function StyleRulesBoard() {
 
   const filteredRules = useMemo(() => {
     if (catFilter === "all") return rules;
-    if (catFilter === "sensitive") {
-      return rules.filter(
-        (r) => r.hint.includes("敏感") || r.hint.includes("违禁") || r.hint.includes("禁词")
-      );
-    }
     return rules.filter((r) => r.category === catFilter);
   }, [rules, catFilter]);
 
@@ -732,24 +731,15 @@ export function StyleRulesBoard() {
                     onClick={() => setCatFilter(cat.value)}
                     className={`rounded px-2 py-1 text-xs transition-colors ${
                       catFilter === cat.value
-                        ? "bg-accent-soft font-medium text-accent"
+                        ? cat.value === "sensitive"
+                          ? "bg-danger-soft font-medium text-danger"
+                          : "bg-accent-soft font-medium text-accent"
                         : "text-ink-secondary hover:text-ink-primary"
                     }`}
                   >
                     {cat.label}
                   </button>
                 ))}
-                <button
-                  type="button"
-                  onClick={() => setCatFilter("sensitive")}
-                  className={`rounded px-2 py-1 text-xs transition-colors ${
-                    catFilter === "sensitive"
-                      ? "bg-danger-soft font-medium text-danger"
-                      : "text-ink-secondary hover:text-ink-primary"
-                  }`}
-                >
-                  敏感/禁词
-                </button>
               </div>
 
               <button
@@ -767,13 +757,16 @@ export function StyleRulesBoard() {
                   setRuleEditor({
                     id: 0,
                     bookId: activeBook?.id ?? 0,
-                    category:
-                      catFilter === "all" || catFilter === "sensitive" ? "cliche" : catFilter,
+                    category: catFilter === "all" ? "cliche" : catFilter,
                     pattern: "",
                     isRegex: false,
                     severity: "error",
                     maxPerChapter: "0",
-                    hint: catFilter === "sensitive" ? "发文敏感/违禁词：请替换或删改后再发布" : "",
+                    hint:
+                      catFilter === "sensitive"
+                        ? "发文敏感/违禁词：请替换或删改后再发布"
+                        : "",
+                    replacement: "",
                     enabled: true,
                   })
                 }
@@ -822,6 +815,11 @@ export function StyleRulesBoard() {
                             Regex
                           </span>
                         )}
+                        {rule.replacement && (
+                          <span className="rounded bg-ok-soft px-1.5 py-0.5 text-[10px] font-medium text-ok">
+                            →「{rule.replacement}」
+                          </span>
+                        )}
                         <span className="nib-mono text-[10.5px] text-ink-muted">
                           上限 {rule.maxPerChapter}/章
                         </span>
@@ -847,6 +845,7 @@ export function StyleRulesBoard() {
                           severity: rule.severity,
                           maxPerChapter: String(rule.maxPerChapter),
                           hint: rule.hint,
+                          replacement: rule.replacement ?? "",
                           enabled: rule.enabled,
                         })
                       }
@@ -1139,14 +1138,14 @@ export function StyleRulesBoard() {
             </div>
             <div className="flex flex-col gap-3 p-5">
               <div className="text-xs leading-relaxed text-ink-secondary">
-                每行一个词（或使用逗号、顿号分隔）。导入后将自动作为本书的 0 成本本地扫描规则，发文前一键标红提示。
+                每行一个词（支持逗号、顿号分隔），也支持 <span className="nib-mono text-ink-primary">敏感词=替换词</span> 或 <span className="nib-mono text-ink-primary">敏感词-&gt;替换词</span> 指定一键脱敏替换词。
               </div>
               <textarea
                 rows={7}
                 autoFocus
                 value={sensitiveText}
                 onChange={(e) => setSensitiveText(e.target.value)}
-                placeholder={"例如：\n违禁词A\n违禁词B\n角色旧名C"}
+                placeholder={"例如：\n违禁词A=安全词A\n违禁词B -> 安全词B\n角色旧名C"}
                 className="w-full resize-y rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
               />
             </div>
@@ -1283,18 +1282,33 @@ export function StyleRulesBoard() {
                 </div>
                 <div>
                   <label className="mb-1 block text-xs text-ink-secondary">
-                    修改建议提示
+                    一键替换词（可选）
                   </label>
                   <input
                     type="text"
-                    value={ruleEditor.hint}
+                    value={ruleEditor.replacement}
                     onChange={(e) =>
-                      setRuleEditor({ ...ruleEditor, hint: e.target.value })
+                      setRuleEditor({ ...ruleEditor, replacement: e.target.value })
                     }
-                    placeholder="改用具体动作或短句台词"
+                    placeholder="用于敏感词或固定禁用词的一键安全替换"
                     className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs text-ink-secondary">
+                  修改建议提示
+                </label>
+                <input
+                  type="text"
+                  value={ruleEditor.hint}
+                  onChange={(e) =>
+                    setRuleEditor({ ...ruleEditor, hint: e.target.value })
+                  }
+                  placeholder="改用具体动作或短句台词"
+                  className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent focus:outline-none"
+                />
               </div>
             </div>
 

@@ -156,6 +156,9 @@ type StyleStore interface {
 	ListDeaiRules(ctx context.Context, bookID int64) ([]domain.DeaiRule, error)
 	UpsertDeaiRule(ctx context.Context, in domain.UpsertDeaiRuleInput) (domain.DeaiRule, error)
 	DeleteDeaiRule(ctx context.Context, id int64) error
+	ListRewritePresets(ctx context.Context, bookID int64) ([]domain.RewritePreset, error)
+	UpsertRewritePreset(ctx context.Context, in domain.UpsertRewritePresetInput) (domain.RewritePreset, error)
+	DeleteRewritePreset(ctx context.Context, id int64) error
 	GetChapterAudit(ctx context.Context, chapterID int64) (domain.ChapterAudit, error)
 }
 

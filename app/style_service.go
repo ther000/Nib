@@ -176,6 +176,49 @@ func (s *StyleService) DeleteDeaiRule(ctx context.Context, id int64) error {
 	return ss.DeleteDeaiRule(ctx, id)
 }
 
+// ListRewritePresets 查询划词微调常用指令预设（bookID=0 返回全局，bookID>0 返回全局+本书预设）。
+func (s *StyleService) ListRewritePresets(ctx context.Context, bookID int64) ([]domain.RewritePreset, error) {
+	if bookID < 0 {
+		return nil, &domain.ValidationError{Field: "bookId", Message: "书籍 ID 不能为负数"}
+	}
+	ss, err := s.rt.styleStore()
+	if err != nil {
+		return nil, err
+	}
+	presets, err := ss.ListRewritePresets(ctx, bookID)
+	if err != nil {
+		return nil, err
+	}
+	if presets == nil {
+		return []domain.RewritePreset{}, nil
+	}
+	return presets, nil
+}
+
+// UpsertRewritePreset 新增或更新划词微调常用指令预设。
+func (s *StyleService) UpsertRewritePreset(ctx context.Context, in domain.UpsertRewritePresetInput) (domain.RewritePreset, error) {
+	if err := in.Validate(); err != nil {
+		return domain.RewritePreset{}, err
+	}
+	ss, err := s.rt.styleStore()
+	if err != nil {
+		return domain.RewritePreset{}, err
+	}
+	return ss.UpsertRewritePreset(ctx, in)
+}
+
+// DeleteRewritePreset 删除指定的划词微调常用指令预设。
+func (s *StyleService) DeleteRewritePreset(ctx context.Context, id int64) error {
+	if err := validatePositiveID("id", id); err != nil {
+		return err
+	}
+	ss, err := s.rt.styleStore()
+	if err != nil {
+		return err
+	}
+	return ss.DeleteRewritePreset(ctx, id)
+}
+
 // GetChapterAudit 读取指定章节最近一次持久化的质检与手术润色报告。
 func (s *StyleService) GetChapterAudit(ctx context.Context, chapterID int64) (domain.ChapterAudit, error) {
 	if err := validatePositiveID("chapterId", chapterID); err != nil {

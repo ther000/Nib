@@ -16,6 +16,7 @@ import {
   StyleService,
   type ApplySurgicalDiffResult,
   type ChapterAudit,
+  type LintIssue,
 } from "../mygo";
 import {
   formatErrorMessage,
@@ -40,6 +41,7 @@ interface QualityAuditPanelProps {
   onRunLocalLint: () => Promise<void>;
   onRunSurgicalPolish: (targetParagraphs: number[]) => Promise<void>;
   onStopSurgicalPolish: () => void;
+  onQuickReplaceIssue?: (issue: LintIssue, replacement: string) => void;
   onNotify: (input: {
     tone: "info" | "ok" | "warn" | "danger";
     message: string;
@@ -61,6 +63,7 @@ export function QualityAuditPanel({
   onRunLocalLint,
   onRunSurgicalPolish,
   onStopSurgicalPolish,
+  onQuickReplaceIssue,
   onNotify,
 }: QualityAuditPanelProps) {
   const [filter, setFilter] = useState<AuditFilter>("all");
@@ -576,17 +579,37 @@ export function QualityAuditPanel({
                           )}
                         </div>
 
-                        <button
-                          type="button"
-                          disabled={polishingParagraphs}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void onRunSurgicalPolish([issue.paragraphIndex]);
-                          }}
-                          className="shrink-0 text-[10.5px] font-medium text-accent hover:opacity-80"
-                        >
-                          润色
-                        </button>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          {onQuickReplaceIssue &&
+                            (issue.replacement || issue.category === "sensitive") && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onQuickReplaceIssue(
+                                    issue,
+                                    issue.replacement ?? ""
+                                  );
+                                }}
+                                className="rounded bg-ok-soft px-1.5 py-0.5 text-[10.5px] font-medium text-ok hover:bg-ok hover:text-white"
+                              >
+                                {issue.replacement
+                                  ? `替换为「${issue.replacement}」`
+                                  : "一键删去"}
+                              </button>
+                            )}
+                          <button
+                            type="button"
+                            disabled={polishingParagraphs}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void onRunSurgicalPolish([issue.paragraphIndex]);
+                            }}
+                            className="shrink-0 text-[10.5px] font-medium text-accent hover:opacity-80"
+                          >
+                            润色
+                          </button>
+                        </div>
                       </div>
 
                       {issue.hint && (

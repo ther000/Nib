@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { diffParagraphs, formatWebNovelProse } from "./textDiff";
+import { diffInlineTokens, diffParagraphs, formatWebNovelProse } from "./textDiff";
 
 describe("diffParagraphs", () => {
   test("computes added, removed, and unchanged blocks accurately", () => {
@@ -42,5 +42,35 @@ describe("formatWebNovelProse", () => {
     const res = formatWebNovelProse(clean);
     expect(res.changed).toBe(false);
     expect(res.text).toBe(clean);
+  });
+});
+
+describe("diffInlineTokens", () => {
+  test("handles empty and identical texts", () => {
+    expect(diffInlineTokens("", "")).toEqual([]);
+    expect(diffInlineTokens("拔剑出鞘", "拔剑出鞘")).toEqual([
+      { kind: "equal", text: "拔剑出鞘" },
+    ]);
+    expect(diffInlineTokens("", "新增句")).toEqual([{ kind: "added", text: "新增句" }]);
+    expect(diffInlineTokens("旧句", "")).toEqual([{ kind: "removed", text: "旧句" }]);
+  });
+
+  test("highlights inline CJK edits, punctuation changes, and multi-paragraph edits", () => {
+    const segs = diffInlineTokens(
+      "林渊嘴角勾起，拔出铁剑。\n\n他缓缓说道：“走。”",
+      "林渊神色微冷，抽剑出鞘！\n\n他沉声喝道：“走。”"
+    );
+    const reconstructedOld = segs
+      .filter((s) => s.kind !== "added")
+      .map((s) => s.text)
+      .join("");
+    const reconstructedNew = segs
+      .filter((s) => s.kind !== "removed")
+      .map((s) => s.text)
+      .join("");
+    expect(reconstructedOld).toBe("林渊嘴角勾起，拔出铁剑。\n\n他缓缓说道：“走。”");
+    expect(reconstructedNew).toBe("林渊神色微冷，抽剑出鞘！\n\n他沉声喝道：“走。”");
+    expect(segs.some((s) => s.kind === "removed" && s.text.includes("嘴角勾起"))).toBe(true);
+    expect(segs.some((s) => s.kind === "added" && s.text.includes("神色微冷"))).toBe(true);
   });
 });

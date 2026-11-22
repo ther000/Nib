@@ -304,3 +304,59 @@ func TestLintPreservesBothOverlappingParagraphRules(t *testing.T) {
 		t.Fatalf("expected both wall-of-text and psych-monologue-run on paragraph 2, got %+v", issues)
 	}
 }
+
+func TestLintSensitiveRulesAndReplacements(t *testing.T) {
+	rules := []domain.DeaiRule{
+		{
+			ID:          101,
+			BookID:      1,
+			Category:    domain.DeaiCategorySensitive,
+			Pattern:     "违禁词甲",
+			Severity:    domain.LintSeverityError,
+			Replacement: "替代词甲",
+			Enabled:     true,
+		},
+		{
+			ID:          102,
+			BookID:      1,
+			Category:    domain.DeaiCategorySensitive,
+			Pattern:     `敏感(短语|词组)`,
+			IsRegex:     true,
+			Severity:    domain.LintSeverityWarn,
+			Hint:        "自定义提示",
+			Replacement: "安全表达",
+			Enabled:     true,
+		},
+		{
+			ID:          103,
+			BookID:      1,
+			Category:    domain.DeaiCategorySensitive,
+			Pattern:     "已禁用词条",
+			Severity:    domain.LintSeverityError,
+			Replacement: "不应替换",
+			Enabled:     false,
+		},
+	}
+
+	content := "第一段包含违禁词甲和已禁用词条。\n\n第二段出现了敏感短语需要修改。"
+	issues, score := Lint(content, rules, domain.DefaultStyleProfile(1))
+	if len(issues) != 2 {
+		t.Fatalf("expected 2 sensitive issues, got %d: %+v", len(issues), issues)
+	}
+	if score >= 100 {
+		t.Fatalf("expected score < 100, got %d", score)
+	}
+
+	if issues[0].Category != domain.DeaiCategorySensitive ||
+		issues[0].MatchedText != "违禁词甲" ||
+		issues[0].Replacement != "替代词甲" ||
+		!strings.Contains(issues[0].Hint, "敏感") {
+		t.Fatalf("unexpected first sensitive issue: %+v", issues[0])
+	}
+	if issues[1].Category != domain.DeaiCategorySensitive ||
+		issues[1].MatchedText != "敏感短语" ||
+		issues[1].Replacement != "安全表达" ||
+		issues[1].Hint != "自定义提示" {
+		t.Fatalf("unexpected second sensitive issue: %+v", issues[1])
+	}
+}

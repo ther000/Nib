@@ -22,7 +22,10 @@ const (
 		id, book_id, scene_type, title, excerpt, char_count, created_at
 	`
 	deaiRuleColumns = `
-		id, book_id, category, pattern, is_regex, severity, max_per_chapter, hint, enabled
+		id, book_id, category, pattern, is_regex, severity, max_per_chapter, hint, replacement, enabled
+	`
+	rewritePresetColumns = `
+		id, book_id, label, instruction, sort_order, created_at
 	`
 	chapterAuditColumns = `
 		id, chapter_id, lint_json, critic_json, diffs_json,
@@ -257,6 +260,7 @@ func (s *Store) ListDeaiRules(ctx context.Context, bookID int64) ([]domain.DeaiR
 				WHEN 'cliche'     THEN 1
 				WHEN 'structure'  THEN 2
 				WHEN 'formatting' THEN 3
+				WHEN 'sensitive'  THEN 4
 				ELSE 9
 			END,
 			book_id ASC,
@@ -314,11 +318,11 @@ func (s *Store) UpsertDeaiRule(ctx context.Context, in domain.UpsertDeaiRuleInpu
 			res, err := tx.ExecContext(ctx, `
 				INSERT INTO deai_rules (
 					book_id, category, pattern, is_regex,
-					severity, max_per_chapter, hint, enabled
+					severity, max_per_chapter, hint, replacement, enabled
 				)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			`, in.BookID, string(in.Category), pattern, boolToInt(in.IsRegex),
-				string(severity), in.MaxPerChapter, strings.TrimSpace(in.Hint), boolToInt(in.Enabled))
+				string(severity), in.MaxPerChapter, strings.TrimSpace(in.Hint), strings.TrimSpace(in.Replacement), boolToInt(in.Enabled))
 			if err != nil {
 				return mapSQLiteError(err)
 			}
@@ -346,10 +350,11 @@ func (s *Store) UpsertDeaiRule(ctx context.Context, in domain.UpsertDeaiRuleInpu
 			    severity = ?,
 			    max_per_chapter = ?,
 			    hint = ?,
+			    replacement = ?,
 			    enabled = ?
 			WHERE id = ?
 		`, string(in.Category), pattern, boolToInt(in.IsRegex),
-			string(severity), in.MaxPerChapter, strings.TrimSpace(in.Hint), boolToInt(in.Enabled), in.ID); err != nil {
+			string(severity), in.MaxPerChapter, strings.TrimSpace(in.Hint), strings.TrimSpace(in.Replacement), boolToInt(in.Enabled), in.ID); err != nil {
 			return mapSQLiteError(err)
 		}
 		result, err = getDeaiRuleRow(ctx, tx, in.ID)
@@ -544,7 +549,7 @@ func scanDeaiRule(sc rowScanner) (domain.DeaiRule, error) {
 	)
 	if err := sc.Scan(
 		&r.ID, &r.BookID, &category, &r.Pattern, &isRegex,
-		&severity, &r.MaxPerChapter, &r.Hint, &enabled,
+		&severity, &r.MaxPerChapter, &r.Hint, &r.Replacement, &enabled,
 	); err != nil {
 		return domain.DeaiRule{}, mapSQLiteError(err)
 	}
@@ -553,6 +558,135 @@ func scanDeaiRule(sc rowScanner) (domain.DeaiRule, error) {
 	r.Severity = domain.LintSeverity(severity)
 	r.Enabled = enabled != 0
 	return r, nil
+}
+
+// ListRewritePresets 返回全局默认指令与指定书籍专属的划词改写常用指令（按 sort_order ASC, id ASC）。
+func (s *Store) ListRewritePresets(ctx context.Context, bookID int64) ([]domain.RewritePreset, error) {
+	if bookID < 0 {
+		return nil, &domain.ValidationError{Field: "bookId", Message: "书籍 ID 不能为负数"}
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT `+rewritePresetColumns+`
+		FROM rewrite_presets
+		WHERE book_id = 0 OR (? > 0 AND book_id = ?)
+		ORDER BY sort_order ASC, id ASC
+	`, bookID, bookID)
+	if err != nil {
+		return nil, mapSQLiteError(err)
+	}
+	defer rows.Close()
+
+	out := make([]domain.RewritePreset, 0)
+	for rows.Next() {
+		p, err := scanRewritePreset(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// UpsertRewritePreset 新增或更新划词微调常用指令预设。
+func (s *Store) UpsertRewritePreset(ctx context.Context, in domain.UpsertRewritePresetInput) (domain.RewritePreset, error) {
+	if err := in.Validate(); err != nil {
+		return domain.RewritePreset{}, err
+	}
+	label := strings.TrimSpace(in.Label)
+	instruction := strings.TrimSpace(in.Instruction)
+
+	var result domain.RewritePreset
+	err := s.withWriteTx(ctx, func(tx *sql.Tx) error {
+		if in.ID <= 0 {
+			if in.BookID > 0 {
+				var exists int
+				if err := tx.QueryRowContext(ctx, `SELECT 1 FROM books WHERE id = ?`, in.BookID).Scan(&exists); err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						return fmt.Errorf("book %d: %w", in.BookID, domain.ErrNotFound)
+					}
+					return mapSQLiteError(err)
+				}
+			}
+			res, err := tx.ExecContext(ctx, `
+				INSERT INTO rewrite_presets (book_id, label, instruction, sort_order)
+				VALUES (?, ?, ?, ?)
+			`, in.BookID, label, instruction, in.SortOrder)
+			if err != nil {
+				return mapSQLiteError(err)
+			}
+			newID, err := res.LastInsertId()
+			if err != nil {
+				return err
+			}
+			result, err = getRewritePresetRow(ctx, tx, newID)
+			return err
+		}
+
+		existing, err := getRewritePresetRow(ctx, tx, in.ID)
+		if err != nil {
+			return err
+		}
+		if existing.BookID > 0 && in.BookID > 0 && existing.BookID != in.BookID {
+			return &domain.ValidationError{Field: "bookId", Message: "预设指令不属于指定书籍"}
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE rewrite_presets
+			SET label = ?, instruction = ?, sort_order = ?
+			WHERE id = ?
+		`, label, instruction, in.SortOrder, in.ID); err != nil {
+			return mapSQLiteError(err)
+		}
+		result, err = getRewritePresetRow(ctx, tx, in.ID)
+		return err
+	})
+	if err != nil {
+		return domain.RewritePreset{}, err
+	}
+	return result, nil
+}
+
+// DeleteRewritePreset 按 ID 删除自定义划词常用指令预设。
+func (s *Store) DeleteRewritePreset(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return &domain.ValidationError{Field: "id", Message: "预设指令 ID 必须大于 0"}
+	}
+	return s.withWriteTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `DELETE FROM rewrite_presets WHERE id = ?`, id)
+		if err != nil {
+			return mapSQLiteError(err)
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return fmt.Errorf("rewrite preset %d: %w", id, domain.ErrNotFound)
+		}
+		return nil
+	})
+}
+
+func scanRewritePreset(sc rowScanner) (domain.RewritePreset, error) {
+	var p domain.RewritePreset
+	if err := sc.Scan(&p.ID, &p.BookID, &p.Label, &p.Instruction, &p.SortOrder, &p.CreatedAt); err != nil {
+		return domain.RewritePreset{}, mapSQLiteError(err)
+	}
+	return p, nil
+}
+
+func getRewritePresetRow(ctx context.Context, q queryRower, id int64) (domain.RewritePreset, error) {
+	row := q.QueryRowContext(ctx, `SELECT `+rewritePresetColumns+` FROM rewrite_presets WHERE id = ?`, id)
+	p, err := scanRewritePreset(row)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return domain.RewritePreset{}, fmt.Errorf("rewrite preset %d: %w", id, domain.ErrNotFound)
+		}
+		return domain.RewritePreset{}, err
+	}
+	return p, nil
 }
 
 func getDeaiRuleRow(ctx context.Context, q queryRower, id int64) (domain.DeaiRule, error) {

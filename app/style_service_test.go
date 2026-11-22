@@ -13,10 +13,12 @@ type fakeStyleStore struct {
 	profile       domain.StyleProfile
 	samples       []domain.StyleSample
 	rules         []domain.DeaiRule
+	presets       []domain.RewritePreset
 	audit         domain.ChapterAudit
 	lastScene     domain.SceneType
 	deletedSample int64
 	deletedRule   int64
+	deletedPreset int64
 }
 
 func (f *fakeStyleStore) GetStyleProfile(_ context.Context, bookID int64) (domain.StyleProfile, error) {
@@ -77,12 +79,32 @@ func (f *fakeStyleStore) UpsertDeaiRule(_ context.Context, in domain.UpsertDeaiR
 		Severity:      in.Severity,
 		MaxPerChapter: in.MaxPerChapter,
 		Hint:          in.Hint,
+		Replacement:   in.Replacement,
 		Enabled:       in.Enabled,
 	}, nil
 }
 
 func (f *fakeStyleStore) DeleteDeaiRule(_ context.Context, id int64) error {
 	f.deletedRule = id
+	return nil
+}
+
+func (f *fakeStyleStore) ListRewritePresets(_ context.Context, _ int64) ([]domain.RewritePreset, error) {
+	return f.presets, nil
+}
+
+func (f *fakeStyleStore) UpsertRewritePreset(_ context.Context, in domain.UpsertRewritePresetInput) (domain.RewritePreset, error) {
+	return domain.RewritePreset{
+		ID:          11,
+		BookID:      in.BookID,
+		Label:       in.Label,
+		Instruction: in.Instruction,
+		SortOrder:   in.SortOrder,
+	}, nil
+}
+
+func (f *fakeStyleStore) DeleteRewritePreset(_ context.Context, id int64) error {
+	f.deletedPreset = id
 	return nil
 }
 
@@ -268,6 +290,23 @@ func TestStyleServiceValidationNormalizationAndExportSync(t *testing.T) {
 	}
 	if err := svc.DeleteDeaiRule(ctx, rule.ID); err != nil || ss.deletedRule != rule.ID {
 		t.Fatalf("DeleteDeaiRule err=%v deleted=%d", err, ss.deletedRule)
+	}
+
+	// ListRewritePresets / Upsert / Delete
+	presets, err := svc.ListRewritePresets(ctx, 0)
+	if err != nil || presets == nil {
+		t.Fatalf("ListRewritePresets(0) = (%+v, %v)", presets, err)
+	}
+	preset, err := svc.UpsertRewritePreset(ctx, domain.UpsertRewritePresetInput{
+		BookID:      1,
+		Label:       "冷峻短句",
+		Instruction: "压缩心理描写，多用动作推进",
+	})
+	if err != nil || preset.Label != "冷峻短句" {
+		t.Fatalf("UpsertRewritePreset = (%+v, %v)", preset, err)
+	}
+	if err := svc.DeleteRewritePreset(ctx, preset.ID); err != nil || ss.deletedPreset != preset.ID {
+		t.Fatalf("DeleteRewritePreset err=%v deleted=%d", err, ss.deletedPreset)
 	}
 
 	// Lint / Critic / GenerateSurgicalDiffs 切片非 nil 归一化

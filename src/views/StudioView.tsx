@@ -25,6 +25,7 @@ import {
   Loader2,
   Maximize2,
   Minimize2,
+  PanelLeft,
   PanelRight,
   Pencil,
   Play,
@@ -46,13 +47,16 @@ import {
   StyleService,
   type ApplyDeltaResult,
   type ApplySurgicalDiffResult,
+  type Beat,
   type Briefing,
   type ChapterAudit,
   type ChapterDelta,
   type ChapterVersion,
   type CriticFinding,
+  type EntitySnapshot,
   type GenChunk,
   type LintIssue,
+  type RewritePreset,
   type SurgicalDiff,
 } from "../mygo";
 import { useApp } from "../stores/AppContext";
@@ -66,6 +70,11 @@ import { FindReplaceBar } from "../components/studio/FindReplaceBar";
 import { SelectionRewriteBar } from "../components/studio/SelectionRewriteBar";
 import { BriefingDrawerTab } from "../components/studio/BriefingDrawerTab";
 import { VersionsDrawerTab } from "../components/studio/VersionsDrawerTab";
+import {
+  StudioReferenceSidebar,
+  type ReferenceTab,
+} from "../components/studio/StudioReferenceSidebar";
+import { applyLintReplacementInContent } from "../lib/studioHelpers";
 import { formatWebNovelProse } from "../lib/textDiff";
 import {
   countWords,
@@ -88,6 +97,8 @@ export function StudioView() {
     activeChapter,
     activeChapterId,
     entities,
+    foreshadowings,
+    memoryRevision,
     providers,
     modelRoutes,
     proseFont,
@@ -168,6 +179,25 @@ export function StudioView() {
 
   // Drawer state
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("briefing");
+
+  // Left 3-in-1 reference sidebar + rewrite presets + snapshots state
+  const [refSidebarOpen, setRefSidebarOpen] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem("nib.studio.refSidebarOpen") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [refSidebarTab, setRefSidebarTab] = useState<ReferenceTab>("history");
+  const [focusedEntityId, setFocusedEntityId] = useState<number | null>(null);
+  const [chapterBeats, setChapterBeats] = useState<Beat[]>([]);
+  const [beatsLoading, setBeatsLoading] = useState(false);
+  const [chapterSnapshots, setChapterSnapshots] = useState<EntitySnapshot[]>([]);
+  const [snapshotsLoading, setSnapshotsLoading] = useState(false);
+  const [refIncludePending, setRefIncludePending] = useState(true);
+  const [rewritePresets, setRewritePresets] = useState<RewritePreset[]>([]);
+  const beatsReqIdRef = useRef(0);
+  const snapshotsReqIdRef = useRef(0);
   const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [briefingLoading, setBriefingLoading] = useState(false);
   const [briefingError, setBriefingError] = useState<string | null>(null);
@@ -283,6 +313,95 @@ export function StudioView() {
   useEffect(() => {
     void loadPendingDelta(activeChapterId);
   }, [activeChapterId, loadPendingDelta]);
+
+  // Persist left reference sidebar toggle
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        "nib.studio.refSidebarOpen",
+        refSidebarOpen ? "1" : "0"
+      );
+    } catch {
+      // ignore storage errors
+    }
+  }, [refSidebarOpen]);
+
+  // Load book rewrite presets
+  useEffect(() => {
+    if (!activeBook?.id) {
+      setRewritePresets([]);
+      return;
+    }
+    let cancelled = false;
+    StyleService.listRewritePresets(activeBook.id)
+      .then((list) => {
+        if (!cancelled) setRewritePresets(list);
+      })
+      .catch(() => {
+        if (!cancelled) setRewritePresets([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBook?.id]);
+
+  // Load current chapter beats for reference beat alignment & entity matching
+  useEffect(() => {
+    if (!activeChapterId) {
+      setChapterBeats([]);
+      return;
+    }
+    const reqId = ++beatsReqIdRef.current;
+    setBeatsLoading(true);
+    LibraryService.listBeats(activeChapterId)
+      .then((list) => {
+        if (mountedRef.current && beatsReqIdRef.current === reqId) {
+          setChapterBeats(list);
+        }
+      })
+      .catch(() => {
+        if (mountedRef.current && beatsReqIdRef.current === reqId) {
+          setChapterBeats([]);
+        }
+      })
+      .finally(() => {
+        if (mountedRef.current && beatsReqIdRef.current === reqId) {
+          setBeatsLoading(false);
+        }
+      });
+  }, [activeChapterId]);
+
+  const loadChapterSnapshots = useCallback(async () => {
+    if (!activeBook?.id || !activeChapter) {
+      setChapterSnapshots([]);
+      return;
+    }
+    const reqId = ++snapshotsReqIdRef.current;
+    setSnapshotsLoading(true);
+    try {
+      const list = await MemoryService.snapshotAt(
+        activeBook.id,
+        activeChapter.globalSeq,
+        refIncludePending
+      );
+      if (mountedRef.current && snapshotsReqIdRef.current === reqId) {
+        setChapterSnapshots(list);
+      }
+    } catch {
+      if (mountedRef.current && snapshotsReqIdRef.current === reqId) {
+        setChapterSnapshots([]);
+      }
+    } finally {
+      if (mountedRef.current && snapshotsReqIdRef.current === reqId) {
+        setSnapshotsLoading(false);
+      }
+    }
+  }, [activeBook?.id, activeChapter, refIncludePending]);
+
+  useEffect(() => {
+    if (!refSidebarOpen && !readingMode) return;
+    void loadChapterSnapshots();
+  }, [refSidebarOpen, readingMode, memoryRevision, loadChapterSnapshots]);
 
   // Load persisted ChapterAudit or run 0-cost local lint
   const runLocalLint = useCallback(
@@ -964,14 +1083,16 @@ export function StudioView() {
   const runSelectionRewrite = useCallback(
     async (
       action: "expand" | "condense" | "dialogue" | "vivid" | "deai" | "custom",
-      overrideRange?: { start: number; end: number; text: string }
+      overrideRange?: { start: number; end: number; text: string },
+      customOverride?: string
     ) => {
       const activeRange = overrideRange ?? selectionRange;
       if (!activeChapter || !activeRange || selectionRewriting) return;
       if (overrideRange) {
         setSelectionRange(overrideRange);
       }
-      if (action === "custom" && !selectionCustomPrompt.trim()) {
+      const effectiveCustom = (customOverride ?? selectionCustomPrompt).trim();
+      if (action === "custom" && !effectiveCustom) {
         notify({ tone: "warn", message: "请先输入自定义改写要求" });
         return;
       }
@@ -1004,8 +1125,7 @@ export function StudioView() {
               Math.min(content.length, activeRange.end + 360)
             ),
             action,
-            customInstruction:
-              action === "custom" ? selectionCustomPrompt.trim() : "",
+            customInstruction: action === "custom" ? effectiveCustom : "",
           },
           channel
         );
@@ -1068,6 +1188,126 @@ export function StudioView() {
     setSelectionCustomPrompt("");
     notify({ tone: "ok", message: "已替换选中片段，将在 3 秒内自动保存" });
   }, [selectionRange, selectionPreview, content, notify]);
+
+  const handleSaveRewritePreset = useCallback(
+    async (label: string, instruction: string): Promise<boolean> => {
+      if (!activeBook) return false;
+      try {
+        const saved = await StyleService.upsertRewritePreset({
+          id: 0,
+          bookId: activeBook.id,
+          label,
+          instruction,
+          sortOrder: rewritePresets.length + 1,
+        });
+        setRewritePresets((prev) => [...prev, saved]);
+        notify({ tone: "ok", message: `已保存常用指令「${saved.label}」` });
+        return true;
+      } catch (err) {
+        notify({
+          tone: "danger",
+          message: "保存常用指令失败",
+          detail: formatErrorMessage(err),
+        });
+        return false;
+      }
+    },
+    [activeBook, rewritePresets.length, notify]
+  );
+
+  const handleDeleteRewritePreset = useCallback(
+    async (id: number) => {
+      try {
+        await StyleService.deleteRewritePreset(id);
+        setRewritePresets((prev) => prev.filter((p) => p.id !== id));
+        notify({ tone: "info", message: "已删除常用指令" });
+      } catch (err) {
+        notify({
+          tone: "danger",
+          message: "删除常用指令失败",
+          detail: formatErrorMessage(err),
+        });
+      }
+    },
+    [notify]
+  );
+
+  const handleInsertEntityName = useCallback(
+    (name: string) => {
+      if (generating || readingMode) return;
+      const el = textareaRef.current;
+      if (!el) {
+        setContent((prev) => prev + name);
+        setDirty(true);
+        return;
+      }
+      const start = el.selectionStart ?? content.length;
+      const end = el.selectionEnd ?? content.length;
+      const next = content.slice(0, start) + name + content.slice(end);
+      setContent(next);
+      setDirty(true);
+      const caret = start + name.length;
+      requestAnimationFrame(() => {
+        el.focus();
+        el.setSelectionRange(caret, caret);
+      });
+    },
+    [generating, readingMode, content]
+  );
+
+  const handleQuickReplaceIssue = useCallback(
+    async (issue: LintIssue, replacement: string) => {
+      if (!activeChapter || generating) return;
+      const res = applyLintReplacementInContent(content, issue, replacement);
+      if (!res.replaced) {
+        notify({
+          tone: "warn",
+          message: "正文已变化，未能定位到原词，请先重新执行本地扫描",
+        });
+        return;
+      }
+      setContent(res.content);
+      setDirty(false);
+      try {
+        const saved = await LibraryService.saveChapterDraft({
+          chapterId: activeChapter.id,
+          title: title.trim() || activeChapter.title,
+          content: res.content,
+          backupSource: "manual_backup",
+        });
+        updateChapterInCache(saved);
+        await runLocalLint(activeChapter.id, true);
+        notify({
+          tone: "ok",
+          message: replacement
+            ? `已替换为「${replacement}」并更新本地扫描`
+            : "已删去目标词条并更新本地扫描",
+        });
+      } catch (err) {
+        setDirty(true);
+        notify({
+          tone: "danger",
+          message: "替换后保存失败",
+          detail: formatErrorMessage(err),
+        });
+      }
+    },
+    [
+      activeChapter,
+      generating,
+      content,
+      title,
+      updateChapterInCache,
+      runLocalLint,
+      notify,
+    ]
+  );
+
+  const handleInspectEntityFromProse = useCallback((snapshot: EntitySnapshot) => {
+    setFocusedEntityId(snapshot.entity.id);
+    setRefSidebarTab("entities");
+    setRefSidebarOpen(true);
+  }, []);
 
   // Chapter & whole-book find/replace helpers
   const chapterFindMatches = useMemo(() => {
@@ -1724,6 +1964,35 @@ export function StudioView() {
         </div>
       )}
 
+      {/* Left 3-in-1 Collapsible Reference Sidebar (History / Beats / Entity Snapshot) */}
+      {!focusMode && refSidebarOpen && (
+        <StudioReferenceSidebar
+          activeChapter={activeChapter}
+          chapters={chapters}
+          currentContent={content}
+          readingMode={readingMode}
+          generating={generating}
+          beats={chapterBeats}
+          beatsLoading={beatsLoading}
+          entities={entities}
+          snapshots={chapterSnapshots}
+          snapshotsLoading={snapshotsLoading}
+          includePending={refIncludePending}
+          foreshadowings={foreshadowings}
+          criticFindings={chapterAudit?.criticFindings ?? []}
+          activeTab={refSidebarTab}
+          focusedEntityId={focusedEntityId}
+          onChangeTab={setRefSidebarTab}
+          onChangeIncludePending={setRefIncludePending}
+          onRefreshSnapshots={() => void loadChapterSnapshots()}
+          onClose={() => setRefSidebarOpen(false)}
+          onSwitchChapter={(cid) => void selectChapter(cid)}
+          onFocusParagraph={scrollToParagraph}
+          onInsertEntityName={handleInsertEntityName}
+          onNotify={notify}
+        />
+      )}
+
       {/* Main Quiet Prose Canvas + Minimal Bottom Bar */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <div
@@ -1735,6 +2004,19 @@ export function StudioView() {
             {!focusMode && (
               <div className="mb-5 flex items-center justify-between gap-2 text-xs text-ink-muted select-none">
                 <div className="flex min-w-0 items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setRefSidebarOpen((v) => !v)}
+                    title={refSidebarOpen ? "收起左侧参照栏" : "展开参照栏（历史章 / 节拍 / 实体速查）"}
+                    className={`flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] transition-colors ${
+                      refSidebarOpen
+                        ? "border-accent/40 bg-accent-soft text-accent"
+                        : "border-border-subtle bg-surface/80 text-ink-secondary hover:border-border-strong hover:text-ink-primary"
+                    }`}
+                  >
+                    <PanelLeft className="h-3 w-3" />
+                    <span>参照</span>
+                  </button>
                   {activeVolumeTitle && (
                     <span className="truncate text-ink-muted">{activeVolumeTitle}</span>
                   )}
@@ -1915,8 +2197,13 @@ export function StudioView() {
                 selectionRewriting={selectionRewriting}
                 selectionCustomPrompt={selectionCustomPrompt}
                 selectionPreview={selectionPreview}
+                presets={rewritePresets}
                 onChangeCustomPrompt={setSelectionCustomPrompt}
-                onRunAction={(action) => void runSelectionRewrite(action)}
+                onRunAction={(action, customOverride) =>
+                  void runSelectionRewrite(action, undefined, customOverride)
+                }
+                onSavePreset={handleSaveRewritePreset}
+                onDeletePreset={handleDeleteRewritePreset}
                 onDismissBar={() => {
                   selectionChannel.stop();
                   setSelectionRewriting(false);
@@ -2072,6 +2359,7 @@ export function StudioView() {
                       }
                       polishing={polishingParagraphs}
                       applyingDiffId={applyingDiffId}
+                      entitySnapshots={chapterSnapshots}
                       onFocus={(pIdx) => setActiveParagraphIndex(pIdx)}
                       onRequestPolish={(pIdx) =>
                         void handleRunSurgicalPolish([pIdx])
@@ -2079,6 +2367,10 @@ export function StudioView() {
                       onApplyDiff={(diffId, accept, customRep) =>
                         void handleApplyInlineDiff(diffId, accept, customRep)
                       }
+                      onQuickReplaceIssue={(iss, rep) =>
+                        void handleQuickReplaceIssue(iss, rep)
+                      }
+                      onInspectEntity={handleInspectEntityFromProse}
                     />
                   ))
                 )}
@@ -2397,6 +2689,9 @@ export function StudioView() {
               }}
               onRunSurgicalPolish={handleRunSurgicalPolish}
               onStopSurgicalPolish={stopSurgicalPolish}
+              onQuickReplaceIssue={(iss, rep) =>
+                void handleQuickReplaceIssue(iss, rep)
+              }
               onNotify={notify}
             />
           )}

@@ -1,6 +1,9 @@
 package domain
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 const (
 	DefaultAvgSentenceChars  = 18.0
@@ -55,11 +58,12 @@ const (
 	DeaiCategoryCliche     DeaiCategory = "cliche"
 	DeaiCategoryStructure  DeaiCategory = "structure"
 	DeaiCategoryFormatting DeaiCategory = "formatting"
+	DeaiCategorySensitive  DeaiCategory = "sensitive"
 )
 
 func (c DeaiCategory) Valid() bool {
 	switch c {
-	case DeaiCategoryCliche, DeaiCategoryStructure, DeaiCategoryFormatting:
+	case DeaiCategoryCliche, DeaiCategoryStructure, DeaiCategoryFormatting, DeaiCategorySensitive:
 		return true
 	default:
 		return false
@@ -74,6 +78,8 @@ func (c DeaiCategory) Label() string {
 		return "句式结构病"
 	case DeaiCategoryFormatting:
 		return "排版与推进病"
+	case DeaiCategorySensitive:
+		return "敏感/违禁词"
 	default:
 		return string(c)
 	}
@@ -302,6 +308,7 @@ type DeaiRule struct {
 	Severity      LintSeverity `json:"severity"`
 	MaxPerChapter int          `json:"maxPerChapter"`
 	Hint          string       `json:"hint"`
+	Replacement   string       `json:"replacement"`
 	Enabled       bool         `json:"enabled"`
 }
 
@@ -315,6 +322,7 @@ type UpsertDeaiRuleInput struct {
 	Severity      LintSeverity `json:"severity"`
 	MaxPerChapter int          `json:"maxPerChapter"`
 	Hint          string       `json:"hint"`
+	Replacement   string       `json:"replacement"`
 	Enabled       bool         `json:"enabled"`
 }
 
@@ -347,6 +355,47 @@ type LintIssue struct {
 	EndRune        int          `json:"endRune"`
 	MatchedText    string       `json:"matchedText"`
 	Hint           string       `json:"hint"`
+	Replacement    string       `json:"replacement,omitempty"`
+}
+
+// RewritePreset 表示写作台划词微调的可复用常用指令预设（对应 rewrite_presets 表）。
+type RewritePreset struct {
+	ID          int64  `json:"id"`
+	BookID      int64  `json:"bookId"`
+	Label       string `json:"label"`
+	Instruction string `json:"instruction"`
+	SortOrder   int    `json:"sortOrder"`
+	CreatedAt   string `json:"createdAt"`
+}
+
+// UpsertRewritePresetInput 是新增或更新划词微调预设指令的入参。
+type UpsertRewritePresetInput struct {
+	ID          int64  `json:"id"`
+	BookID      int64  `json:"bookId"`
+	Label       string `json:"label"`
+	Instruction string `json:"instruction"`
+	SortOrder   int    `json:"sortOrder"`
+}
+
+func (in UpsertRewritePresetInput) Validate() error {
+	if in.BookID < 0 {
+		return newValidationError("bookId", "书籍 ID 不能为负数")
+	}
+	label := strings.TrimSpace(in.Label)
+	if label == "" {
+		return newValidationError("label", "指令名称不能为空")
+	}
+	if utf8.RuneCountInString(label) > 30 {
+		return newValidationError("label", "指令名称不能超过 30 字")
+	}
+	inst := strings.TrimSpace(in.Instruction)
+	if inst == "" {
+		return newValidationError("instruction", "改写指令内容不能为空")
+	}
+	if utf8.RuneCountInString(inst) > 1000 {
+		return newValidationError("instruction", "改写指令内容不能超过 1000 字")
+	}
+	return nil
 }
 
 // CriticFinding 表示独立 Critic 模型盲审发现的吃书冲突、毒点、节拍遗漏或弱钩子问题。

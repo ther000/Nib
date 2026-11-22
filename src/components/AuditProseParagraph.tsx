@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
+  BookMarked,
   Check,
   Pencil,
   ShieldAlert,
@@ -8,12 +9,19 @@ import {
   Wand2,
   X,
 } from "lucide-react";
-import type { CriticFinding, LintIssue, SurgicalDiff } from "../mygo";
+import type {
+  CriticFinding,
+  EntitySnapshot,
+  LintIssue,
+  SurgicalDiff,
+} from "../mygo";
 import {
   getCriticDimensionMeta,
   getDeaiCategoryLabel,
+  getEntityKindLabel,
   getLintSeverityMeta,
 } from "../lib/constants";
+import { resolveEntitySpans } from "../lib/studioHelpers";
 
 interface AuditProseParagraphProps {
   paragraphIndex: number;
@@ -25,6 +33,7 @@ interface AuditProseParagraphProps {
   pendingDiff: SurgicalDiff | null;
   polishing: boolean;
   applyingDiffId: string | null;
+  entitySnapshots?: EntitySnapshot[];
   onFocus: (paragraphIndex: number) => void;
   onRequestPolish: (paragraphIndex: number) => void;
   onApplyDiff: (
@@ -32,6 +41,8 @@ interface AuditProseParagraphProps {
     accept: boolean,
     customReplacement?: string
   ) => void;
+  onQuickReplaceIssue?: (issue: LintIssue, replacement: string) => void;
+  onInspectEntity?: (snapshot: EntitySnapshot) => void;
 }
 
 interface ResolvedSpan {
@@ -121,11 +132,16 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
   pendingDiff,
   polishing,
   applyingDiffId,
+  entitySnapshots,
   onFocus,
   onRequestPolish,
   onApplyDiff,
+  onQuickReplaceIssue,
+  onInspectEntity,
 }: AuditProseParagraphProps) {
   const [selectedIssue, setSelectedIssue] = useState<LintIssue | null>(null);
+  const [selectedEntity, setSelectedEntity] = useState<EntitySnapshot | null>(null);
+  const [inlineSensitiveRep, setInlineSensitiveRep] = useState("");
   const [editingDiff, setEditingDiff] = useState(false);
   const [customReplacement, setCustomReplacement] = useState("");
 
@@ -135,8 +151,13 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
   }, [pendingDiff?.id, pendingDiff?.replacement]);
 
   useEffect(() => {
+    setInlineSensitiveRep(selectedIssue?.replacement ?? "");
+  }, [selectedIssue]);
+
+  useEffect(() => {
     if (!isFocused) {
       setSelectedIssue(null);
+      setSelectedEntity(null);
     }
   }, [isFocused]);
 
@@ -175,15 +196,44 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
     () => resolveLintSpans(runes, lintIssues),
     [runes, lintIssues]
   );
+  const entitySpans = useMemo(() => {
+    if (!entitySnapshots || entitySnapshots.length === 0 || isStreamingLast) {
+      return [];
+    }
+    return resolveEntitySpans(
+      runes,
+      entitySnapshots,
+      inlineSpans.map((sp) => ({ start: sp.start, end: sp.end }))
+    );
+  }, [runes, entitySnapshots, inlineSpans, isStreamingLast]);
 
   const hasAnyFlag =
     lintIssues.length > 0 || criticFindings.length > 0 || pendingDiff !== null;
 
   const renderedText = useMemo<ReactNode>(() => {
-    if (inlineSpans.length === 0) return text;
+    if (inlineSpans.length === 0 && entitySpans.length === 0) return text;
+    type UnifiedSpan =
+      | { kind: "lint"; start: number; end: number; issue: LintIssue }
+      | { kind: "entity"; start: number; end: number; snapshot: EntitySnapshot };
+
+    const merged: UnifiedSpan[] = [
+      ...inlineSpans.map((sp) => ({
+        kind: "lint" as const,
+        start: sp.start,
+        end: sp.end,
+        issue: sp.issue,
+      })),
+      ...entitySpans.map((ep) => ({
+        kind: "entity" as const,
+        start: ep.start,
+        end: ep.end,
+        snapshot: ep.snapshot,
+      })),
+    ].sort((a, b) => a.start - b.start);
+
     const nodes: ReactNode[] = [];
     let cursor = 0;
-    inlineSpans.forEach((sp, i) => {
+    merged.forEach((sp, i) => {
       if (sp.start > cursor) {
         nodes.push(
           <span key={`plain-${i}`}>
@@ -191,30 +241,53 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
           </span>
         );
       }
-      const isErr = sp.issue.severity === "error";
       const sliceText = runes.slice(sp.start, sp.end).join("");
-      nodes.push(
-        <span
-          key={`lint-${i}`}
-          role="button"
-          tabIndex={0}
-          title={`${getDeaiCategoryLabel(sp.issue.category)}：${sp.issue.hint}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onFocus(paragraphIndex);
-            setSelectedIssue((prev) =>
-              prev === sp.issue ? null : sp.issue
-            );
-          }}
-          className={`cursor-pointer rounded-sm px-0.5 underline decoration-dashed decoration-2 underline-offset-4 transition-colors ${
-            isErr
-              ? "bg-danger-soft/45 text-ink-primary decoration-danger hover:bg-danger-soft"
-              : "bg-warn-soft/40 text-ink-primary decoration-warn hover:bg-warn-soft"
-          }`}
-        >
-          {sliceText}
-        </span>
-      );
+      if (sp.kind === "lint") {
+        const isErr = sp.issue.severity === "error";
+        nodes.push(
+          <span
+            key={`lint-${i}`}
+            role="button"
+            tabIndex={0}
+            title={`${getDeaiCategoryLabel(sp.issue.category)}：${sp.issue.hint}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onFocus(paragraphIndex);
+              setSelectedEntity(null);
+              setSelectedIssue((prev) =>
+                prev === sp.issue ? null : sp.issue
+              );
+            }}
+            className={`cursor-pointer rounded-sm px-0.5 underline decoration-dashed decoration-2 underline-offset-4 transition-colors ${
+              isErr
+                ? "bg-danger-soft/45 text-ink-primary decoration-danger hover:bg-danger-soft"
+                : "bg-warn-soft/40 text-ink-primary decoration-warn hover:bg-warn-soft"
+            }`}
+          >
+            {sliceText}
+          </span>
+        );
+      } else {
+        nodes.push(
+          <span
+            key={`ent-${i}`}
+            role="button"
+            tabIndex={0}
+            title={`点击查看「${sp.snapshot.entity.name}」截至本章档案`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onFocus(paragraphIndex);
+              setSelectedIssue(null);
+              setSelectedEntity((prev) =>
+                prev?.entity.id === sp.snapshot.entity.id ? null : sp.snapshot
+              );
+            }}
+            className="cursor-pointer rounded-sm border-b border-dotted border-accent/55 px-0.5 text-ink-primary transition-colors hover:bg-accent-soft/45"
+          >
+            {sliceText}
+          </span>
+        );
+      }
       cursor = sp.end;
     });
     if (cursor < runes.length) {
@@ -223,7 +296,7 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
       );
     }
     return nodes;
-  }, [inlineSpans, runes, text, onFocus, paragraphIndex]);
+  }, [inlineSpans, entitySpans, runes, text, onFocus, paragraphIndex]);
 
   const activeIssue = selectedIssue ?? paragraphLevelIssues[0] ?? null;
 
@@ -339,7 +412,20 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
             )}
           </div>
 
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+            {onQuickReplaceIssue && activeIssue.replacement && (
+              <button
+                type="button"
+                onClick={() => {
+                  onQuickReplaceIssue(activeIssue, activeIssue.replacement!);
+                  setSelectedIssue(null);
+                }}
+                className="flex items-center gap-1 rounded-md bg-ok px-2.5 py-1 text-[11px] font-semibold text-white hover:opacity-90"
+              >
+                <Check className="h-3 w-3" />
+                <span>替换为「{activeIssue.replacement}」</span>
+              </button>
+            )}
             <button
               type="button"
               disabled={polishing}
@@ -357,6 +443,100 @@ export const AuditProseParagraph = memo(function AuditProseParagraph({
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
+        </div>
+      )}
+
+      {isFocused &&
+        activeIssue &&
+        !pendingDiff &&
+        onQuickReplaceIssue &&
+        activeIssue.category === "sensitive" &&
+        !activeIssue.replacement && (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="mt-1.5 flex items-center gap-2 rounded-lg border border-border-subtle bg-surface px-3 py-2 font-ui text-xs"
+          >
+            <span className="shrink-0 text-[11px] text-ink-secondary">
+              敏感词替换：
+            </span>
+            <input
+              type="text"
+              value={inlineSensitiveRep}
+              onChange={(e) => setInlineSensitiveRep(e.target.value)}
+              placeholder="输入安全替换词（留空则直接删去）"
+              className="min-w-0 flex-1 rounded border border-border-subtle bg-canvas px-2 py-1 text-xs text-ink-primary focus:border-accent focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                onQuickReplaceIssue(activeIssue, inlineSensitiveRep);
+                setSelectedIssue(null);
+              }}
+              className="rounded bg-ok px-2.5 py-1 text-[11px] font-semibold text-white hover:opacity-90"
+            >
+              {inlineSensitiveRep ? "一键替换" : "直接删去"}
+            </button>
+          </div>
+        )}
+
+      {/* Inline Entity Snapshot Detail Card */}
+      {isFocused && selectedEntity && !pendingDiff && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="mt-2.5 rounded-lg border border-accent/40 bg-elevated px-3.5 py-2.5 font-ui text-xs"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <BookMarked className="h-3.5 w-3.5 text-accent" />
+              <span className="font-medium text-ink-primary">
+                {selectedEntity.entity.name}
+              </span>
+              <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] text-ink-secondary">
+                {getEntityKindLabel(selectedEntity.entity.kind)}
+              </span>
+              {selectedEntity.pendingEventCount > 0 && (
+                <span className="rounded bg-warn-soft px-1.5 py-0.5 text-[10px] text-warn">
+                  含 {selectedEntity.pendingEventCount} 条未审状态
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5">
+              {onInspectEntity && (
+                <button
+                  type="button"
+                  onClick={() => onInspectEntity(selectedEntity)}
+                  className="rounded border border-border-subtle bg-surface px-2 py-0.5 text-[11px] text-accent hover:border-accent/50"
+                >
+                  在参照栏查看
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setSelectedEntity(null)}
+                className="rounded p-1 text-ink-muted hover:text-ink-primary"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+          {selectedEntity.entity.summary && (
+            <div className="mt-1.5 text-[11.5px] leading-relaxed text-ink-secondary">
+              {selectedEntity.entity.summary}
+            </div>
+          )}
+          {Object.keys(selectedEntity.effectiveAttributes ?? {}).length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {Object.entries(selectedEntity.effectiveAttributes).map(([k, v]) => (
+                <span
+                  key={k}
+                  className="rounded border border-border-subtle bg-canvas px-1.5 py-0.5 text-[10.5px] text-ink-primary"
+                >
+                  <span className="text-ink-muted">{k}：</span>
+                  {String(v)}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

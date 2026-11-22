@@ -375,3 +375,102 @@ func TestChapterAuditDefaultAndRoundTrip(t *testing.T) {
 		t.Fatalf("updated audit mismatch: %+v", updated)
 	}
 }
+
+func TestSensitiveRulesAndRewritePresetsCRUD(t *testing.T) {
+	ctx := context.Background()
+	st := openMemoryStore(t)
+
+	book, err := st.CreateBook(ctx, domain.CreateBookInput{Title: "敏感词与预设测试", Genre: domain.GenreXuanhuan})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+
+	// 1. sensitive 分类 + replacement 字段往返与校验
+	rule, err := st.UpsertDeaiRule(ctx, domain.UpsertDeaiRuleInput{
+		BookID:      book.ID,
+		Category:    domain.DeaiCategorySensitive,
+		Pattern:     "违规原词",
+		Severity:    domain.LintSeverityError,
+		Hint:        "发文敏感词",
+		Replacement: "安全替换词",
+		Enabled:     true,
+	})
+	if err != nil {
+		t.Fatalf("UpsertDeaiRule sensitive: %v", err)
+	}
+	if rule.Category != domain.DeaiCategorySensitive || rule.Replacement != "安全替换词" {
+		t.Fatalf("unexpected saved sensitive rule: %+v", rule)
+	}
+
+	// 更新 replacement
+	ruleUpdated, err := st.UpsertDeaiRule(ctx, domain.UpsertDeaiRuleInput{
+		ID:          rule.ID,
+		BookID:      book.ID,
+		Category:    domain.DeaiCategorySensitive,
+		Pattern:     "违规原词",
+		Severity:    domain.LintSeverityWarn,
+		Hint:        "发文敏感词",
+		Replacement: "新安全词",
+		Enabled:     true,
+	})
+	if err != nil {
+		t.Fatalf("UpsertDeaiRule update replacement: %v", err)
+	}
+	if ruleUpdated.Replacement != "新安全词" || ruleUpdated.Severity != domain.LintSeverityWarn {
+		t.Fatalf("unexpected updated sensitive rule: %+v", ruleUpdated)
+	}
+
+	// 2. RewritePresets CRUD
+	if _, err := st.UpsertRewritePreset(ctx, domain.UpsertRewritePresetInput{
+		BookID:      book.ID,
+		Label:       "   ",
+		Instruction: "不能为空名称",
+	}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("expected ErrValidation for empty label, got %v", err)
+	}
+
+	p1, err := st.UpsertRewritePreset(ctx, domain.UpsertRewritePresetInput{
+		BookID:      book.ID,
+		Label:       "加强压迫感",
+		Instruction: "通过环境声响、对方呼吸停顿和代价感强化威压，删去抽象心理词",
+		SortOrder:   10,
+	})
+	if err != nil {
+		t.Fatalf("UpsertRewritePreset create p1: %v", err)
+	}
+	p0, err := st.UpsertRewritePreset(ctx, domain.UpsertRewritePresetInput{
+		BookID:      0,
+		Label:       "全书通用冷峻风",
+		Instruction: "压缩修饰词，多用短句与动作动词推进",
+		SortOrder:   1,
+	})
+	if err != nil {
+		t.Fatalf("UpsertRewritePreset create global p0: %v", err)
+	}
+
+	list, err := st.ListRewritePresets(ctx, book.ID)
+	if err != nil {
+		t.Fatalf("ListRewritePresets: %v", err)
+	}
+	if len(list) != 2 || list[0].ID != p0.ID || list[1].ID != p1.ID {
+		t.Fatalf("unexpected presets order/count: %+v", list)
+	}
+
+	p1Edited, err := st.UpsertRewritePreset(ctx, domain.UpsertRewritePresetInput{
+		ID:          p1.ID,
+		BookID:      book.ID,
+		Label:       "极端压迫",
+		Instruction: p1.Instruction,
+		SortOrder:   5,
+	})
+	if err != nil || p1Edited.Label != "极端压迫" || p1Edited.SortOrder != 5 {
+		t.Fatalf("UpsertRewritePreset update failed: p=%+v err=%v", p1Edited, err)
+	}
+
+	if err := st.DeleteRewritePreset(ctx, p1.ID); err != nil {
+		t.Fatalf("DeleteRewritePreset: %v", err)
+	}
+	if err := st.DeleteRewritePreset(ctx, p1.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("second DeleteRewritePreset err = %v, want ErrNotFound", err)
+	}
+}

@@ -170,8 +170,13 @@ func Lint(content string, rules []domain.DeaiRule, profile domain.StyleProfile) 
 		}
 		hint := strings.TrimSpace(cr.rule.Hint)
 		if hint == "" {
-			hint = fmt.Sprintf("命中去 AI 味规则「%s」，建议改写为具体动作或对话", cr.rule.Pattern)
+			if cr.rule.Category == domain.DeaiCategorySensitive {
+				hint = fmt.Sprintf("命中敏感/违禁词「%s」，请替换或删改后再发布", cr.rule.Pattern)
+			} else {
+				hint = fmt.Sprintf("命中去 AI 味规则「%s」，建议改写为具体动作或对话", cr.rule.Pattern)
+			}
 		}
+		replacement := strings.TrimSpace(cr.rule.Replacement)
 
 		for pIdx, para := range paragraphs {
 			matches := findPatternMatches(para, cr.rule.Pattern, cr.re)
@@ -189,6 +194,7 @@ func Lint(content string, rules []domain.DeaiRule, profile domain.StyleProfile) 
 					EndRune:        m.endRune,
 					MatchedText:    m.text,
 					Hint:           hint,
+					Replacement:    replacement,
 				})
 			}
 		}

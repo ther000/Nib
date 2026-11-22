@@ -398,6 +398,7 @@ export interface DeaiRule {
   severity: LintSeverity;
   maxPerChapter: number;
   hint: string;
+  replacement: string;
   enabled: boolean;
 }
 
@@ -701,6 +702,7 @@ export interface LintIssue {
   endRune: number;
   matchedText: string;
   hint: string;
+  replacement?: string;
 }
 
 export type LintSeverity = string;
@@ -880,6 +882,15 @@ export interface ReverseExtractRequest {
   maxChapters: number;
 }
 
+export interface RewritePreset {
+  id: number;
+  bookId: number;
+  label: string;
+  instruction: string;
+  sortOrder: number;
+  createdAt: string;
+}
+
 export interface RewriteSelectionRequest {
   chapterId: number;
   selectedText: string;
@@ -1030,6 +1041,7 @@ export interface UpsertDeaiRuleInput {
   severity: LintSeverity;
   maxPerChapter: number;
   hint: string;
+  replacement: string;
   enabled: boolean;
 }
 
@@ -1075,6 +1087,14 @@ export interface UpsertProviderInput {
   models: string[];
   fetchedModels?: string[];
   enabled: boolean;
+}
+
+export interface UpsertRewritePresetInput {
+  id: number;
+  bookId: number;
+  label: string;
+  instruction: string;
+  sortOrder: number;
 }
 
 export interface UpsertScratchNoteInput {
@@ -1359,6 +1379,8 @@ export const StyleService = {
   applySurgicalDiff: bind<[ApplySurgicalDiffInput], ApplySurgicalDiffResult>("StyleService.ApplySurgicalDiff", (in_: ApplySurgicalDiffInput) => [in_]),
   /** DeleteDeaiRule 删除指定的去 AI 味规则。 */
   deleteDeaiRule: bind<[number], void>("StyleService.DeleteDeaiRule", (id: number) => [id]),
+  /** DeleteRewritePreset 删除指定的划词微调常用指令预设。 */
+  deleteRewritePreset: bind<[number], void>("StyleService.DeleteRewritePreset", (id: number) => [id]),
   /** DeleteStyleSample 删除指定的分场景样章锚点。 */
   deleteStyleSample: bind<[number], void>("StyleService.DeleteStyleSample", (id: number) => [id]),
   /** ExtractStyleProfile 从导入的 1~N 段样章文本中提取量化文风指纹并持久化。 */
@@ -1373,6 +1395,8 @@ export const StyleService = {
   lintChapterLocal: bind<[number], ChapterAudit>("StyleService.LintChapterLocal", (chapterID: number) => [chapterID]),
   /** ListDeaiRules 查询去 AI 味黑名单与结构规则（bookID=0 返回全局内置规则，bookID>0 返回合并后的有效规则列表）。 */
   listDeaiRules: bind<[number], DeaiRule[]>("StyleService.ListDeaiRules", (bookID: number) => [bookID]),
+  /** ListRewritePresets 查询划词微调常用指令预设（bookID=0 返回全局，bookID>0 返回全局+本书预设）。 */
+  listRewritePresets: bind<[number], RewritePreset[]>("StyleService.ListRewritePresets", (bookID: number) => [bookID]),
   /** ListStyleSamples 按书籍与可选场景类型（"" / "combat" / "dialogue" / "daily" / "suspense"）查询分场景样章库。 */
   listStyleSamples: bind<[number, string], StyleSample[]>("StyleService.ListStyleSamples", (bookID: number, sceneType: string) => [bookID, sceneType]),
   /** RunCriticAudit 调用 critic 模型路由对照作战简报与章节正文执行 4 维独立盲审（一致性、男频毒点、节拍落点、章末钩子）。 */
@@ -1381,6 +1405,8 @@ export const StyleService = {
   saveStyleProfile: bind<[UpsertStyleProfileInput], StyleProfile>("StyleService.SaveStyleProfile", (in_: UpsertStyleProfileInput) => [in_]),
   /** UpsertDeaiRule 新增或更新去 AI 味规则（支持开关内置规则或添加自定义词条/正则）。 */
   upsertDeaiRule: bind<[UpsertDeaiRuleInput], DeaiRule>("StyleService.UpsertDeaiRule", (in_: UpsertDeaiRuleInput) => [in_]),
+  /** UpsertRewritePreset 新增或更新划词微调常用指令预设。 */
+  upsertRewritePreset: bind<[UpsertRewritePresetInput], RewritePreset>("StyleService.UpsertRewritePreset", (in_: UpsertRewritePresetInput) => [in_]),
   /** UpsertStyleSample 新增或编辑单条分场景样章锚点。 */
   upsertStyleSample: bind<[UpsertStyleSampleInput], StyleSample>("StyleService.UpsertStyleSample", (in_: UpsertStyleSampleInput) => [in_]),
 } as const;

@@ -172,6 +172,7 @@ export const DEAI_CATEGORIES: OptionMeta<DeaiCategory>[] = [
   { value: "cliche", label: "高频套话", shortLabel: "套话" },
   { value: "structure", label: "句式结构病", shortLabel: "结构" },
   { value: "formatting", label: "排版与推进病", shortLabel: "排版" },
+  { value: "sensitive", label: "敏感/违禁词", shortLabel: "敏感词" },
 ];
 
 export const LINT_SEVERITIES: Array<
