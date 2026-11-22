@@ -14,7 +14,8 @@ import (
 const chapterColumns = `
 	id, book_id, volume_id, global_seq, vol_seq, title, status,
 	emotion_tag, hook_type, hook_note, outline_summary, causal_summary,
-	content, word_count, last_briefing_json, created_at, updated_at
+	content, word_count, last_briefing_json, story_time_label, story_day,
+	created_at, updated_at
 `
 
 // ListChapters 返回指定卷下的全部章节（按卷内章序 vol_seq 升序）。
@@ -157,6 +158,17 @@ func (s *Store) UpdateChapterMeta(ctx context.Context, in domain.UpdateChapterMe
 			hookType = existing.HookType
 		}
 
+		storyLabel := existing.StoryTimeLabel
+		storyDay := existing.StoryDay
+		if in.UpdateStoryTimeline {
+			storyLabel = strings.TrimSpace(in.StoryTimeLabel)
+			storyDay = in.StoryDay
+		}
+		var storyDayArg any
+		if storyDay != nil {
+			storyDayArg = *storyDay
+		}
+
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE chapters
 			SET title = ?,
@@ -166,10 +178,12 @@ func (s *Store) UpdateChapterMeta(ctx context.Context, in domain.UpdateChapterMe
 			    hook_note = ?,
 			    outline_summary = ?,
 			    causal_summary = ?,
+			    story_time_label = ?,
+			    story_day = ?,
 			    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			WHERE id = ?
 		`, strings.TrimSpace(in.Title), string(status), string(emotion), string(hookType),
-			in.HookNote, in.OutlineSummary, in.CausalSummary, in.ID); err != nil {
+			in.HookNote, in.OutlineSummary, in.CausalSummary, storyLabel, storyDayArg, in.ID); err != nil {
 			return mapSQLiteError(err)
 		}
 
@@ -990,17 +1004,23 @@ func scanChapter(sc rowScanner) (domain.Chapter, error) {
 		status     string
 		emotionTag string
 		hookType   string
+		storyDay   sql.NullInt64
 	)
 	if err := sc.Scan(
 		&c.ID, &c.BookID, &c.VolumeID, &c.GlobalSeq, &c.VolSeq, &c.Title, &status,
 		&emotionTag, &hookType, &c.HookNote, &c.OutlineSummary, &c.CausalSummary,
-		&c.Content, &c.WordCount, &c.LastBriefingJSON, &c.CreatedAt, &c.UpdatedAt,
+		&c.Content, &c.WordCount, &c.LastBriefingJSON, &c.StoryTimeLabel, &storyDay,
+		&c.CreatedAt, &c.UpdatedAt,
 	); err != nil {
 		return domain.Chapter{}, mapSQLiteError(err)
 	}
 	c.Status = domain.ChapterStatus(status)
 	c.EmotionTag = domain.EmotionTag(emotionTag)
 	c.HookType = domain.HookType(hookType)
+	if storyDay.Valid {
+		d := int(storyDay.Int64)
+		c.StoryDay = &d
+	}
 	return c, nil
 }
 

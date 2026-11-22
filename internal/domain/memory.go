@@ -140,10 +140,92 @@ const (
 	DeltaDecisionKindStatePatch = "state_patch"
 	DeltaDecisionKindForeshadow = "foreshadow"
 	DeltaDecisionKindNewEntity  = "new_entity"
+	DeltaDecisionKindRelation   = "relation"
+	DeltaDecisionKindDeadline   = "deadline"
 
 	MemorySearchSourceChapter = "chapter"
 	MemorySearchSourceEntity  = "entity"
 )
+
+// StoryDeadlineStatus 定义故事内关键期限/倒计时的生命周期状态（对应 story_deadlines.status）。
+type StoryDeadlineStatus string
+
+const (
+	StoryDeadlineActive   StoryDeadlineStatus = "active"
+	StoryDeadlineReached  StoryDeadlineStatus = "reached"
+	StoryDeadlineExpired  StoryDeadlineStatus = "expired"
+	StoryDeadlineCanceled StoryDeadlineStatus = "canceled"
+)
+
+func (s StoryDeadlineStatus) Valid() bool {
+	switch s {
+	case StoryDeadlineActive, StoryDeadlineReached, StoryDeadlineExpired, StoryDeadlineCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s StoryDeadlineStatus) Label() string {
+	switch s {
+	case StoryDeadlineActive:
+		return "倒计时中"
+	case StoryDeadlineReached:
+		return "已如期兑现"
+	case StoryDeadlineExpired:
+		return "已超期未果"
+	case StoryDeadlineCanceled:
+		return "已失效取消"
+	default:
+		return string(s)
+	}
+}
+
+// StoryDeadline 表示书内关键期限或倒计时（如“秘境开启 Day 30”，对应 story_deadlines 表）。
+type StoryDeadline struct {
+	ID              int64               `json:"id"`
+	BookID          int64               `json:"bookId"`
+	Title           string              `json:"title"`
+	StartChapterSeq int                 `json:"startChapterSeq"`
+	TargetDay       int                 `json:"targetDay"`
+	TargetLabel     string              `json:"targetLabel"`
+	EntityID        *int64              `json:"entityId,omitempty"`
+	ForeshadowingID *int64              `json:"foreshadowingId,omitempty"`
+	Status          StoryDeadlineStatus `json:"status"`
+	Note            string              `json:"note"`
+	CreatedAt       string              `json:"createdAt"`
+	UpdatedAt       string              `json:"updatedAt"`
+}
+
+// UpsertStoryDeadlineInput 是新建或编辑故事内期限倒计时的入参。
+type UpsertStoryDeadlineInput struct {
+	ID              int64               `json:"id"`
+	BookID          int64               `json:"bookId"`
+	Title           string              `json:"title"`
+	StartChapterSeq int                 `json:"startChapterSeq"`
+	TargetDay       int                 `json:"targetDay"`
+	TargetLabel     string              `json:"targetLabel"`
+	EntityID        *int64              `json:"entityId,omitempty"`
+	ForeshadowingID *int64              `json:"foreshadowingId,omitempty"`
+	Status          StoryDeadlineStatus `json:"status"`
+	Note            string              `json:"note"`
+}
+
+func (in UpsertStoryDeadlineInput) Validate() error {
+	if in.BookID <= 0 {
+		return newValidationError("bookId", "书籍 ID 必须大于 0")
+	}
+	if strings.TrimSpace(in.Title) == "" {
+		return newValidationError("title", "期限名称不能为空")
+	}
+	if in.StartChapterSeq < 0 {
+		return newValidationError("startChapterSeq", "起始章号不能为负数")
+	}
+	if in.Status != "" && !in.Status.Valid() {
+		return newValidationError("status", "无效的期限状态")
+	}
+	return nil
+}
 
 // EntityStateEvent 表示按章节号递增的事件溯源属性变更记录（对应 entity_state_events 表）。
 type EntityStateEvent struct {
@@ -357,24 +439,53 @@ type DeltaForeshadowUpdate struct {
 	InvolvedEntityIDs []int64               `json:"involvedEntityIds"`
 }
 
+// DeltaRelationChange 表示完章抽取出的角色/势力关系变更提案（upsert 新增/变更 或 end 终止旧关系）。
+type DeltaRelationChange struct {
+	ID             string `json:"id"`
+	Action         string `json:"action"` // "upsert" | "end"
+	RelationID     int64  `json:"relationId,omitempty"`
+	SourceEntityID int64  `json:"sourceEntityId,omitempty"`
+	SourceName     string `json:"sourceName"`
+	TargetEntityID int64  `json:"targetEntityId,omitempty"`
+	TargetName     string `json:"targetName"`
+	RelationType   string `json:"relationType"`
+	Description    string `json:"description"`
+	Reason         string `json:"reason,omitempty"`
+}
+
+// DeltaDeadlineChange 表示完章抽取出的故事内期限/倒计时新建或状态变更提案。
+type DeltaDeadlineChange struct {
+	ID          string `json:"id"`
+	Action      string `json:"action"` // "create" | "update" | "reach" | "expire" | "cancel"
+	DeadlineID  int64  `json:"deadlineId,omitempty"`
+	Title       string `json:"title"`
+	TargetDay   int    `json:"targetDay"`
+	TargetLabel string `json:"targetLabel"`
+	Note        string `json:"note"`
+}
+
 // ChapterDelta 表示完章记忆变更单（对应 chapter_deltas 表）。
 // 抽取结果永不静默入库，必须由作者在审改台确认后才转为 committed。
 type ChapterDelta struct {
-	ID            int64                   `json:"id"`
-	ChapterID     int64                   `json:"chapterId"`
-	CausalSummary string                  `json:"causalSummary"`
-	NewEntities   []DeltaNewEntity        `json:"newEntities"`
-	StatePatches  []DeltaStatePatch       `json:"statePatches"`
-	Foreshadows   []DeltaForeshadowUpdate `json:"foreshadows"`
-	HighRiskFlags int                     `json:"highRiskFlags"`
-	ReviewStatus  DeltaReviewStatus       `json:"reviewStatus"`
-	CreatedAt     string                  `json:"createdAt"`
-	ReviewedAt    string                  `json:"reviewedAt"`
+	ID              int64                   `json:"id"`
+	ChapterID       int64                   `json:"chapterId"`
+	CausalSummary   string                  `json:"causalSummary"`
+	StoryTimeLabel  string                  `json:"storyTimeLabel"`
+	StoryDay        *int                    `json:"storyDay,omitempty"`
+	NewEntities     []DeltaNewEntity        `json:"newEntities"`
+	StatePatches    []DeltaStatePatch       `json:"statePatches"`
+	Foreshadows     []DeltaForeshadowUpdate `json:"foreshadows"`
+	RelationChanges []DeltaRelationChange   `json:"relationChanges"`
+	DeadlineChanges []DeltaDeadlineChange   `json:"deadlineChanges"`
+	HighRiskFlags   int                     `json:"highRiskFlags"`
+	ReviewStatus    DeltaReviewStatus       `json:"reviewStatus"`
+	CreatedAt       string                  `json:"createdAt"`
+	ReviewedAt      string                  `json:"reviewedAt"`
 }
 
 // DeltaDecision 表示作者对记忆变更单中某一条提案的审核结论。
 type DeltaDecision struct {
-	Kind             string `json:"kind"` // "state_patch" | "foreshadow" | "new_entity"
+	Kind             string `json:"kind"` // "state_patch" | "foreshadow" | "new_entity" | "relation" | "deadline"
 	ItemID           string `json:"itemId"`
 	Accept           bool   `json:"accept"`
 	OverrideNewValue string `json:"overrideNewValue,omitempty"`
@@ -382,7 +493,11 @@ type DeltaDecision struct {
 
 func (d DeltaDecision) Validate() error {
 	switch d.Kind {
-	case DeltaDecisionKindStatePatch, DeltaDecisionKindForeshadow, DeltaDecisionKindNewEntity:
+	case DeltaDecisionKindStatePatch,
+		DeltaDecisionKindForeshadow,
+		DeltaDecisionKindNewEntity,
+		DeltaDecisionKindRelation,
+		DeltaDecisionKindDeadline:
 	default:
 		return newValidationError("kind", "无效的变更决策类型")
 	}
@@ -394,10 +509,13 @@ func (d DeltaDecision) Validate() error {
 
 // ApplyDeltaInput 是作者提交记忆变更单审核结论的入参。
 type ApplyDeltaInput struct {
-	DeltaID               int64           `json:"deltaId"`
-	ApplyCausalSummary    bool            `json:"applyCausalSummary"`
-	CausalSummaryOverride string          `json:"causalSummaryOverride,omitempty"`
-	Decisions             []DeltaDecision `json:"decisions"`
+	DeltaID                int64           `json:"deltaId"`
+	ApplyCausalSummary     bool            `json:"applyCausalSummary"`
+	CausalSummaryOverride  string          `json:"causalSummaryOverride,omitempty"`
+	ApplyStoryTimeline     bool            `json:"applyStoryTimeline,omitempty"`
+	StoryTimeLabelOverride string          `json:"storyTimeLabelOverride,omitempty"`
+	StoryDayOverride       *int            `json:"storyDayOverride,omitempty"`
+	Decisions              []DeltaDecision `json:"decisions"`
 }
 
 func (in ApplyDeltaInput) Validate() error {
@@ -417,6 +535,8 @@ type ApplyDeltaResult struct {
 	Delta                 ChapterDelta `json:"delta"`
 	CommittedEvents       int          `json:"committedEvents"`
 	UpdatedForeshadowings int          `json:"updatedForeshadowings"`
+	UpdatedRelations      int          `json:"updatedRelations"`
+	UpdatedDeadlines      int          `json:"updatedDeadlines"`
 	MarkedDirtyChapterIDs []int64      `json:"markedDirtyChapterIds"`
 }
 

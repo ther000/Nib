@@ -73,3 +73,15 @@ func (s *DirectorService) ClearMessages(ctx context.Context, bookID int64) error
 	}
 	return st.ClearDirectorMessages(ctx, bookID)
 }
+
+// UndoDirectorTurn 通过安全撤销点 ID 将书库原子恢复到该轮 AI 导演执行写库工具之前的状态。
+func (s *DirectorService) UndoDirectorTurn(ctx context.Context, snapshotID int64) (string, error) {
+	if err := validatePositiveID("snapshotId", snapshotID); err != nil {
+		return "", err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return "", err
+	}
+	return st.RestoreSafetySnapshot(ctx, snapshotID)
+}

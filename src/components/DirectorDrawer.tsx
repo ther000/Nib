@@ -50,6 +50,7 @@ export function DirectorDrawer() {
   const [liveStatus, setLiveStatus] = useState("");
   const [liveToolCalls, setLiveToolCalls] = useState<DirectorToolCall[]>([]);
   const [undoingVersionId, setUndoingVersionId] = useState<number | null>(null);
+  const [undoingSnapshotId, setUndoingSnapshotId] = useState<number | null>(null);
 
   const {
     open: openStream,
@@ -133,6 +134,26 @@ export function DirectorDrawer() {
     }
   };
 
+  const handleUndoDirectorTurn = async (snapshotId: number) => {
+    if (!activeBook || running || undoingSnapshotId !== null || undoingVersionId !== null) return;
+    setUndoingSnapshotId(snapshotId);
+    try {
+      await DirectorService.undoDirectorTurn(snapshotId);
+      await refreshBookData(activeBook.id, activeChapter?.id ?? null);
+      if (activeChapter?.id && activeChapter.id > 0) {
+        await refreshActiveChapter(activeChapter.id);
+      }
+      bumpMemoryRevision();
+      const refreshedMsgs = await DirectorService.listMessages(activeBook.id);
+      setMessages(refreshedMsgs);
+      notify({ tone: "ok", message: "已撤销本轮 AI 导演的所有书库改动" });
+    } catch (err) {
+      notify({ tone: "danger", message: "撤销本轮改动失败", detail: formatErrorMessage(err) });
+    } finally {
+      setUndoingSnapshotId(null);
+    }
+  };
+
   const handleSend = async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
     if (!text || running) return;
@@ -196,6 +217,7 @@ export function DirectorDrawer() {
           role: "assistant",
           content: reply.reply,
           toolCalls: reply.toolCalls,
+          undoSnapshotId: reply.undoSnapshotId,
           createdAt: new Date().toISOString(),
         },
       ]);
@@ -358,6 +380,24 @@ export function DirectorDrawer() {
                 >
                   {msg.content}
                 </div>
+
+                {msg.role === "assistant" && msg.undoSnapshotId && msg.undoSnapshotId > 0 && (
+                  <button
+                    type="button"
+                    disabled={
+                      running || undoingSnapshotId !== null || undoingVersionId !== null
+                    }
+                    onClick={() => void handleUndoDirectorTurn(msg.undoSnapshotId!)}
+                    className="inline-flex items-center gap-1 rounded-md border border-border-subtle bg-canvas px-2 py-0.5 text-[11px] text-ink-secondary transition-colors hover:border-accent/50 hover:text-accent disabled:opacity-45"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                    <span>
+                      {undoingSnapshotId === msg.undoSnapshotId
+                        ? "正在撤销…"
+                        : "撤销本轮改动"}
+                    </span>
+                  </button>
+                )}
               </div>
             ))}
 

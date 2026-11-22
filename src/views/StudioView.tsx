@@ -814,6 +814,12 @@ export function StudioView() {
         `${result.committedEvents} 条状态事件入库`,
         `${result.updatedForeshadowings} 条伏笔更新`,
       ];
+      if (result.updatedRelations > 0) {
+        summaryParts.push(`${result.updatedRelations} 条关系更新`);
+      }
+      if (result.updatedDeadlines > 0) {
+        summaryParts.push(`${result.updatedDeadlines} 条期限更新`);
+      }
       if (dirtyCount > 0) {
         summaryParts.push(`下游 ${dirtyCount} 章标记为上游变更`);
       }

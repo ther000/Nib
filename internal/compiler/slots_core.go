@@ -81,6 +81,8 @@ func formatBookPOVMode(mode string) string {
 func buildP1Content(
 	book domain.Book,
 	chap domain.Chapter,
+	prevChapters []domain.Chapter,
+	activeDeadlines []domain.StoryDeadline,
 	beats []domain.Beat,
 	entityByID map[int64]domain.Entity,
 	extraInstruction string,
@@ -95,6 +97,11 @@ func buildP1Content(
 	}
 	if strings.TrimSpace(chap.OutlineSummary) != "" {
 		fmt.Fprintf(&b, "本章概要：%s\n", strings.TrimSpace(chap.OutlineSummary))
+	}
+
+	if tlBlock := formatStoryTimelineBlock(chap, prevChapters, activeDeadlines); tlBlock != "" {
+		b.WriteString(tlBlock)
+		b.WriteByte('\n')
 	}
 
 	beatWordTotal := 0
@@ -155,6 +162,73 @@ func buildP1Content(
 
 	b.WriteString("\n请严格按以上节拍顺序直接撰写本章完整正文，确保结尾 200 字准确兑现章末钩子。")
 	return strings.TrimSpace(b.String())
+}
+
+func formatStoryTimelineBlock(chap domain.Chapter, prevChapters []domain.Chapter, activeDeadlines []domain.StoryDeadline) string {
+	var refDay *int
+	var refLabel string
+	var refSource string
+	if strings.TrimSpace(chap.StoryTimeLabel) != "" || chap.StoryDay != nil {
+		refLabel = strings.TrimSpace(chap.StoryTimeLabel)
+		refDay = chap.StoryDay
+		refSource = "本章故事时间"
+	} else {
+		for _, prev := range prevChapters {
+			if prev.GlobalSeq >= chap.GlobalSeq {
+				continue
+			}
+			if strings.TrimSpace(prev.StoryTimeLabel) != "" || prev.StoryDay != nil {
+				refLabel = strings.TrimSpace(prev.StoryTimeLabel)
+				refDay = prev.StoryDay
+				refSource = fmt.Sprintf("前章（第%d章）故事时间", prev.GlobalSeq)
+				break
+			}
+		}
+	}
+
+	if refLabel == "" && refDay == nil && len(activeDeadlines) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	if refLabel != "" || refDay != nil {
+		parts := make([]string, 0, 2)
+		if refLabel != "" {
+			parts = append(parts, refLabel)
+		}
+		if refDay != nil {
+			parts = append(parts, fmt.Sprintf("Day %d", *refDay))
+		}
+		fmt.Fprintf(&b, "%s：%s\n", refSource, strings.Join(parts, " · "))
+	}
+	if len(activeDeadlines) > 0 {
+		b.WriteString("故事内活跃期限倒计时：\n")
+		for _, dl := range activeDeadlines {
+			countdown := ""
+			if refDay != nil && dl.TargetDay > 0 {
+				diff := dl.TargetDay - *refDay
+				switch {
+				case diff > 0:
+					countdown = fmt.Sprintf("（还剩 %d 天）", diff)
+				case diff == 0:
+					countdown = "（今日到期）"
+				default:
+					countdown = fmt.Sprintf("（已超期 %d 天）", -diff)
+				}
+			} else if dl.TargetDay > 0 {
+				countdown = fmt.Sprintf("（目标 Day %d）", dl.TargetDay)
+			}
+			if strings.TrimSpace(dl.TargetLabel) != "" {
+				countdown += " " + strings.TrimSpace(dl.TargetLabel)
+			}
+			fmt.Fprintf(&b, "- %s%s", dl.Title, countdown)
+			if strings.TrimSpace(dl.Note) != "" {
+				fmt.Fprintf(&b, "：%s", strings.TrimSpace(dl.Note))
+			}
+			b.WriteByte('\n')
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func buildP4Content(prevOrdered []domain.Chapter, budget int) (string, bool) {

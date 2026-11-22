@@ -8,6 +8,9 @@ export interface ApplyDeltaInput {
   deltaId: number;
   applyCausalSummary: boolean;
   causalSummaryOverride?: string;
+  applyStoryTimeline?: boolean;
+  storyTimeLabelOverride?: string;
+  storyDayOverride?: number;
   decisions: DeltaDecision[];
 }
 
@@ -15,6 +18,8 @@ export interface ApplyDeltaResult {
   delta: ChapterDelta;
   committedEvents: number;
   updatedForeshadowings: number;
+  updatedRelations: number;
+  updatedDeadlines: number;
   markedDirtyChapterIds: number[];
 }
 
@@ -252,6 +257,37 @@ export interface BookGenesisRequest {
   targetChapterWords: number;
 }
 
+export interface BookRenameExecuteInput {
+  bookId: number;
+  oldName: string;
+  newName: string;
+  includeOutlines: boolean;
+  includeMemory: boolean;
+  excludedHitIds?: string[];
+}
+
+export interface BookRenamePreview {
+  oldName: string;
+  newName: string;
+  totalMatches: number;
+  hits: TextImpactHit[];
+}
+
+export interface BookRenamePreviewInput {
+  bookId: number;
+  oldName: string;
+  newName: string;
+  includeOutlines: boolean;
+  includeMemory: boolean;
+}
+
+export interface BookRenameResult {
+  updatedChapters: number;
+  updatedRecords: number;
+  totalReplaced: number;
+  snapshotId: number;
+}
+
 export interface Briefing {
   chapterId: number;
   chapterSeq: number;
@@ -305,6 +341,8 @@ export interface Chapter {
   content: string;
   wordCount: number;
   lastBriefingJson: string;
+  storyTimeLabel: string;
+  storyDay?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -325,9 +363,13 @@ export interface ChapterDelta {
   id: number;
   chapterId: number;
   causalSummary: string;
+  storyTimeLabel: string;
+  storyDay?: number;
   newEntities: DeltaNewEntity[];
   statePatches: DeltaStatePatch[];
   foreshadows: DeltaForeshadowUpdate[];
+  relationChanges: DeltaRelationChange[];
+  deadlineChanges: DeltaDeadlineChange[];
   highRiskFlags: number;
   reviewStatus: DeltaReviewStatus;
   createdAt: string;
@@ -402,6 +444,16 @@ export interface DeaiRule {
   enabled: boolean;
 }
 
+export interface DeltaDeadlineChange {
+  id: string;
+  action: string;
+  deadlineId?: number;
+  title: string;
+  targetDay: number;
+  targetLabel: string;
+  note: string;
+}
+
 export interface DeltaDecision {
   kind: string;
   itemId: string;
@@ -429,6 +481,19 @@ export interface DeltaNewEntity {
   isInvariant?: boolean;
   summary: string;
   attributes?: Record<string, string>;
+  reason?: string;
+}
+
+export interface DeltaRelationChange {
+  id: string;
+  action: string;
+  relationId?: number;
+  sourceEntityId?: number;
+  sourceName: string;
+  targetEntityId?: number;
+  targetName: string;
+  relationType: string;
+  description: string;
   reason?: string;
 }
 
@@ -463,6 +528,7 @@ export interface DirectorEvent {
   reply?: string;
   toolCalls?: DirectorToolCall[];
   mutated?: boolean;
+  undoSnapshotId?: number;
   error?: string;
 }
 
@@ -473,6 +539,7 @@ export interface DirectorMessage {
   role: string;
   content: string;
   toolCalls?: DirectorToolCall[];
+  undoSnapshotId?: number;
   createdAt?: string;
 }
 
@@ -480,6 +547,7 @@ export interface DirectorReply {
   reply: string;
   toolCalls: DirectorToolCall[];
   mutated: boolean;
+  undoSnapshotId?: number;
 }
 
 export interface DirectorToolCall {
@@ -516,6 +584,39 @@ export interface EntityFilter {
 
 export type EntityKind = string;
 
+export interface EntityMergeExecuteInput {
+  bookId: number;
+  sourceEntityId: number;
+  targetEntityId: number;
+  replaceInProse: boolean;
+  excludedHitIds?: string[];
+}
+
+export interface EntityMergePreview {
+  sourceName: string;
+  targetName: string;
+  stateEventCount: number;
+  relationCount: number;
+  foreshadowCount: number;
+  beatCount: number;
+  textHits: TextImpactHit[];
+}
+
+export interface EntityMergePreviewInput {
+  bookId: number;
+  sourceEntityId: number;
+  targetEntityId: number;
+  replaceInProse: boolean;
+}
+
+export interface EntityMergeResult {
+  targetEntity: Entity;
+  mergedEvents: number;
+  mergedRelations: number;
+  updatedChapters: number;
+  snapshotId: number;
+}
+
 export interface EntityRelation {
   id: number;
   bookId: number;
@@ -525,6 +626,9 @@ export interface EntityRelation {
   targetName?: string;
   relationType: string;
   description: string;
+  effectiveChapterSeq: number;
+  endedChapterSeq?: number;
+  status: StateEventStatus;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -907,6 +1011,16 @@ export interface RewriteSelectionResult {
   usage?: TokenUsage;
 }
 
+export interface SafetySnapshot {
+  id: number;
+  bookId: number;
+  source: string;
+  sourceRefId: number;
+  summary: string;
+  filePath: string;
+  createdAt: string;
+}
+
 export interface SaveChapterDraftInput {
   chapterId: number;
   title?: string;
@@ -940,6 +1054,23 @@ export interface StageUsageStat {
 
 export type StateEventStatus = string;
 
+export interface StoryDeadline {
+  id: number;
+  bookId: number;
+  title: string;
+  startChapterSeq: number;
+  targetDay: number;
+  targetLabel: string;
+  entityId?: number;
+  foreshadowingId?: number;
+  status: StoryDeadlineStatus;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type StoryDeadlineStatus = string;
+
 export interface StyleProfile {
   id: number;
   bookId: number;
@@ -970,6 +1101,16 @@ export interface SurgicalDiff {
   original: string;
   replacement: string;
   status: DiffStatus;
+}
+
+export interface TextImpactHit {
+  id: string;
+  scope: string;
+  targetId: number;
+  label: string;
+  matchCount: number;
+  snippet: string;
+  riskWarning?: string;
 }
 
 export interface TokenUsage {
@@ -1020,6 +1161,9 @@ export interface UpdateChapterMetaInput {
   hookNote: string;
   outlineSummary: string;
   causalSummary: string;
+  storyTimeLabel?: string;
+  storyDay?: number;
+  updateStoryTimeline?: boolean;
 }
 
 export interface UpsertArcSummaryInput {
@@ -1063,6 +1207,9 @@ export interface UpsertEntityRelationInput {
   targetEntityId: number;
   relationType: string;
   description: string;
+  effectiveChapterSeq: number;
+  endedChapterSeq?: number;
+  status?: StateEventStatus;
 }
 
 export interface UpsertForeshadowingInput {
@@ -1104,6 +1251,19 @@ export interface UpsertScratchNoteInput {
   content: string;
   tags: string[];
   pinned: boolean;
+}
+
+export interface UpsertStoryDeadlineInput {
+  id: number;
+  bookId: number;
+  title: string;
+  startChapterSeq: number;
+  targetDay: number;
+  targetLabel: string;
+  entityId?: number;
+  foreshadowingId?: number;
+  status: StoryDeadlineStatus;
+  note: string;
 }
 
 export interface UpsertStyleProfileInput {
@@ -1259,10 +1419,20 @@ export const AtlasService = {
   deleteEntity: bind<[number], void>("AtlasService.DeleteEntity", (id: number) => [id]),
   /** DeleteEntityRelation 删除指定实体关系。 */
   deleteEntityRelation: bind<[number], void>("AtlasService.DeleteEntityRelation", (id: number) => [id]),
+  /** ExecuteBookRename 按预览勾选清单执行全书安全改名（改动正文必先落 chapter_versions 快照且前置创建安全撤销点）。 */
+  executeBookRename: bind<[BookRenameExecuteInput], BookRenameResult>("AtlasService.ExecuteBookRename", (in_: BookRenameExecuteInput) => [in_]),
+  /** ExecuteEntityMerge 在单事务内合并重复实体并保存安全撤销点与正文快照。 */
+  executeEntityMerge: bind<[EntityMergeExecuteInput], EntityMergeResult>("AtlasService.ExecuteEntityMerge", (in_: EntityMergeExecuteInput) => [in_]),
   /** ListEntities 按书籍与筛选条件列出设定实体（含世界铁律）。 */
   listEntities: bind<[number, EntityFilter], Entity[]>("AtlasService.ListEntities", (bookID: number, filter: EntityFilter) => [bookID, filter]),
   /** ListEntityRelations 返回指定书籍的全部角色/势力关系。 */
   listEntityRelations: bind<[number], EntityRelation[]>("AtlasService.ListEntityRelations", (bookID: number) => [bookID]),
+  /** ListEntityRelationsAt 按章节时间轴切片查询截至 chapterSeq（含）生效的实体关系。 */
+  listEntityRelationsAt: bind<[number, number, boolean], EntityRelation[]>("AtlasService.ListEntityRelationsAt", (bookID: number, chapterSeq: number, includePending: boolean) => [bookID, chapterSeq, includePending]),
+  /** PreviewBookRename 分模块预览全书安全改名的命中清单与粘连词风险提醒。 */
+  previewBookRename: bind<[BookRenamePreviewInput], BookRenamePreview>("AtlasService.PreviewBookRename", (in_: BookRenamePreviewInput) => [in_]),
+  /** PreviewEntityMerge 预览将重复实体合并进目标实体的受影响范围。 */
+  previewEntityMerge: bind<[EntityMergePreviewInput], EntityMergePreview>("AtlasService.PreviewEntityMerge", (in_: EntityMergePreviewInput) => [in_]),
   /** UpsertEntity 创建或更新设定实体 / 世界铁律。 */
   upsertEntity: bind<[UpsertEntityInput], Entity>("AtlasService.UpsertEntity", (input: UpsertEntityInput) => [input]),
   /** UpsertEntityRelation 创建或更新实体间关系。 */
@@ -1301,12 +1471,16 @@ export const SettingsService = {
   listModelRoutes: bind<[], ModelRoute[]>("SettingsService.ListModelRoutes", () => []),
   /** ListProviders 返回全部供应商的脱敏视图（严禁向前端透出明文 API Key）。 */
   listProviders: bind<[], ProviderPublic[]>("SettingsService.ListProviders", () => []),
+  /** ListSafetySnapshots 列出指定书籍（或全部）的高危操作/导演撤销点快照记录。 */
+  listSafetySnapshots: bind<[number], SafetySnapshot[]>("SettingsService.ListSafetySnapshots", (bookID: number) => [bookID]),
   /** ListTrash 返回回收站条目。 */
   listTrash: bind<[], TrashItem[]>("SettingsService.ListTrash", () => []),
   /** PickExportDir 调起系统原生文件夹选择对话框；若用户取消则返回空字符串与 nil 错误。 */
   pickExportDir: bind<[], string>("SettingsService.PickExportDir", () => []),
   /** RestoreDatabaseFromFile 校验并恢复指定备份文件，返回恢复前自动生成的当前库热备路径。 */
   restoreDatabaseFromFile: bind<[string], string>("SettingsService.RestoreDatabaseFromFile", (backupPath: string) => [backupPath]),
+  /** RestoreSafetySnapshot 原子恢复数据库至指定安全撤销点，并返回恢复前热备路径。 */
+  restoreSafetySnapshot: bind<[number], string>("SettingsService.RestoreSafetySnapshot", (snapshotID: number) => [snapshotID]),
   /** RestoreTrash 恢复一条回收站记录。 */
   restoreTrash: bind<[number], TrashRestoreResult>("SettingsService.RestoreTrash", (trashID: number) => [trashID]),
   /** SaveModelRoute 校验并更新单个创作环节的模型路由配置。 */
@@ -1349,6 +1523,8 @@ export const MemoryService = {
   applyReverseExtract: bind<[ApplyReverseExtractInput], ApplyReverseExtractResult>("MemoryService.ApplyReverseExtract", (in_: ApplyReverseExtractInput) => [in_]),
   /** DeleteForeshadowing 删除指定伏笔记录。 */
   deleteForeshadowing: bind<[number], void>("MemoryService.DeleteForeshadowing", (id: number) => [id]),
+  /** DeleteStoryDeadline 删除指定故事内期限倒计时记录。 */
+  deleteStoryDeadline: bind<[number], void>("MemoryService.DeleteStoryDeadline", (id: number) => [id]),
   /** ExtractChapterDelta 调用 extract 模型路由抽取本章增量状态与伏笔变更提案（写入 pending 态变更单，绝不静默入库）。 */
   extractChapterDelta: bind<[number], ChapterDelta>("MemoryService.ExtractChapterDelta", (chapterID: number) => [chapterID]),
   /** GenerateArcSummary 由 AI 自动汇总指定章号区间（10 章弧线）或整卷剧情摘要并写入 arc_summaries。 */
@@ -1361,6 +1537,8 @@ export const MemoryService = {
   listForeshadowings: bind<[number, string], Foreshadowing[]>("MemoryService.ListForeshadowings", (bookID: number, status: string) => [bookID, status]),
   /** ListStateEvents 查询实体状态变更事件流水；entityID=0 表示查询全书，upToSeq=0 表示不限截止章号。 */
   listStateEvents: bind<[number, number, number, boolean], EntityStateEvent[]>("MemoryService.ListStateEvents", (bookID: number, entityID: number, upToSeq: number, includePending: boolean) => [bookID, entityID, upToSeq, includePending]),
+  /** ListStoryDeadlines 按书籍与可选状态筛选故事内期限/倒计时（status 留空返回全部）。 */
+  listStoryDeadlines: bind<[number, string], StoryDeadline[]>("MemoryService.ListStoryDeadlines", (bookID: number, status: string) => [bookID, status]),
   /** ReverseExtractBook 从旧稿采样章节流式反推设定、关系、伏笔与摘要，仅返回审阅清单。 */
   reverseExtractBook: bind<[ReverseExtractRequest, Channel<ReverseExtractChunk>], ReverseExtractPreview>("MemoryService.ReverseExtractBook", (req: ReverseExtractRequest, ch: Channel<ReverseExtractChunk>) => [req, ch]),
   /** SearchMemory 执行 FTS5 trigram + 双字 LIKE 回退混合记忆检索（maxChapterSeq=0 表示不限章号上限）。 */
@@ -1371,6 +1549,8 @@ export const MemoryService = {
   upsertArcSummary: bind<[UpsertArcSummaryInput], ArcSummary>("MemoryService.UpsertArcSummary", (in_: UpsertArcSummaryInput) => [in_]),
   /** UpsertForeshadowing 创建或更新单条伏笔记录。 */
   upsertForeshadowing: bind<[UpsertForeshadowingInput], Foreshadowing>("MemoryService.UpsertForeshadowing", (in_: UpsertForeshadowingInput) => [in_]),
+  /** UpsertStoryDeadline 创建或更新单条故事内期限倒计时。 */
+  upsertStoryDeadline: bind<[UpsertStoryDeadlineInput], StoryDeadline>("MemoryService.UpsertStoryDeadline", (in_: UpsertStoryDeadlineInput) => [in_]),
 } as const;
 
 /** StyleService 提供 Phase 3 文风指纹（Style DNA）、分场景样章、0 成本本地 AI 味检测、Critic 盲审与手术式局部润色的桌面 RPC 绑定。 */
@@ -1447,6 +1627,8 @@ export const DirectorService = {
   listMessages: bind<[number], DirectorMessage[]>("DirectorService.ListMessages", (bookID: number) => [bookID]),
   /** SendInstruction 向 AI 导演下达自然语言指令，通过 *mygo.Channel[domain.DirectorEvent] 实时推送规划与工具执行过程。 */
   sendInstruction: bind<[DirectorChatRequest, Channel<DirectorEvent>], DirectorReply>("DirectorService.SendInstruction", (req: DirectorChatRequest, ch: Channel<DirectorEvent>) => [req, ch]),
+  /** UndoDirectorTurn 通过安全撤销点 ID 将书库原子恢复到该轮 AI 导演执行写库工具之前的状态。 */
+  undoDirectorTurn: bind<[number], string>("DirectorService.UndoDirectorTurn", (snapshotID: number) => [snapshotID]),
 } as const;
 
 // ---- Events ----

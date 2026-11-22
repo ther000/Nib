@@ -8,6 +8,7 @@ import {
   Flag,
   GitFork,
   History,
+  Merge,
   Pencil,
   Plus,
   Search,
@@ -43,6 +44,7 @@ import { ForeshadowingBoard } from "../components/atlas/ForeshadowingBoard";
 import { ArcSummaryBoard } from "../components/atlas/ArcSummaryBoard";
 import { StyleRulesBoard } from "../components/atlas/StyleRulesBoard";
 import { RelationsBoard } from "../components/atlas/RelationsBoard";
+import { EntitySafetyToolsModal } from "../components/atlas/EntitySafetyToolsModal";
 
 interface CustomAttrRow {
   localKey: string;
@@ -71,6 +73,7 @@ export function AtlasView() {
     activeBook,
     activeGenrePreset,
     chapters,
+    activeChapter,
     entities: allEntities,
     foreshadowings,
     atlasSubTab,
@@ -78,7 +81,10 @@ export function AtlasView() {
     atlasFocusEntityId,
     clearAtlasFocusEntity,
     memoryRevision,
+    bumpMemoryRevision,
     refreshEntities,
+    refreshBookData,
+    refreshActiveChapter,
     notify,
   } = useApp();
   const { openContextMenu } = useContextMenu();
@@ -135,6 +141,7 @@ export function AtlasView() {
   const [entityEvents, setEntityEvents] = useState<EntityStateEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [showAllEntityEvents, setShowAllEntityEvents] = useState(false);
+  const [safetyToolsOpen, setSafetyToolsOpen] = useState(false);
 
   // All invariants pinned at top
   const invariants = useMemo(
@@ -778,6 +785,17 @@ export function AtlasView() {
 
                   <button
                     type="button"
+                    onClick={() => setSafetyToolsOpen(true)}
+                    disabled={allEntities.length === 0}
+                    title="合并重复实体或全书安全改名（带预览与撤销点）"
+                    className="flex items-center gap-1.5 rounded-md border border-border-subtle bg-surface px-2.5 py-1.5 text-xs font-medium text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary disabled:opacity-40"
+                  >
+                    <Merge className="h-3.5 w-3.5 text-accent" />
+                    <span>合并 / 改名</span>
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={() =>
                       openNewEntity(
                         kindFilter === "all" ? "character" : kindFilter,
@@ -1329,6 +1347,24 @@ export function AtlasView() {
             </div>
           </div>
         </div>
+      )}
+
+      {activeBook && (
+        <EntitySafetyToolsModal
+          open={safetyToolsOpen}
+          bookId={activeBook.id}
+          entities={allEntities}
+          onClose={() => setSafetyToolsOpen(false)}
+          onCompleted={async () => {
+            setEditor(null);
+            await refreshBookData(activeBook.id, activeChapter?.id ?? null);
+            if (activeChapter?.id && activeChapter.id > 0) {
+              await refreshActiveChapter(activeChapter.id);
+            }
+            bumpMemoryRevision();
+          }}
+          onNotify={notify}
+        />
       )}
     </div>
   );

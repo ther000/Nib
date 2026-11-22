@@ -140,6 +140,60 @@ func (s *MemoryService) DeleteForeshadowing(ctx context.Context, id int64) error
 	return ms.DeleteForeshadowing(ctx, id)
 }
 
+// ListStoryDeadlines 按书籍与可选状态筛选故事内期限/倒计时（status 留空返回全部）。
+func (s *MemoryService) ListStoryDeadlines(ctx context.Context, bookID int64, status string) ([]domain.StoryDeadline, error) {
+	if err := validatePositiveID("bookId", bookID); err != nil {
+		return nil, err
+	}
+	trimmed := strings.TrimSpace(status)
+	var stFilter domain.StoryDeadlineStatus
+	if trimmed != "" {
+		stFilter = domain.StoryDeadlineStatus(trimmed)
+		if !stFilter.Valid() {
+			return nil, &domain.ValidationError{Field: "status", Message: "无效的期限状态"}
+		}
+	}
+	ms, err := s.rt.memoryStore()
+	if err != nil {
+		return nil, err
+	}
+	items, err := ms.ListStoryDeadlines(ctx, bookID, stFilter)
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		return []domain.StoryDeadline{}, nil
+	}
+	return items, nil
+}
+
+// UpsertStoryDeadline 创建或更新单条故事内期限倒计时。
+func (s *MemoryService) UpsertStoryDeadline(ctx context.Context, in domain.UpsertStoryDeadlineInput) (domain.StoryDeadline, error) {
+	if err := in.Validate(); err != nil {
+		return domain.StoryDeadline{}, err
+	}
+	if in.Status == "" {
+		in.Status = domain.StoryDeadlineActive
+	}
+	ms, err := s.rt.memoryStore()
+	if err != nil {
+		return domain.StoryDeadline{}, err
+	}
+	return ms.UpsertStoryDeadline(ctx, in)
+}
+
+// DeleteStoryDeadline 删除指定故事内期限倒计时记录。
+func (s *MemoryService) DeleteStoryDeadline(ctx context.Context, id int64) error {
+	if err := validatePositiveID("id", id); err != nil {
+		return err
+	}
+	ms, err := s.rt.memoryStore()
+	if err != nil {
+		return err
+	}
+	return ms.DeleteStoryDeadline(ctx, id)
+}
+
 // ListArcSummaries 查询分层摘要金字塔（level 可为 "" / "arc_10" / "volume"）。
 func (s *MemoryService) ListArcSummaries(ctx context.Context, bookID int64, level string) ([]domain.ArcSummary, error) {
 	if err := validatePositiveID("bookId", bookID); err != nil {
@@ -324,5 +378,11 @@ func normalizeChapterDelta(d *domain.ChapterDelta) {
 	}
 	if d.Foreshadows == nil {
 		d.Foreshadows = []domain.DeltaForeshadowUpdate{}
+	}
+	if d.RelationChanges == nil {
+		d.RelationChanges = []domain.DeltaRelationChange{}
+	}
+	if d.DeadlineChanges == nil {
+		d.DeadlineChanges = []domain.DeltaDeadlineChange{}
 	}
 }

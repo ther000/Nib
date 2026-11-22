@@ -68,8 +68,15 @@ type Store interface {
 	UpsertEntity(ctx context.Context, in domain.UpsertEntityInput) (domain.Entity, error)
 	DeleteEntity(ctx context.Context, id int64) error
 	ListEntityRelations(ctx context.Context, bookID int64) ([]domain.EntityRelation, error)
+	ListEntityRelationsAt(ctx context.Context, bookID int64, chapterSeq int, includePending bool) ([]domain.EntityRelation, error)
 	UpsertEntityRelation(ctx context.Context, in domain.UpsertEntityRelationInput) (domain.EntityRelation, error)
 	DeleteEntityRelation(ctx context.Context, id int64) error
+	PreviewEntityMerge(ctx context.Context, in domain.EntityMergePreviewInput) (domain.EntityMergePreview, error)
+	ExecuteEntityMerge(ctx context.Context, in domain.EntityMergeExecuteInput) (domain.EntityMergeResult, error)
+	PreviewBookRename(ctx context.Context, in domain.BookRenamePreviewInput) (domain.BookRenamePreview, error)
+	ExecuteBookRename(ctx context.Context, in domain.BookRenameExecuteInput) (domain.BookRenameResult, error)
+	ListSafetySnapshots(ctx context.Context, bookID int64) ([]domain.SafetySnapshot, error)
+	RestoreSafetySnapshot(ctx context.Context, snapshotID int64) (string, error)
 
 	// Director History
 	ListDirectorMessages(ctx context.Context, bookID int64) ([]domain.DirectorMessage, error)
@@ -134,6 +141,9 @@ type MemoryStore interface {
 	ListForeshadowings(ctx context.Context, bookID int64, status domain.ForeshadowingStatus) ([]domain.Foreshadowing, error)
 	UpsertForeshadowing(ctx context.Context, in domain.UpsertForeshadowingInput) (domain.Foreshadowing, error)
 	DeleteForeshadowing(ctx context.Context, id int64) error
+	ListStoryDeadlines(ctx context.Context, bookID int64, status domain.StoryDeadlineStatus) ([]domain.StoryDeadline, error)
+	UpsertStoryDeadline(ctx context.Context, in domain.UpsertStoryDeadlineInput) (domain.StoryDeadline, error)
+	DeleteStoryDeadline(ctx context.Context, id int64) error
 	ListArcSummaries(ctx context.Context, bookID int64, level domain.ArcSummaryLevel) ([]domain.ArcSummary, error)
 	UpsertArcSummary(ctx context.Context, in domain.UpsertArcSummaryInput) (domain.ArcSummary, error)
 	GetPendingDelta(ctx context.Context, chapterID int64) (*domain.ChapterDelta, error)

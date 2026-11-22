@@ -11,8 +11,10 @@ import (
 )
 
 const chapterDeltaColumns = `
-	id, chapter_id, causal_summary, new_entities_json, state_patch_json,
-	foreshadow_json, high_risk_flags, review_status, created_at, reviewed_at
+	id, chapter_id, causal_summary, story_time_label, story_day,
+	new_entities_json, state_patch_json, foreshadow_json,
+	relation_changes_json, deadline_changes_json,
+	high_risk_flags, review_status, created_at, reviewed_at
 `
 
 // SavePendingDelta 在单个事务内保存完章抽取出的待审核记忆变更单（review_status='pending'）：
@@ -84,6 +86,40 @@ func (s *Store) SavePendingDelta(ctx context.Context, delta domain.ChapterDelta)
 			foreshadows[i] = fs
 		}
 
+		relChanges := make([]domain.DeltaRelationChange, len(delta.RelationChanges))
+		for i, rc := range delta.RelationChanges {
+			if strings.TrimSpace(rc.ID) == "" {
+				rc.ID = fmt.Sprintf("rel-%d", i+1)
+			}
+			rc.Action = strings.ToLower(strings.TrimSpace(rc.Action))
+			if rc.Action == "" {
+				rc.Action = "upsert"
+			}
+			if rc.SourceEntityID <= 0 {
+				if sid, ok := entityIndex.lookup(rc.SourceName); ok {
+					rc.SourceEntityID = sid
+				}
+			}
+			if rc.TargetEntityID <= 0 {
+				if tid, ok := entityIndex.lookup(rc.TargetName); ok {
+					rc.TargetEntityID = tid
+				}
+			}
+			relChanges[i] = rc
+		}
+
+		dlChanges := make([]domain.DeltaDeadlineChange, len(delta.DeadlineChanges))
+		for i, dc := range delta.DeadlineChanges {
+			if strings.TrimSpace(dc.ID) == "" {
+				dc.ID = fmt.Sprintf("dl-%d", i+1)
+			}
+			dc.Action = strings.ToLower(strings.TrimSpace(dc.Action))
+			if dc.Action == "" {
+				dc.Action = "create"
+			}
+			dlChanges[i] = dc
+		}
+
 		highRiskFlags := delta.HighRiskFlags
 		if highRiskCount > highRiskFlags {
 			highRiskFlags = highRiskCount
@@ -101,6 +137,14 @@ func (s *Store) SavePendingDelta(ctx context.Context, delta domain.ChapterDelta)
 		if err != nil {
 			return fmt.Errorf("marshal foreshadows: %w", err)
 		}
+		relChangesJSON, err := marshalJSONSlice(relChanges)
+		if err != nil {
+			return fmt.Errorf("marshal relationChanges: %w", err)
+		}
+		dlChangesJSON, err := marshalJSONSlice(dlChanges)
+		if err != nil {
+			return fmt.Errorf("marshal deadlineChanges: %w", err)
+		}
 
 		// 先将本章此前残留的 pending 状态事件置为 reverted，避免多次重抽堆叠脏数据。
 		if _, err := tx.ExecContext(ctx, `
@@ -111,22 +155,34 @@ func (s *Store) SavePendingDelta(ctx context.Context, delta domain.ChapterDelta)
 			return mapSQLiteError(err)
 		}
 
+		var deltaStoryDayArg any
+		if delta.StoryDay != nil {
+			deltaStoryDayArg = *delta.StoryDay
+		}
+
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO chapter_deltas (
-				chapter_id, causal_summary, new_entities_json, state_patch_json,
-				foreshadow_json, high_risk_flags, review_status, reviewed_at
+				chapter_id, causal_summary, story_time_label, story_day,
+				new_entities_json, state_patch_json, foreshadow_json,
+				relation_changes_json, deadline_changes_json,
+				high_risk_flags, review_status, reviewed_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, 'pending', '')
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '')
 			ON CONFLICT(chapter_id) DO UPDATE SET
-				causal_summary    = excluded.causal_summary,
-				new_entities_json = excluded.new_entities_json,
-				state_patch_json  = excluded.state_patch_json,
-				foreshadow_json   = excluded.foreshadow_json,
-				high_risk_flags   = excluded.high_risk_flags,
-				review_status     = 'pending',
-				created_at        = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-				reviewed_at       = ''
-		`, ch.ID, strings.TrimSpace(delta.CausalSummary), newEntitiesJSON, patchesJSON, foreshadowsJSON, highRiskFlags); err != nil {
+				causal_summary        = excluded.causal_summary,
+				story_time_label      = excluded.story_time_label,
+				story_day             = excluded.story_day,
+				new_entities_json     = excluded.new_entities_json,
+				state_patch_json      = excluded.state_patch_json,
+				foreshadow_json       = excluded.foreshadow_json,
+				relation_changes_json = excluded.relation_changes_json,
+				deadline_changes_json = excluded.deadline_changes_json,
+				high_risk_flags       = excluded.high_risk_flags,
+				review_status         = 'pending',
+				created_at            = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+				reviewed_at           = ''
+		`, ch.ID, strings.TrimSpace(delta.CausalSummary), strings.TrimSpace(delta.StoryTimeLabel), deltaStoryDayArg,
+			newEntitiesJSON, patchesJSON, foreshadowsJSON, relChangesJSON, dlChangesJSON, highRiskFlags); err != nil {
 			return mapSQLiteError(err)
 		}
 
@@ -239,6 +295,34 @@ func (s *Store) ApplyDeltaDecisions(ctx context.Context, in domain.ApplyDeltaInp
 					    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 					WHERE id = ?
 				`, summary, ch.ID); err != nil {
+					return mapSQLiteError(err)
+				}
+				anyCommitted = true
+			}
+		}
+
+		// 1.5 故事内时间坐标
+		if in.ApplyStoryTimeline {
+			timeLabel := strings.TrimSpace(in.StoryTimeLabelOverride)
+			if timeLabel == "" {
+				timeLabel = strings.TrimSpace(delta.StoryTimeLabel)
+			}
+			storyDay := in.StoryDayOverride
+			if storyDay == nil {
+				storyDay = delta.StoryDay
+			}
+			if timeLabel != "" || storyDay != nil {
+				var dayArg any
+				if storyDay != nil {
+					dayArg = *storyDay
+				}
+				if _, err := tx.ExecContext(ctx, `
+					UPDATE chapters
+					SET story_time_label = ?,
+					    story_day = ?,
+					    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+					WHERE id = ?
+				`, timeLabel, dayArg, ch.ID); err != nil {
 					return mapSQLiteError(err)
 				}
 				anyCommitted = true
@@ -469,6 +553,171 @@ func (s *Store) ApplyDeltaDecisions(ctx context.Context, in domain.ApplyDeltaInp
 			}
 		}
 
+		// 4.5 实体关系章节演变提案
+		for _, rc := range delta.RelationChanges {
+			dec, ok := decisions[domain.DeltaDecisionKindRelation][rc.ID]
+			if !ok || !dec.Accept {
+				continue
+			}
+			srcID := rc.SourceEntityID
+			if srcID <= 0 || !entityIndex.hasID(srcID) {
+				if matched, ok := entityIndex.lookup(rc.SourceName); ok {
+					srcID = matched
+				} else {
+					srcID = 0
+				}
+			}
+			dstID := rc.TargetEntityID
+			if dstID <= 0 || !entityIndex.hasID(dstID) {
+				if matched, ok := entityIndex.lookup(rc.TargetName); ok {
+					dstID = matched
+				} else {
+					dstID = 0
+				}
+			}
+
+			action := strings.ToLower(strings.TrimSpace(rc.Action))
+			if action == "end" {
+				if rc.RelationID > 0 {
+					res, err := tx.ExecContext(ctx, `
+						UPDATE entity_relations
+						SET ended_chapter_seq = ?,
+						    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+						WHERE id = ? AND book_id = ?
+					`, ch.GlobalSeq, rc.RelationID, ch.BookID)
+					if err != nil {
+						return mapSQLiteError(err)
+					}
+					if n, _ := res.RowsAffected(); n > 0 {
+						out.UpdatedRelations++
+						anyCommitted = true
+					}
+					continue
+				}
+				if srcID > 0 && dstID > 0 {
+					q := `
+						UPDATE entity_relations
+						SET ended_chapter_seq = ?,
+						    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+						WHERE book_id = ? AND source_entity_id = ? AND target_entity_id = ?
+						  AND (ended_chapter_seq IS NULL OR ended_chapter_seq > ?)
+					`
+					args := []any{ch.GlobalSeq, ch.BookID, srcID, dstID, ch.GlobalSeq}
+					if rt := strings.TrimSpace(rc.RelationType); rt != "" {
+						q += ` AND relation_type = ?`
+						args = append(args, rt)
+					}
+					res, err := tx.ExecContext(ctx, q, args...)
+					if err != nil {
+						return mapSQLiteError(err)
+					}
+					if n, _ := res.RowsAffected(); n > 0 {
+						out.UpdatedRelations++
+						anyCommitted = true
+					}
+				}
+				continue
+			}
+
+			// 默认 upsert：创建在本章正式生效的关系
+			if srcID <= 0 || dstID <= 0 || srcID == dstID {
+				continue
+			}
+			relType := strings.TrimSpace(rc.RelationType)
+			if relType == "" {
+				continue
+			}
+			desc := strings.TrimSpace(rc.Description)
+			if strings.TrimSpace(dec.OverrideNewValue) != "" {
+				relType = strings.TrimSpace(dec.OverrideNewValue)
+			}
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO entity_relations (
+					book_id, source_entity_id, target_entity_id, relation_type,
+					description, effective_chapter_seq, ended_chapter_seq, status
+				)
+				VALUES (?, ?, ?, ?, ?, ?, NULL, 'committed')
+			`, ch.BookID, srcID, dstID, relType, desc, ch.GlobalSeq); err != nil {
+				return mapSQLiteError(err)
+			}
+			out.UpdatedRelations++
+			anyCommitted = true
+		}
+
+		// 4.6 故事内期限倒计时提案
+		for _, dc := range delta.DeadlineChanges {
+			dec, ok := decisions[domain.DeltaDecisionKindDeadline][dc.ID]
+			if !ok || !dec.Accept {
+				continue
+			}
+			action := strings.ToLower(strings.TrimSpace(dc.Action))
+			switch action {
+			case "reach", "expire", "cancel", "update":
+				newStatus := domain.StoryDeadlineActive
+				switch action {
+				case "reach":
+					newStatus = domain.StoryDeadlineReached
+				case "expire":
+					newStatus = domain.StoryDeadlineExpired
+				case "cancel":
+					newStatus = domain.StoryDeadlineCanceled
+				}
+				dlID := dc.DeadlineID
+				if dlID <= 0 && strings.TrimSpace(dc.Title) != "" {
+					_ = tx.QueryRowContext(ctx, `
+						SELECT id FROM story_deadlines
+						WHERE book_id = ? AND lower(trim(title)) = lower(trim(?))
+						ORDER BY id DESC LIMIT 1
+					`, ch.BookID, dc.Title).Scan(&dlID)
+				}
+				if dlID <= 0 {
+					continue
+				}
+				var res sql.Result
+				if action == "update" {
+					res, err = tx.ExecContext(ctx, `
+						UPDATE story_deadlines
+						SET target_day = CASE WHEN ? > 0 THEN ? ELSE target_day END,
+						    target_label = CASE WHEN ? <> '' THEN ? ELSE target_label END,
+						    note = CASE WHEN ? <> '' THEN ? ELSE note END,
+						    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+						WHERE id = ? AND book_id = ?
+					`, dc.TargetDay, dc.TargetDay, strings.TrimSpace(dc.TargetLabel), strings.TrimSpace(dc.TargetLabel),
+						strings.TrimSpace(dc.Note), strings.TrimSpace(dc.Note), dlID, ch.BookID)
+				} else {
+					res, err = tx.ExecContext(ctx, `
+						UPDATE story_deadlines
+						SET status = ?,
+						    note = CASE WHEN ? <> '' THEN ? ELSE note END,
+						    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+						WHERE id = ? AND book_id = ?
+					`, string(newStatus), strings.TrimSpace(dc.Note), strings.TrimSpace(dc.Note), dlID, ch.BookID)
+				}
+				if err != nil {
+					return mapSQLiteError(err)
+				}
+				if n, _ := res.RowsAffected(); n > 0 {
+					out.UpdatedDeadlines++
+					anyCommitted = true
+				}
+			default: // create
+				title := strings.TrimSpace(dc.Title)
+				if title == "" {
+					continue
+				}
+				if _, err := tx.ExecContext(ctx, `
+					INSERT INTO story_deadlines (
+						book_id, title, start_chapter_seq, target_day, target_label, status, note
+					)
+					VALUES (?, ?, ?, ?, ?, 'active', ?)
+				`, ch.BookID, title, ch.GlobalSeq, dc.TargetDay, strings.TrimSpace(dc.TargetLabel), strings.TrimSpace(dc.Note)); err != nil {
+					return mapSQLiteError(err)
+				}
+				out.UpdatedDeadlines++
+				anyCommitted = true
+			}
+		}
+
 		// 5. 更新变更单审定状态
 		reviewStatus := domain.DeltaReviewDismissed
 		if anyCommitted {
@@ -610,21 +859,31 @@ func normalizeLookupKey(s string) string {
 func scanChapterDelta(sc rowScanner) (domain.ChapterDelta, error) {
 	var (
 		d               domain.ChapterDelta
+		storyDay        sql.NullInt64
 		newEntitiesJSON string
 		patchesJSON     string
 		foreshadowJSON  string
+		relChangesJSON  string
+		dlChangesJSON   string
 		reviewStatus    string
 	)
 	if err := sc.Scan(
-		&d.ID, &d.ChapterID, &d.CausalSummary,
+		&d.ID, &d.ChapterID, &d.CausalSummary, &d.StoryTimeLabel, &storyDay,
 		&newEntitiesJSON, &patchesJSON, &foreshadowJSON,
+		&relChangesJSON, &dlChangesJSON,
 		&d.HighRiskFlags, &reviewStatus, &d.CreatedAt, &d.ReviewedAt,
 	); err != nil {
 		return domain.ChapterDelta{}, mapSQLiteError(err)
+	}
+	if storyDay.Valid {
+		v := int(storyDay.Int64)
+		d.StoryDay = &v
 	}
 	d.ReviewStatus = domain.DeltaReviewStatus(reviewStatus)
 	d.NewEntities = unmarshalJSONSlice[domain.DeltaNewEntity](newEntitiesJSON)
 	d.StatePatches = unmarshalJSONSlice[domain.DeltaStatePatch](patchesJSON)
 	d.Foreshadows = unmarshalJSONSlice[domain.DeltaForeshadowUpdate](foreshadowJSON)
+	d.RelationChanges = unmarshalJSONSlice[domain.DeltaRelationChange](relChangesJSON)
+	d.DeadlineChanges = unmarshalJSONSlice[domain.DeltaDeadlineChange](dlChangesJSON)
 	return d, nil
 }

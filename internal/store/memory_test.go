@@ -34,13 +34,16 @@ func TestPhase1ToPhase2UpgradeBackupAndFTSBackfill(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertVolume v1: %v", err)
 	}
-	ch1, err := stV1.CreateChapter(ctx, domain.CreateChapterInput{BookID: book.ID, VolumeID: vol.ID, Title: "血玉令牌现世"})
-	if err != nil {
-		t.Fatalf("CreateChapter v1: %v", err)
-	}
-	if _, err := stV1.SaveChapterContent(ctx, ch1.ID, "林渊在黑市地摊发现一枚刻有上古阵纹的血玉令牌。", domain.ChapterStatusFinalized, domain.VersionSourceManualBackup, "", ""); err != nil {
-		t.Fatalf("SaveChapterContent v1: %v", err)
-	}
+	ch1 := createLegacyChapter(
+		t,
+		stV1,
+		book.ID,
+		vol.ID,
+		1,
+		"血玉令牌现世",
+		"林渊在黑市地摊发现一枚刻有上古阵纹的血玉令牌。",
+		domain.ChapterStatusFinalized,
+	)
 	if _, err := stV1.UpsertEntity(ctx, domain.UpsertEntityInput{
 		BookID:  book.ID,
 		Kind:    domain.EntityKindItem,

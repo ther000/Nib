@@ -13,6 +13,10 @@ import (
 type rawDeltaPayload struct {
 	CausalSummary        string                `json:"causal_summary"`
 	CausalSummaryCamel   string                `json:"causalSummary"`
+	StoryTimeLabel       string                `json:"story_time_label"`
+	StoryTimeLabelCamel  string                `json:"storyTimeLabel"`
+	StoryDay             *int                  `json:"story_day"`
+	StoryDayCamel        *int                  `json:"storyDay"`
 	NewEntities          []rawNewEntity        `json:"new_entities"`
 	NewEntitiesCamel     []rawNewEntity        `json:"newEntities"`
 	StatePatches         []rawStatePatch       `json:"state_patches"`
@@ -20,6 +24,40 @@ type rawDeltaPayload struct {
 	ForeshadowUpdates    []rawForeshadowUpdate `json:"foreshadowing_updates"`
 	ForeshadowUpdatesAlt []rawForeshadowUpdate `json:"foreshadows"`
 	ForeshadowCamel      []rawForeshadowUpdate `json:"foreshadowingUpdates"`
+	RelationChanges      []rawRelationChange   `json:"relation_changes"`
+	RelationChangesCamel []rawRelationChange   `json:"relationChanges"`
+	DeadlineChanges      []rawDeadlineChange   `json:"deadline_changes"`
+	DeadlineChangesCamel []rawDeadlineChange   `json:"deadlineChanges"`
+}
+
+type rawRelationChange struct {
+	Action            string `json:"action"`
+	RelationID        int64  `json:"relation_id"`
+	RelationIDCamel   int64  `json:"relationId"`
+	SourceEntityID    int64  `json:"source_entity_id"`
+	SourceIDCamel     int64  `json:"sourceEntityId"`
+	SourceName        string `json:"source_name"`
+	SourceNameCamel   string `json:"sourceName"`
+	TargetEntityID    int64  `json:"target_entity_id"`
+	TargetIDCamel     int64  `json:"targetEntityId"`
+	TargetName        string `json:"target_name"`
+	TargetNameCamel   string `json:"targetName"`
+	RelationType      string `json:"relation_type"`
+	RelationTypeCamel string `json:"relationType"`
+	Description       string `json:"description"`
+	Reason            string `json:"reason"`
+}
+
+type rawDeadlineChange struct {
+	Action           string `json:"action"`
+	DeadlineID       int64  `json:"deadline_id"`
+	DeadlineIDCamel  int64  `json:"deadlineId"`
+	Title            string `json:"title"`
+	TargetDay        int    `json:"target_day"`
+	TargetDayCamel   int    `json:"targetDay"`
+	TargetLabel      string `json:"target_label"`
+	TargetLabelCamel string `json:"targetLabel"`
+	Note             string `json:"note"`
 }
 
 type rawNewEntity struct {
@@ -102,6 +140,8 @@ func normalizeDelta(
 	entities []domain.Entity,
 	snapshots []domain.EntitySnapshot,
 	foreshadowings []domain.Foreshadowing,
+	activeRelations []domain.EntityRelation,
+	activeDeadlines []domain.StoryDeadline,
 ) domain.ChapterDelta {
 	// 构造实体名/别名索引和前章有效属性快照索引，便于自动补齐 EntityID 与 PrevValue。
 	entityIDByName := make(map[string]int64, len(entities)*2)
@@ -304,14 +344,145 @@ func normalizeDelta(
 		})
 	}
 
+	// 4. 关系演变提案
+	rawRels := raw.RelationChanges
+	if len(rawRels) == 0 {
+		rawRels = raw.RelationChangesCamel
+	}
+	relChanges := make([]domain.DeltaRelationChange, 0, len(rawRels))
+	for _, item := range rawRels {
+		action := strings.ToLower(strings.TrimSpace(item.Action))
+		if action != "end" {
+			action = "upsert"
+		}
+		relID := item.RelationID
+		if relID <= 0 {
+			relID = item.RelationIDCamel
+		}
+		srcID := item.SourceEntityID
+		if srcID <= 0 {
+			srcID = item.SourceIDCamel
+		}
+		srcName := strings.TrimSpace(item.SourceName)
+		if srcName == "" {
+			srcName = strings.TrimSpace(item.SourceNameCamel)
+		}
+		if srcID <= 0 && srcName != "" {
+			srcID = entityIDByName[strings.ToLower(srcName)]
+		}
+		dstID := item.TargetEntityID
+		if dstID <= 0 {
+			dstID = item.TargetIDCamel
+		}
+		dstName := strings.TrimSpace(item.TargetName)
+		if dstName == "" {
+			dstName = strings.TrimSpace(item.TargetNameCamel)
+		}
+		if dstID <= 0 && dstName != "" {
+			dstID = entityIDByName[strings.ToLower(dstName)]
+		}
+		relType := strings.TrimSpace(item.RelationType)
+		if relType == "" {
+			relType = strings.TrimSpace(item.RelationTypeCamel)
+		}
+		if relID <= 0 && (srcID <= 0 && srcName == "" || dstID <= 0 && dstName == "") {
+			continue
+		}
+		if action == "upsert" && relType == "" {
+			continue
+		}
+		if action == "end" && relID <= 0 && srcID > 0 && dstID > 0 {
+			for _, ar := range activeRelations {
+				if ar.SourceEntityID == srcID && ar.TargetEntityID == dstID && (relType == "" || ar.RelationType == relType) {
+					relID = ar.ID
+					break
+				}
+			}
+		}
+		relChanges = append(relChanges, domain.DeltaRelationChange{
+			ID:             fmt.Sprintf("rel-%d", len(relChanges)+1),
+			Action:         action,
+			RelationID:     relID,
+			SourceEntityID: srcID,
+			SourceName:     srcName,
+			TargetEntityID: dstID,
+			TargetName:     dstName,
+			RelationType:   relType,
+			Description:    strings.TrimSpace(item.Description),
+			Reason:         strings.TrimSpace(item.Reason),
+		})
+	}
+
+	// 5. 故事内期限倒计时提案
+	dlIDByTitle := make(map[string]int64, len(activeDeadlines))
+	for _, dl := range activeDeadlines {
+		if k := strings.ToLower(strings.TrimSpace(dl.Title)); k != "" {
+			dlIDByTitle[k] = dl.ID
+		}
+	}
+	rawDLs := raw.DeadlineChanges
+	if len(rawDLs) == 0 {
+		rawDLs = raw.DeadlineChangesCamel
+	}
+	dlChanges := make([]domain.DeltaDeadlineChange, 0, len(rawDLs))
+	for _, item := range rawDLs {
+		action := strings.ToLower(strings.TrimSpace(item.Action))
+		switch action {
+		case "create", "update", "reach", "expire", "cancel":
+		default:
+			action = "create"
+		}
+		dlID := item.DeadlineID
+		if dlID <= 0 {
+			dlID = item.DeadlineIDCamel
+		}
+		title := strings.TrimSpace(item.Title)
+		if dlID <= 0 && title == "" {
+			continue
+		}
+		if dlID <= 0 && title != "" && action != "create" {
+			dlID = dlIDByTitle[strings.ToLower(title)]
+		}
+		targetDay := item.TargetDay
+		if targetDay == 0 {
+			targetDay = item.TargetDayCamel
+		}
+		targetLabel := strings.TrimSpace(item.TargetLabel)
+		if targetLabel == "" {
+			targetLabel = strings.TrimSpace(item.TargetLabelCamel)
+		}
+		dlChanges = append(dlChanges, domain.DeltaDeadlineChange{
+			ID:          fmt.Sprintf("dl-%d", len(dlChanges)+1),
+			Action:      action,
+			DeadlineID:  dlID,
+			Title:       title,
+			TargetDay:   targetDay,
+			TargetLabel: targetLabel,
+			Note:        strings.TrimSpace(item.Note),
+		})
+	}
+
+	storyTimeLabel := strings.TrimSpace(raw.StoryTimeLabel)
+	if storyTimeLabel == "" {
+		storyTimeLabel = strings.TrimSpace(raw.StoryTimeLabelCamel)
+	}
+	storyDay := raw.StoryDay
+	if storyDay == nil {
+		storyDay = raw.StoryDayCamel
+	}
+
 	return domain.ChapterDelta{
-		ChapterID:     chapter.ID,
-		CausalSummary: causal,
-		NewEntities:   newEntities,
-		StatePatches:  patches,
-		Foreshadows:   foreshadowUpdates,
-		HighRiskFlags: highRiskCount,
-		ReviewStatus:  domain.DeltaReviewPending,
+		ChapterID:       chapter.ID,
+		CausalSummary:   causal,
+		StoryTimeLabel:  storyTimeLabel,
+		StoryDay:        storyDay,
+		NewEntities:     newEntities,
+		StatePatches:    patches,
+		Foreshadows:     foreshadowUpdates,
+		RelationChanges: relChanges,
+		DeadlineChanges: dlChanges,
+		HighRiskFlags:   highRiskCount,
+		ReviewStatus:    domain.DeltaReviewPending,
 	}
 }
 

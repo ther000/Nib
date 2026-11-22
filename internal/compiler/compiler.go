@@ -60,6 +60,16 @@ type RelationDataSource interface {
 	ListEntityRelations(ctx context.Context, bookID int64) ([]domain.EntityRelation, error)
 }
 
+// TimedRelationDataSource 定义按章时间切片的实体关系查询契约（由 *store.Store 自动满足，严格隔离未来章节关系变更）。
+type TimedRelationDataSource interface {
+	ListEntityRelationsAt(ctx context.Context, bookID int64, chapterSeq int, includePending bool) ([]domain.EntityRelation, error)
+}
+
+// TimelineDataSource 定义故事内期限倒计时只读契约（由 *store.Store 自动满足）。
+type TimelineDataSource interface {
+	ListStoryDeadlines(ctx context.Context, bookID int64, status domain.StoryDeadlineStatus) ([]domain.StoryDeadline, error)
+}
+
 // Option 用于定制 Compiler 可选扩展依赖。
 type Option func(*Compiler)
 
@@ -83,13 +93,15 @@ func WithStyleSource(style StyleDataSource) Option {
 
 // Compiler 负责将书卷设定、世界铁律、节拍卡、实体快照、伏笔、前文衔接、摘要金字塔、精准检索与文风样章编译为透明的作战简报。
 type Compiler struct {
-	src       DataSource
-	mem       MemoryDataSource
-	style     StyleDataSource
-	relations RelationDataSource
+	src            DataSource
+	mem            MemoryDataSource
+	style          StyleDataSource
+	relations      RelationDataSource
+	timedRelations TimedRelationDataSource
+	timeline       TimelineDataSource
 }
 
-// New 创建上下文编译器实例。若 src 本身实现了 MemoryDataSource / StyleDataSource / RelationDataSource，将自动激活对应槽位。
+// New 创建上下文编译器实例。若 src 本身实现了 MemoryDataSource / StyleDataSource / RelationDataSource / TimelineDataSource，将自动激活对应槽位。
 func New(src DataSource, opts ...Option) *Compiler {
 	c := &Compiler{src: src}
 	if ms, ok := src.(MemoryDataSource); ok {
@@ -100,6 +112,12 @@ func New(src DataSource, opts ...Option) *Compiler {
 	}
 	if rs, ok := src.(RelationDataSource); ok {
 		c.relations = rs
+	}
+	if trs, ok := src.(TimedRelationDataSource); ok {
+		c.timedRelations = trs
+	}
+	if ts, ok := src.(TimelineDataSource); ok {
+		c.timeline = ts
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -228,6 +246,17 @@ func (c *Compiler) Compile(ctx context.Context, chapterID int64, opts domain.Bri
 	prevOrderedForTail := normalizePreviousChaptersForTail(prevAll, chap.GlobalSeq)
 	prevOrderedForSummary := normalizePreviousChaptersForSummary(prevAll, chap.GlobalSeq)
 
+	var activeDeadlines []domain.StoryDeadline
+	if c.timeline != nil {
+		if dls, dlErr := c.timeline.ListStoryDeadlines(ctx, book.ID, domain.StoryDeadlineActive); dlErr == nil {
+			for _, dl := range dls {
+				if dl.StartChapterSeq <= chap.GlobalSeq {
+					activeDeadlines = append(activeDeadlines, dl)
+				}
+			}
+		}
+	}
+
 	// 加载 Phase 2 可选数据：未回收伏笔（P3）、弧线/卷摘要（P5）、防剧透记忆检索（P6）。
 	var allForeshadowings []domain.Foreshadowing
 	var arcSummaries []domain.ArcSummary
@@ -274,8 +303,8 @@ func (c *Compiler) Compile(ctx context.Context, chapterID int64, opts domain.Bri
 		Required:    true,
 	}
 
-	// P1（永不裁剪）：本章标题/情绪/钩子/节拍卡/作者附加指令。
-	p1Content := buildP1Content(book, chap, beats, entityByID, opts.ExtraInstruction)
+	// P1（永不裁剪）：本章标题/情绪/钩子/故事时间线与倒计时/节拍卡/作者附加指令。
+	p1Content := buildP1Content(book, chap, prevAll, activeDeadlines, beats, entityByID, opts.ExtraInstruction)
 	p1Est := EstimateTokens(p1Content)
 	p1Slot := domain.BriefingSlot{
 		Key:         "p1_chapter_beats",
@@ -294,11 +323,18 @@ func (c *Compiler) Compile(ctx context.Context, chapterID int64, opts domain.Bri
 		remaining = 0
 	}
 
-	// P2（高优）：出场实体与钉选实体状态快照 + 关联实体关系网。
+	// P2（高优）：出场实体与钉选实体状态快照 + 关联实体关系网（优先按 prevSeq 时间切片）。
 	p2Cap := min(scaledBudget(totalBudget, defaultP2Budget), remaining)
 	p2Content, includedEntityIDs, p2Truncated := buildP2Content(p2Candidates, p2Cap)
-	if c.relations != nil && len(includedEntityIDs) > 0 && p2Cap > EstimateTokens(p2Content)+40 {
-		if rels, rErr := c.relations.ListEntityRelations(ctx, book.ID); rErr == nil && len(rels) > 0 {
+	if len(includedEntityIDs) > 0 && p2Cap > EstimateTokens(p2Content)+40 && (c.timedRelations != nil || c.relations != nil) {
+		var rels []domain.EntityRelation
+		var rErr error
+		if c.timedRelations != nil {
+			rels, rErr = c.timedRelations.ListEntityRelationsAt(ctx, book.ID, prevSeq, opts.IncludePending)
+		} else {
+			rels, rErr = c.relations.ListEntityRelations(ctx, book.ID)
+		}
+		if rErr == nil && len(rels) > 0 {
 			if relText := formatRelevantRelations(rels, includedEntityIDs, p2Cap-EstimateTokens(p2Content)); relText != "" {
 				if p2Content != "" {
 					p2Content += "\n\n" + relText

@@ -13,6 +13,8 @@ interface ChapterMetaFormProps {
   emotion: string;
   hookType: string;
   hookNote: string;
+  storyTimeLabel: string;
+  storyDay: string;
   outline: string;
   dirty: boolean;
   saving: boolean;
@@ -20,6 +22,8 @@ interface ChapterMetaFormProps {
   onChangeEmotion: (value: string) => void;
   onChangeHookType: (value: string) => void;
   onChangeHookNote: (value: string) => void;
+  onChangeStoryTimeLabel: (value: string) => void;
+  onChangeStoryDay: (value: string) => void;
   onChangeOutline: (value: string) => void;
   onSaveAll: () => void;
   onStartWriting: () => void;
@@ -31,6 +35,8 @@ export function ChapterMetaForm({
   emotion,
   hookType,
   hookNote,
+  storyTimeLabel,
+  storyDay,
   outline,
   dirty,
   saving,
@@ -38,6 +44,8 @@ export function ChapterMetaForm({
   onChangeEmotion,
   onChangeHookType,
   onChangeHookNote,
+  onChangeStoryTimeLabel,
+  onChangeStoryDay,
   onChangeOutline,
   onSaveAll,
   onStartWriting,
@@ -133,6 +141,35 @@ export function ChapterMetaForm({
             onChange={(e) => onChangeHookNote(e.target.value)}
             placeholder="例如：刚收完战利品，宗门追兵的血玉令牌亮起"
             className="w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+          />
+        </div>
+      </div>
+
+      {/* Story Timeline */}
+      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[1fr_140px]">
+        <div>
+          <label className="mb-1 block text-xs font-medium text-ink-secondary">
+            故事内时间
+          </label>
+          <input
+            type="text"
+            value={storyTimeLabel}
+            onChange={(e) => onChangeStoryTimeLabel(e.target.value)}
+            placeholder="例如：天元三年秋 · 入宗第十日"
+            className="w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+          />
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs font-medium text-ink-secondary">
+            故事日序号
+          </label>
+          <input
+            type="number"
+            value={storyDay}
+            onChange={(e) => onChangeStoryDay(e.target.value)}
+            placeholder="如 10，用于倒计时"
+            className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
           />
         </div>
       </div>

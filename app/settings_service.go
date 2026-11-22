@@ -420,6 +420,37 @@ func (s *SettingsService) ClearTrash(ctx context.Context) (int64, error) {
 	return st.ClearTrash(ctx)
 }
 
+// ListSafetySnapshots 列出指定书籍（或全部）的高危操作/导演撤销点快照记录。
+func (s *SettingsService) ListSafetySnapshots(ctx context.Context, bookID int64) ([]domain.SafetySnapshot, error) {
+	if bookID < 0 {
+		return nil, &domain.ValidationError{Field: "bookId", Message: "书籍 ID 不能为负数"}
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return nil, err
+	}
+	items, err := st.ListSafetySnapshots(ctx, bookID)
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		return []domain.SafetySnapshot{}, nil
+	}
+	return items, nil
+}
+
+// RestoreSafetySnapshot 原子恢复数据库至指定安全撤销点，并返回恢复前热备路径。
+func (s *SettingsService) RestoreSafetySnapshot(ctx context.Context, snapshotID int64) (string, error) {
+	if err := validatePositiveID("snapshotId", snapshotID); err != nil {
+		return "", err
+	}
+	st, err := s.rt.store()
+	if err != nil {
+		return "", err
+	}
+	return st.RestoreSafetySnapshot(ctx, snapshotID)
+}
+
 // GetUsageSummary 聚合指定书籍（或 bookID=0 时全局）的各环节、各模型 Token 消耗与调用统计。
 func (s *SettingsService) GetUsageSummary(ctx context.Context, bookID int64) (domain.UsageSummary, error) {
 	if bookID < 0 {

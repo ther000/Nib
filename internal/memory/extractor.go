@@ -36,6 +36,13 @@ type Store interface {
 	GetProvider(ctx context.Context, id int64) (domain.Provider, error)
 }
 
+// timelineAndRelationStore 为可选扩展接口（*store.Store 自动满足），用于向抽取 Prompt 提供前章时间线、活跃期限与现存关系。
+type timelineAndRelationStore interface {
+	GetPreviousChapters(ctx context.Context, bookID int64, beforeGlobalSeq int, limit int) ([]domain.Chapter, error)
+	ListStoryDeadlines(ctx context.Context, bookID int64, status domain.StoryDeadlineStatus) ([]domain.StoryDeadline, error)
+	ListEntityRelationsAt(ctx context.Context, bookID int64, chapterSeq int, includePending bool) ([]domain.EntityRelation, error)
+}
+
 // LLMStreamer 定义流式模型调用接口（直接由 *llm.Client 满足）。
 type LLMStreamer interface {
 	Stream(
@@ -108,7 +115,16 @@ func (e *Extractor) ExtractChapterDelta(ctx context.Context, chapterID int64) (d
 	}
 	openForeshadowings := filterOpenForeshadowings(allForeshadowings, chap.GlobalSeq)
 
-	sysPrompt, userPrompt := buildExtractionPrompts(book, chap, snapshots, openForeshadowings)
+	var prevChaps []domain.Chapter
+	var activeDeadlines []domain.StoryDeadline
+	var activeRelations []domain.EntityRelation
+	if trs, ok := e.store.(timelineAndRelationStore); ok {
+		prevChaps, _ = trs.GetPreviousChapters(ctx, book.ID, chap.GlobalSeq, 1)
+		activeDeadlines, _ = trs.ListStoryDeadlines(ctx, book.ID, domain.StoryDeadlineActive)
+		activeRelations, _ = trs.ListEntityRelationsAt(ctx, book.ID, prevSeq, true)
+	}
+
+	sysPrompt, userPrompt := buildExtractionPrompts(book, chap, snapshots, openForeshadowings, prevChaps, activeDeadlines, activeRelations)
 
 	rawResp, err := e.collectLLMResponse(ctx, book.ID, chap.ID, provider, route, sysPrompt, userPrompt)
 	if err != nil {
@@ -132,7 +148,7 @@ func (e *Extractor) ExtractChapterDelta(ctx context.Context, chapterID int64) (d
 		}
 	}
 
-	delta := normalizeDelta(chap, book.Genre, parsed, entities, snapshots, allForeshadowings)
+	delta := normalizeDelta(chap, book.Genre, parsed, entities, snapshots, allForeshadowings, activeRelations, activeDeadlines)
 	saved, err := e.store.SavePendingDelta(ctx, delta)
 	if err != nil {
 		return domain.ChapterDelta{}, fmt.Errorf("save pending delta: %w", err)
@@ -247,18 +263,23 @@ func buildExtractionPrompts(
 	chap domain.Chapter,
 	snapshots []domain.EntitySnapshot,
 	openForeshadowings []domain.Foreshadowing,
+	prevChaps []domain.Chapter,
+	activeDeadlines []domain.StoryDeadline,
+	activeRelations []domain.EntityRelation,
 ) (string, string) {
 	preset := genres.GetOrDefault(book.Genre)
 
 	var sys strings.Builder
-	sys.WriteString("你是男频长篇网文记忆账本抽取引擎。请严格根据给定章节正文与前章世界状态快照，提取本章实际发生的因果转折、新实体、实体属性增量变更与伏笔进展。\n")
+	sys.WriteString("你是男频长篇网文记忆账本抽取引擎。请严格根据给定章节正文与前章世界状态快照，提取本章实际发生的因果转折、故事内时间推算、新实体、实体属性增量变更、人物关系变化、期限倒计时变化与伏笔进展。\n")
 	sys.WriteString("严格要求：\n")
 	sys.WriteString("1. 必须只输出一个合法 JSON 对象，禁止输出任何解释文字或 Markdown 围栏。\n")
-	sys.WriteString("2. 绝不脑补正文未明确写出的变更；若某项无变更则输出空数组 []。\n")
+	sys.WriteString("2. 绝不脑补正文未明确写出的变更；若某项无变更则输出空数组 []；若正文未体现时间推移，story_day 可保持前章天数或 null。\n")
 	sys.WriteString("3. 高危标红条件（severity 设为 \"high_risk\"）：角色死亡/失踪/夺舍/废除修为；实力境界或身份阶层跨大阶跃升；核心道具/功法/股权易主或损毁；重要角色阵营关系翻转；都市题材现金流单章变动超过 30%。其余常规变化（如普通可恢复轻伤、小境界微调）设为 \"normal\"。\n")
 	sys.WriteString("4. 输出 JSON Schema：\n")
 	sys.WriteString(`{
   "causal_summary": "150~250字单章因果摘要，只记关键因果转折、冲突结果与资源/伤势变化",
+  "story_time_label": "可空：如 天元三年秋·入宗第8日",
+  "story_day": null,
   "new_entities": [
     {"kind": "character|faction|location|item|system|rule", "name": "实体名", "aliases": [], "is_invariant": false, "summary": "简介", "attributes": {}, "reason": "出场原因"}
   ],
@@ -267,6 +288,12 @@ func buildExtractionPrompts(
   ],
   "foreshadowing_updates": [
     {"action": "plant|hint|resolve|abandon", "foreshadowing_id": 0, "title": "伏笔标题", "description": "线索与状态说明", "target_resolve_seq": 0, "involved_entity_ids": []}
+  ],
+  "relation_changes": [
+    {"action": "upsert|end", "relation_id": 0, "source_name": "甲", "target_name": "乙", "relation_type": "死敌", "description": "变化说明", "reason": "章节依据"}
+  ],
+  "deadline_changes": [
+    {"action": "create|update|reach|expire|cancel", "deadline_id": 0, "title": "期限标题", "target_day": 30, "target_label": "目标时间标签", "note": "说明"}
   ]
 }`)
 
@@ -278,6 +305,27 @@ func buildExtractionPrompts(
 			fieldHints = append(fieldHints, fmt.Sprintf("%s(%s)", f.Key, f.Label))
 		}
 		fmt.Fprintf(&user, "题材推荐属性键：%s\n", strings.Join(fieldHints, "、"))
+	}
+
+	if len(prevChaps) > 0 && (strings.TrimSpace(prevChaps[0].StoryTimeLabel) != "" || prevChaps[0].StoryDay != nil) {
+		prev := prevChaps[0]
+		dayText := "未记天数"
+		if prev.StoryDay != nil {
+			dayText = fmt.Sprintf("Day %d", *prev.StoryDay)
+		}
+		fmt.Fprintf(&user, "上一章故事内时间坐标：第%d章 %s（%s）\n", prev.GlobalSeq, strings.TrimSpace(prev.StoryTimeLabel), dayText)
+	}
+	if len(activeDeadlines) > 0 {
+		user.WriteString("\n【当前活跃期限与倒计时】\n")
+		for _, dl := range activeDeadlines {
+			fmt.Fprintf(&user, "- [ID:%d] %s（目标 Day %d %s）：%s\n", dl.ID, dl.Title, dl.TargetDay, strings.TrimSpace(dl.TargetLabel), dl.Note)
+		}
+	}
+	if len(activeRelations) > 0 {
+		user.WriteString("\n【当前生效人物/势力关系】\n")
+		for _, rel := range activeRelations {
+			fmt.Fprintf(&user, "- [ID:%d] %s —[%s]→ %s（%s）\n", rel.ID, rel.SourceName, rel.RelationType, rel.TargetName, rel.Description)
+		}
 	}
 
 	if len(snapshots) > 0 {

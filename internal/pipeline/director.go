@@ -52,6 +52,11 @@ type DirectorHistoryStore interface {
 	AppendDirectorMessage(ctx context.Context, bookID int64, msg domain.DirectorMessage) (domain.DirectorMessage, error)
 }
 
+// DirectorSafetyStore 定义 AI 导演写库前自动创建安全撤销点的接口（由 *store.Store 自动满足）。
+type DirectorSafetyStore interface {
+	CreateSafetySnapshot(ctx context.Context, bookID int64, source string, sourceRefID int64, summary string) (domain.SafetySnapshot, error)
+}
+
 type directorStepDecision struct {
 	Thought   string `json:"thought"`
 	Action    string `json:"action"` // "tool" | "final"
@@ -133,7 +138,25 @@ func (r *Runner) RunDirectorChat(
 	toolDefs := directorToolDefinitions()
 	toolCalls := make([]domain.DirectorToolCall, 0)
 	mutated := false
+	var turnUndoSnapshotID int64
 	finalReply := ""
+
+	ensureTurnSafetySnapshot := func(toolName string) {
+		if turnUndoSnapshotID > 0 || !isDirectorMutatingTool(toolName) {
+			return
+		}
+		if ss, ok := r.store.(DirectorSafetyStore); ok {
+			if snap, snapErr := ss.CreateSafetySnapshot(
+				ctx,
+				book.ID,
+				"director_turn",
+				0,
+				summarizeDirectorText("AI 导演："+strings.TrimSpace(req.Instruction), 80),
+			); snapErr == nil && snap.ID > 0 {
+				turnUndoSnapshotID = snap.ID
+			}
+		}
+	}
 
 	for step := 1; step <= directorMaxSteps; step++ {
 		if ctx.Err() != nil {
@@ -220,6 +243,7 @@ func (r *Runner) RunDirectorChat(
 					return domain.DirectorReply{}, domain.ErrGenerationCanceled
 				}
 
+				ensureTurnSafetySnapshot(tc.Name)
 				resultText, didMutate, undoChapID, undoVerID, toolErr := r.executeDirectorTool(ctx, ds, book.ID, tc.Name, argsRaw)
 				if didMutate {
 					mutated = true
@@ -290,6 +314,7 @@ func (r *Runner) RunDirectorChat(
 			return domain.DirectorReply{}, domain.ErrGenerationCanceled
 		}
 
+		ensureTurnSafetySnapshot(tc.Name)
 		resultText, didMutate, undoChapID, undoVerID, toolErr := r.executeDirectorTool(ctx, ds, book.ID, tc.Name, dec.ToolArgs)
 		if didMutate {
 			mutated = true
@@ -323,24 +348,32 @@ func (r *Runner) RunDirectorChat(
 		finalReply = "已完成多步操作。如需继续调整，直接告诉我下一步想法。"
 	}
 
+	var effectiveUndoSnapshotID int64
+	if mutated {
+		effectiveUndoSnapshotID = turnUndoSnapshotID
+	}
+
 	if hs, ok := r.store.(DirectorHistoryStore); ok {
 		_, _ = hs.AppendDirectorMessage(ctx, book.ID, domain.DirectorMessage{
-			Role:      "assistant",
-			Content:   finalReply,
-			ToolCalls: toolCalls,
+			Role:           "assistant",
+			Content:        finalReply,
+			ToolCalls:      toolCalls,
+			UndoSnapshotID: effectiveUndoSnapshotID,
 		})
 	}
 
 	_ = send(domain.DirectorEvent{
-		Kind:      domain.DirectorEventCompleted,
-		Reply:     finalReply,
-		ToolCalls: toolCalls,
-		Mutated:   mutated,
+		Kind:           domain.DirectorEventCompleted,
+		Reply:          finalReply,
+		ToolCalls:      toolCalls,
+		Mutated:        mutated,
+		UndoSnapshotID: effectiveUndoSnapshotID,
 	})
 	return domain.DirectorReply{
-		Reply:     finalReply,
-		ToolCalls: toolCalls,
-		Mutated:   mutated,
+		Reply:          finalReply,
+		ToolCalls:      toolCalls,
+		Mutated:        mutated,
+		UndoSnapshotID: effectiveUndoSnapshotID,
 	}, nil
 }
 

@@ -54,6 +54,18 @@ func (f *fakeMemoryStore) DeleteForeshadowing(_ context.Context, id int64) error
 	return nil
 }
 
+func (f *fakeMemoryStore) ListStoryDeadlines(_ context.Context, _ int64, _ domain.StoryDeadlineStatus) ([]domain.StoryDeadline, error) {
+	return []domain.StoryDeadline{}, nil
+}
+
+func (f *fakeMemoryStore) UpsertStoryDeadline(_ context.Context, in domain.UpsertStoryDeadlineInput) (domain.StoryDeadline, error) {
+	return domain.StoryDeadline{ID: 31, BookID: in.BookID, Title: in.Title, Status: in.Status}, nil
+}
+
+func (f *fakeMemoryStore) DeleteStoryDeadline(_ context.Context, _ int64) error {
+	return nil
+}
+
 func (f *fakeMemoryStore) ListArcSummaries(_ context.Context, _ int64, level domain.ArcSummaryLevel) ([]domain.ArcSummary, error) {
 	f.lastArcLevel = level
 	return f.arcSummaries, nil

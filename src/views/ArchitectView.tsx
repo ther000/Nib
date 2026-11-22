@@ -27,6 +27,15 @@ function nextBeatKey(): string {
   return `beat-${beatKeyCounter++}`;
 }
 
+function parseOptionalStoryDay(raw: string): { valid: boolean; value?: number } {
+  const trimmed = raw.trim();
+  if (!trimmed) return { valid: true, value: undefined };
+  if (!/^-?\d+$/.test(trimmed)) return { valid: false };
+  const n = Number.parseInt(trimmed, 10);
+  if (!Number.isSafeInteger(n)) return { valid: false };
+  return { valid: true, value: n };
+}
+
 function toEditableBeats(beats: Beat[]): EditableBeat[] {
   return beats.map((b) => ({
     localKey: b.id > 0 ? `id-${b.id}` : nextBeatKey(),
@@ -80,6 +89,8 @@ export function ArchitectView() {
   const [metaEmotion, setMetaEmotion] = useState("setup");
   const [metaHookType, setMetaHookType] = useState("mystery");
   const [metaHookNote, setMetaHookNote] = useState("");
+  const [metaStoryTimeLabel, setMetaStoryTimeLabel] = useState("");
+  const [metaStoryDay, setMetaStoryDay] = useState("");
   const [metaOutline, setMetaOutline] = useState("");
   const [metaCausal, setMetaCausal] = useState("");
   const [metaDirty, setMetaDirty] = useState(false);
@@ -125,6 +136,8 @@ export function ArchitectView() {
     emotion: metaEmotion,
     hookType: metaHookType,
     hookNote: metaHookNote,
+    storyTimeLabel: metaStoryTimeLabel,
+    storyDay: metaStoryDay,
     outline: metaOutline,
     causal: metaCausal,
   });
@@ -133,6 +146,8 @@ export function ArchitectView() {
     emotion: metaEmotion,
     hookType: metaHookType,
     hookNote: metaHookNote,
+    storyTimeLabel: metaStoryTimeLabel,
+    storyDay: metaStoryDay,
     outline: metaOutline,
     causal: metaCausal,
   };
@@ -149,6 +164,8 @@ export function ArchitectView() {
       setMetaEmotion("setup");
       setMetaHookType("mystery");
       setMetaHookNote("");
+      setMetaStoryTimeLabel("");
+      setMetaStoryDay("");
       setMetaOutline("");
       setMetaCausal("");
       setMetaDirty(false);
@@ -160,6 +177,12 @@ export function ArchitectView() {
     setMetaEmotion(activeChapter.emotionTag || "setup");
     setMetaHookType(activeChapter.hookType || "mystery");
     setMetaHookNote(activeChapter.hookNote || "");
+    setMetaStoryTimeLabel(activeChapter.storyTimeLabel || "");
+    setMetaStoryDay(
+      activeChapter.storyDay !== undefined && activeChapter.storyDay !== null
+        ? String(activeChapter.storyDay)
+        : ""
+    );
     setMetaOutline(activeChapter.outlineSummary || "");
     setMetaCausal(activeChapter.causalSummary || "");
     setMetaDirty(false);
@@ -174,6 +197,7 @@ export function ArchitectView() {
       if (metaDirtyRef.current) {
         const d = metaDraftRef.current;
         const trimmedTitle = d.title.trim() || chap.title;
+        const parsedDay = parseOptionalStoryDay(d.storyDay);
         void LibraryService.updateChapterMeta({
           id: chap.id,
           title: trimmedTitle,
@@ -183,6 +207,9 @@ export function ArchitectView() {
           hookNote: d.hookNote.trim(),
           outlineSummary: d.outline.trim(),
           causalSummary: d.causal.trim(),
+          storyTimeLabel: d.storyTimeLabel.trim(),
+          storyDay: parsedDay.valid ? parsedDay.value : chap.storyDay,
+          updateStoryTimeline: true,
         })
           .then((updated) => updateChapterInCache(updated))
           .catch(() => {
@@ -268,6 +295,11 @@ export function ArchitectView() {
       notify({ tone: "warn", message: "章节标题不能为空" });
       return false;
     }
+    const parsedDay = parseOptionalStoryDay(metaStoryDay);
+    if (!parsedDay.valid) {
+      notify({ tone: "warn", message: "故事日序号必须为整数（如 10）或留空" });
+      return false;
+    }
     setSavingMeta(true);
     try {
       const updated = await LibraryService.updateChapterMeta({
@@ -279,6 +311,9 @@ export function ArchitectView() {
         hookNote: metaHookNote.trim(),
         outlineSummary: metaOutline.trim(),
         causalSummary: metaCausal.trim(),
+        storyTimeLabel: metaStoryTimeLabel.trim(),
+        storyDay: parsedDay.value,
+        updateStoryTimeline: true,
       });
       updateChapterInCache(updated);
       setMetaDirty(false);
@@ -296,6 +331,8 @@ export function ArchitectView() {
     metaEmotion,
     metaHookType,
     metaHookNote,
+    metaStoryTimeLabel,
+    metaStoryDay,
     metaOutline,
     metaCausal,
     notify,
@@ -830,6 +867,8 @@ export function ArchitectView() {
                 emotion={metaEmotion}
                 hookType={metaHookType}
                 hookNote={metaHookNote}
+                storyTimeLabel={metaStoryTimeLabel}
+                storyDay={metaStoryDay}
                 outline={metaOutline}
                 dirty={metaDirty || beatsDirty}
                 saving={savingMeta || savingBeats}
@@ -847,6 +886,14 @@ export function ArchitectView() {
                 }}
                 onChangeHookNote={(v) => {
                   setMetaHookNote(v);
+                  setMetaDirty(true);
+                }}
+                onChangeStoryTimeLabel={(v) => {
+                  setMetaStoryTimeLabel(v);
+                  setMetaDirty(true);
+                }}
+                onChangeStoryDay={(v) => {
+                  setMetaStoryDay(v);
                   setMetaDirty(true);
                 }}
                 onChangeOutline={(v) => {

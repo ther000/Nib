@@ -55,28 +55,34 @@ func (in UpsertEntityInput) Validate() error {
 	return nil
 }
 
-// EntityRelation 表示两个设定实体之间的有向关系（如 师徒 / 死敌 / 同盟 / 隶属）。
+// EntityRelation 表示两个设定实体之间的有向关系（如 师徒 / 死敌 / 同盟 / 隶属），支持按章节区间演变。
 type EntityRelation struct {
-	ID             int64  `json:"id"`
-	BookID         int64  `json:"bookId"`
-	SourceEntityID int64  `json:"sourceEntityId"`
-	SourceName     string `json:"sourceName,omitempty"`
-	TargetEntityID int64  `json:"targetEntityId"`
-	TargetName     string `json:"targetName,omitempty"`
-	RelationType   string `json:"relationType"`
-	Description    string `json:"description"`
-	CreatedAt      string `json:"createdAt,omitempty"`
-	UpdatedAt      string `json:"updatedAt,omitempty"`
+	ID                  int64            `json:"id"`
+	BookID              int64            `json:"bookId"`
+	SourceEntityID      int64            `json:"sourceEntityId"`
+	SourceName          string           `json:"sourceName,omitempty"`
+	TargetEntityID      int64            `json:"targetEntityId"`
+	TargetName          string           `json:"targetName,omitempty"`
+	RelationType        string           `json:"relationType"`
+	Description         string           `json:"description"`
+	EffectiveChapterSeq int              `json:"effectiveChapterSeq"`
+	EndedChapterSeq     *int             `json:"endedChapterSeq,omitempty"`
+	Status              StateEventStatus `json:"status"`
+	CreatedAt           string           `json:"createdAt,omitempty"`
+	UpdatedAt           string           `json:"updatedAt,omitempty"`
 }
 
 // UpsertEntityRelationInput 是新建或更新实体关系的入参。
 type UpsertEntityRelationInput struct {
-	ID             int64  `json:"id"`
-	BookID         int64  `json:"bookId"`
-	SourceEntityID int64  `json:"sourceEntityId"`
-	TargetEntityID int64  `json:"targetEntityId"`
-	RelationType   string `json:"relationType"`
-	Description    string `json:"description"`
+	ID                  int64            `json:"id"`
+	BookID              int64            `json:"bookId"`
+	SourceEntityID      int64            `json:"sourceEntityId"`
+	TargetEntityID      int64            `json:"targetEntityId"`
+	RelationType        string           `json:"relationType"`
+	Description         string           `json:"description"`
+	EffectiveChapterSeq int              `json:"effectiveChapterSeq"`
+	EndedChapterSeq     *int             `json:"endedChapterSeq,omitempty"`
+	Status              StateEventStatus `json:"status,omitempty"`
 }
 
 func (in UpsertEntityRelationInput) Validate() error {
@@ -91,6 +97,15 @@ func (in UpsertEntityRelationInput) Validate() error {
 	}
 	if strings.TrimSpace(in.RelationType) == "" {
 		return newValidationError("relationType", "关系类型不能为空")
+	}
+	if in.EffectiveChapterSeq < 0 {
+		return newValidationError("effectiveChapterSeq", "生效章号不能为负数")
+	}
+	if in.EndedChapterSeq != nil && *in.EndedChapterSeq < in.EffectiveChapterSeq {
+		return newValidationError("endedChapterSeq", "结束章号不能早于生效章号")
+	}
+	if in.Status != "" && !in.Status.Valid() {
+		return newValidationError("status", "无效的关系记录状态")
 	}
 	return nil
 }

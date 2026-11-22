@@ -16,11 +16,12 @@ type DirectorToolCall struct {
 
 // DirectorMessage 表示作者与 AI 导演之间的一条持久化对话消息。
 type DirectorMessage struct {
-	ID        int64              `json:"id,omitempty"`
-	Role      string             `json:"role"` // "user" | "assistant"
-	Content   string             `json:"content"`
-	ToolCalls []DirectorToolCall `json:"toolCalls,omitempty"`
-	CreatedAt string             `json:"createdAt,omitempty"`
+	ID             int64              `json:"id,omitempty"`
+	Role           string             `json:"role"` // "user" | "assistant"
+	Content        string             `json:"content"`
+	ToolCalls      []DirectorToolCall `json:"toolCalls,omitempty"`
+	UndoSnapshotID int64              `json:"undoSnapshotId,omitempty"`
+	CreatedAt      string             `json:"createdAt,omitempty"`
 }
 
 // DirectorChatRequest 是向 AI 导演下达自然语言指令的入参。
@@ -56,20 +57,22 @@ const (
 
 // DirectorEvent 是 AI 导演执行过程中的实时推送分片。
 type DirectorEvent struct {
-	Kind      DirectorEventKind `json:"kind"`
-	Step      int               `json:"step,omitempty"`
-	Message   string            `json:"message,omitempty"`
-	ToolCall  *DirectorToolCall `json:"toolCall,omitempty"`
-	Delta     string            `json:"delta,omitempty"`
-	Reply     string            `json:"reply,omitempty"`
-	ToolCalls []DirectorToolCall `json:"toolCalls,omitempty"`
-	Mutated   bool              `json:"mutated,omitempty"`
-	Error     string            `json:"error,omitempty"`
+	Kind           DirectorEventKind  `json:"kind"`
+	Step           int                `json:"step,omitempty"`
+	Message        string             `json:"message,omitempty"`
+	ToolCall       *DirectorToolCall  `json:"toolCall,omitempty"`
+	Delta          string             `json:"delta,omitempty"`
+	Reply          string             `json:"reply,omitempty"`
+	ToolCalls      []DirectorToolCall `json:"toolCalls,omitempty"`
+	Mutated        bool               `json:"mutated,omitempty"`
+	UndoSnapshotID int64              `json:"undoSnapshotId,omitempty"`
+	Error          string             `json:"error,omitempty"`
 }
 
 // DirectorReply 是 AI 导演完成本轮指令后的最终返回结果。
 type DirectorReply struct {
-	Reply     string             `json:"reply"`
-	ToolCalls []DirectorToolCall `json:"toolCalls"`
-	Mutated   bool               `json:"mutated"`
+	Reply          string             `json:"reply"`
+	ToolCalls      []DirectorToolCall `json:"toolCalls"`
+	Mutated        bool               `json:"mutated"`
+	UndoSnapshotID int64              `json:"undoSnapshotId,omitempty"`
 }

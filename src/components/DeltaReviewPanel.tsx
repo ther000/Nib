@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
+  CalendarClock,
   Check,
+  Clock,
+  GitFork,
   Loader2,
   ShieldAlert,
   Sparkles,
@@ -20,6 +23,23 @@ import {
   getDeltaForeshadowActionMeta,
   getEntityKindLabel,
 } from "../lib/constants";
+
+function getDeadlineActionLabel(action: string): string {
+  switch (action) {
+    case "create":
+      return "新建期限";
+    case "update":
+      return "调整期限";
+    case "reach":
+      return "如期兑现";
+    case "expire":
+      return "已超期";
+    case "cancel":
+      return "已取消";
+    default:
+      return action || "变更";
+  }
+}
 
 interface DeltaReviewPanelProps {
   chapterId: number;
@@ -52,10 +72,15 @@ export function DeltaReviewPanel({
   // Interactive decision state
   const [applyCausal, setApplyCausal] = useState(true);
   const [causalText, setCausalText] = useState("");
+  const [applyTimeline, setApplyTimeline] = useState(false);
+  const [timelineLabel, setTimelineLabel] = useState("");
+  const [timelineDay, setTimelineDay] = useState("");
   const [acceptedNewEntities, setAcceptedNewEntities] = useState<Record<string, boolean>>({});
   const [acceptedPatches, setAcceptedPatches] = useState<Record<string, boolean>>({});
   const [patchOverrides, setPatchOverrides] = useState<Record<string, string>>({});
   const [acceptedForeshadows, setAcceptedForeshadows] = useState<Record<string, boolean>>({});
+  const [acceptedRelations, setAcceptedRelations] = useState<Record<string, boolean>>({});
+  const [acceptedDeadlines, setAcceptedDeadlines] = useState<Record<string, boolean>>({});
 
   const extractAbortRef = useRef<AbortController | null>(null);
   const extractRunIdRef = useRef(0);
@@ -91,14 +116,27 @@ export function DeltaReviewPanel({
     if (!delta) {
       setApplyCausal(false);
       setCausalText("");
+      setApplyTimeline(false);
+      setTimelineLabel("");
+      setTimelineDay("");
       setAcceptedNewEntities({});
       setAcceptedPatches({});
       setPatchOverrides({});
       setAcceptedForeshadows({});
+      setAcceptedRelations({});
+      setAcceptedDeadlines({});
       return;
     }
     setApplyCausal(Boolean(delta.causalSummary?.trim()));
     setCausalText(delta.causalSummary || "");
+    const hasTimeline =
+      Boolean(delta.storyTimeLabel?.trim()) ||
+      (delta.storyDay !== undefined && delta.storyDay !== null);
+    setApplyTimeline(hasTimeline);
+    setTimelineLabel(delta.storyTimeLabel || "");
+    setTimelineDay(
+      delta.storyDay !== undefined && delta.storyDay !== null ? String(delta.storyDay) : ""
+    );
 
     const nextNewEnts: Record<string, boolean> = {};
     for (const item of delta.newEntities ?? []) {
@@ -118,6 +156,18 @@ export function DeltaReviewPanel({
       nextFs[fs.id] = true;
     }
     setAcceptedForeshadows(nextFs);
+
+    const nextRels: Record<string, boolean> = {};
+    for (const rel of delta.relationChanges ?? []) {
+      nextRels[rel.id] = true;
+    }
+    setAcceptedRelations(nextRels);
+
+    const nextDls: Record<string, boolean> = {};
+    for (const dl of delta.deadlineChanges ?? []) {
+      nextDls[dl.id] = true;
+    }
+    setAcceptedDeadlines(nextDls);
   }, [delta?.id, delta?.createdAt]);
 
   const stopExtract = useCallback(() => {
@@ -154,7 +204,9 @@ export function DeltaReviewPanel({
       const totalItems =
         (extracted.newEntities?.length ?? 0) +
         (extracted.statePatches?.length ?? 0) +
-        (extracted.foreshadows?.length ?? 0);
+        (extracted.foreshadows?.length ?? 0) +
+        (extracted.relationChanges?.length ?? 0) +
+        (extracted.deadlineChanges?.length ?? 0);
       onNotify({
         tone: extracted.highRiskFlags > 0 ? "warn" : "ok",
         message: `已抽取本章变更单（${totalItems} 条提案）`,
@@ -189,6 +241,8 @@ export function DeltaReviewPanel({
     const newEnts = delta.newEntities ?? [];
     const patches = delta.statePatches ?? [];
     const fss = delta.foreshadows ?? [];
+    const rels = delta.relationChanges ?? [];
+    const dls = delta.deadlineChanges ?? [];
     let selected = 0;
     let highRiskSelected = 0;
     for (const item of newEnts) {
@@ -203,15 +257,37 @@ export function DeltaReviewPanel({
     for (const f of fss) {
       if (acceptedForeshadows[f.id] ?? true) selected += 1;
     }
+    for (const r of rels) {
+      if (acceptedRelations[r.id] ?? true) selected += 1;
+    }
+    for (const d of dls) {
+      if (acceptedDeadlines[d.id] ?? true) selected += 1;
+    }
     return {
       selected,
-      total: newEnts.length + patches.length + fss.length,
+      total: newEnts.length + patches.length + fss.length + rels.length + dls.length,
       highRiskSelected,
     };
-  }, [delta, acceptedNewEntities, acceptedPatches, acceptedForeshadows]);
+  }, [
+    delta,
+    acceptedNewEntities,
+    acceptedPatches,
+    acceptedForeshadows,
+    acceptedRelations,
+    acceptedDeadlines,
+  ]);
 
   const handleApply = async () => {
     if (!delta || applying) return;
+    let parsedStoryDay: number | undefined;
+    if (applyTimeline && timelineDay.trim()) {
+      if (!/^-?\d+$/.test(timelineDay.trim())) {
+        onNotify({ tone: "warn", message: "故事日序号必须为整数（或留空）" });
+        return;
+      }
+      parsedStoryDay = Number.parseInt(timelineDay.trim(), 10);
+    }
+
     setApplying(true);
     try {
       const decisions: DeltaDecision[] = [
@@ -235,9 +311,23 @@ export function DeltaReviewPanel({
           itemId: fs.id,
           accept: acceptedForeshadows[fs.id] ?? true,
         })),
+        ...(delta.relationChanges ?? []).map((rel) => ({
+          kind: "relation",
+          itemId: rel.id,
+          accept: acceptedRelations[rel.id] ?? true,
+        })),
+        ...(delta.deadlineChanges ?? []).map((dl) => ({
+          kind: "deadline",
+          itemId: dl.id,
+          accept: acceptedDeadlines[dl.id] ?? true,
+        })),
       ];
 
       const trimmedCausal = causalText.trim();
+      const trimmedLabel = timelineLabel.trim();
+      const shouldApplyTimeline =
+        applyTimeline && (trimmedLabel.length > 0 || parsedStoryDay !== undefined);
+
       const result = await MemoryService.applyDeltaDecisions({
         deltaId: delta.id,
         applyCausalSummary: applyCausal && trimmedCausal.length > 0,
@@ -245,6 +335,12 @@ export function DeltaReviewPanel({
           applyCausal && trimmedCausal !== (delta.causalSummary || "").trim()
             ? trimmedCausal
             : undefined,
+        applyStoryTimeline: shouldApplyTimeline,
+        storyTimeLabelOverride:
+          shouldApplyTimeline && trimmedLabel !== (delta.storyTimeLabel || "").trim()
+            ? trimmedLabel
+            : undefined,
+        storyDayOverride: shouldApplyTimeline ? parsedStoryDay : undefined,
         decisions,
       });
 
@@ -370,6 +466,43 @@ export function DeltaReviewPanel({
                   className="w-full resize-y rounded-md border border-border-subtle bg-surface/70 px-2.5 py-1.5 text-xs leading-relaxed text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none disabled:opacity-45"
                 />
               </div>
+
+              {/* Story Timeline */}
+              {(delta.storyTimeLabel ||
+                (delta.storyDay !== undefined && delta.storyDay !== null)) && (
+                <div className="rounded-lg border border-border-subtle bg-canvas/70 p-3">
+                  <label className="mb-1.5 flex cursor-pointer items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-ink-primary">
+                      <Clock className="h-3.5 w-3.5 text-accent" />
+                      <span>本章故事内时间</span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={applyTimeline}
+                      onChange={(e) => setApplyTimeline(e.target.checked)}
+                      className="h-3.5 w-3.5 accent-[var(--accent)]"
+                    />
+                  </label>
+                  <div className="grid grid-cols-[1fr_92px] gap-2">
+                    <input
+                      type="text"
+                      disabled={!applyTimeline}
+                      value={timelineLabel}
+                      onChange={(e) => setTimelineLabel(e.target.value)}
+                      placeholder="时间标签"
+                      className="rounded-md border border-border-subtle bg-surface/70 px-2.5 py-1 text-xs text-ink-primary focus:border-accent focus:outline-none disabled:opacity-45"
+                    />
+                    <input
+                      type="number"
+                      disabled={!applyTimeline}
+                      value={timelineDay}
+                      onChange={(e) => setTimelineDay(e.target.value)}
+                      placeholder="Day"
+                      className="nib-mono rounded-md border border-border-subtle bg-surface/70 px-2 py-1 text-xs text-ink-primary focus:border-accent focus:outline-none disabled:opacity-45"
+                    />
+                  </div>
+                </div>
+              )}
 
               {/* State Patches */}
               {(delta.statePatches ?? []).length > 0 && (
@@ -577,6 +710,124 @@ export function DeltaReviewPanel({
                               <div className="nib-mono mt-1 text-[10.5px] text-ink-muted">
                                 计划回收：第 {fs.targetResolveSeq} 章
                               </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Relation Changes */}
+              {(delta.relationChanges ?? []).length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <div className="text-[11px] font-medium text-ink-secondary">
+                    关系变动（{delta.relationChanges.length}）
+                  </div>
+                  {delta.relationChanges.map((rel) => {
+                    const checked = acceptedRelations[rel.id] ?? true;
+                    const isEnd = rel.action === "end";
+                    return (
+                      <div
+                        key={rel.id}
+                        className={`rounded-lg border border-border-subtle bg-canvas/70 p-3 transition-opacity ${
+                          checked ? "" : "opacity-55"
+                        }`}
+                      >
+                        <div className="flex items-start gap-2">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) =>
+                              setAcceptedRelations((prev) => ({
+                                ...prev,
+                                [rel.id]: e.target.checked,
+                              }))
+                            }
+                            className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--accent)]"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                              <span
+                                className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                  isEnd
+                                    ? "bg-danger-soft text-danger"
+                                    : "bg-accent-soft text-accent"
+                                }`}
+                              >
+                                <GitFork className="h-2.5 w-2.5" />
+                                {isEnd ? "终止关系" : "新增/变更"}
+                              </span>
+                              <span className="font-medium text-ink-primary">
+                                {rel.sourceName}
+                              </span>
+                              <span className="rounded border border-border-subtle bg-surface px-1.5 py-0.5 text-[10.5px] text-ink-secondary">
+                                {rel.relationType}
+                              </span>
+                              <ArrowRight className="h-3 w-3 text-ink-muted" />
+                              <span className="font-medium text-ink-primary">
+                                {rel.targetName}
+                              </span>
+                            </div>
+                            {(rel.description || rel.reason) && (
+                              <p className="mt-1 text-[11.5px] leading-relaxed text-ink-secondary">
+                                {rel.description || rel.reason}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Deadline Changes */}
+              {(delta.deadlineChanges ?? []).length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <div className="text-[11px] font-medium text-ink-secondary">
+                    期限倒计时变动（{delta.deadlineChanges.length}）
+                  </div>
+                  {delta.deadlineChanges.map((dl) => {
+                    const checked = acceptedDeadlines[dl.id] ?? true;
+                    return (
+                      <div
+                        key={dl.id}
+                        className={`rounded-lg border border-border-subtle bg-canvas/70 p-3 transition-opacity ${
+                          checked ? "" : "opacity-55"
+                        }`}
+                      >
+                        <div className="flex items-start gap-2">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) =>
+                              setAcceptedDeadlines((prev) => ({
+                                ...prev,
+                                [dl.id]: e.target.checked,
+                              }))
+                            }
+                            className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--accent)]"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="inline-flex items-center gap-1 rounded bg-accent-soft px-1.5 py-0.5 text-[10px] font-medium text-accent">
+                                <CalendarClock className="h-2.5 w-2.5" />
+                                {getDeadlineActionLabel(dl.action)}
+                              </span>
+                              <span className="text-xs font-medium text-ink-primary">
+                                {dl.title || `期限 #${dl.deadlineId}`}
+                              </span>
+                              <span className="nib-mono rounded bg-surface px-1.5 py-0.5 text-[10.5px] text-ink-secondary">
+                                Day {dl.targetDay}
+                                {dl.targetLabel ? ` · ${dl.targetLabel}` : ""}
+                              </span>
+                            </div>
+                            {dl.note && (
+                              <p className="mt-1 text-[11.5px] leading-relaxed text-ink-secondary">
+                                {dl.note}
+                              </p>
                             )}
                           </div>
                         </div>

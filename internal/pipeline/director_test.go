@@ -175,3 +175,62 @@ func TestDirectorUpdateBookPreservesProfile(t *testing.T) {
 		t.Fatalf("expected profile fields preserved, got %+v", after)
 	}
 }
+
+func TestDirectorAutoCreatesSafetySnapshotOnMutatingTurn(t *testing.T) {
+	ctx := context.Background()
+	dbFile := filepath.Join(t.TempDir(), "nib_director_undo.db")
+	st, err := store.Open(dbFile)
+	if err != nil {
+		t.Fatalf("open disk store: %v", err)
+	}
+	defer st.Close()
+
+	book, _ := st.CreateBook(ctx, domain.CreateBookInput{Title: "导演撤销点测试", Genre: domain.GenreXuanhuan, Premise: "原初设定"})
+	prov, _ := st.UpsertProvider(ctx, domain.UpsertProviderInput{Name: "stub", Protocol: domain.ProtocolOpenAICompat, BaseURL: "http://localhost", Models: []string{"m"}, Enabled: true})
+	_, _ = st.SaveModelRoute(ctx, domain.ModelRoute{Stage: domain.StageOutline, ProviderID: &prov.ID, ModelName: "m"})
+
+	// 1. 纯只读轮次不得产生 UndoSnapshotID
+	readOnlyLLM := &stubDirectorLLM{
+		replies: []string{
+			`{"thought":"查看概览","action":"tool","tool_name":"get_book_overview","tool_args":{}}`,
+			`{"thought":"汇报","action":"final","reply":"全书设定正常"}`,
+		},
+	}
+	runner1 := New(st, compiler.New(st), readOnlyLLM, nil)
+	rep1, err := runner1.RunDirectorChat(ctx, domain.DirectorChatRequest{BookID: book.ID, Instruction: "看看书架概览"}, nil)
+	if err != nil {
+		t.Fatalf("readOnly RunDirectorChat: %v", err)
+	}
+	if rep1.Mutated || rep1.UndoSnapshotID != 0 {
+		t.Fatalf("expected no mutation or undo snapshot for read-only turn, got %+v", rep1)
+	}
+
+	// 2. 写库轮次自动生成 UndoSnapshotID 并允许一键回滚到修改前状态
+	mutLLM := &stubDirectorLLM{
+		replies: []string{
+			`{"thought":"改简介","action":"tool","tool_name":"update_book","tool_args":{"premise":"已被导演改歪的简介"}}`,
+			`{"thought":"完成","action":"final","reply":"已调整简介"}`,
+		},
+	}
+	runner2 := New(st, compiler.New(st), mutLLM, nil)
+	rep2, err := runner2.RunDirectorChat(ctx, domain.DirectorChatRequest{BookID: book.ID, Instruction: "改一下简介"}, nil)
+	if err != nil {
+		t.Fatalf("mutating RunDirectorChat: %v", err)
+	}
+	if !rep2.Mutated || rep2.UndoSnapshotID <= 0 {
+		t.Fatalf("expected Mutated=true and UndoSnapshotID > 0, got %+v", rep2)
+	}
+
+	bMut, _ := st.GetBook(ctx, book.ID)
+	if bMut.Premise != "已被导演改歪的简介" {
+		t.Fatalf("expected premise modified before undo, got %q", bMut.Premise)
+	}
+
+	if _, err := st.RestoreSafetySnapshot(ctx, rep2.UndoSnapshotID); err != nil {
+		t.Fatalf("RestoreSafetySnapshot: %v", err)
+	}
+	bRestored, _ := st.GetBook(ctx, book.ID)
+	if bRestored.Premise != "原初设定" {
+		t.Fatalf("expected book premise restored after undo snapshot, got %q", bRestored.Premise)
+	}
+}

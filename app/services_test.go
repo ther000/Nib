@@ -401,6 +401,34 @@ func (f *fakeStore) ListEntityRelations(_ context.Context, _ int64) ([]domain.En
 	return []domain.EntityRelation{}, nil
 }
 
+func (f *fakeStore) ListEntityRelationsAt(_ context.Context, _ int64, _ int, _ bool) ([]domain.EntityRelation, error) {
+	return []domain.EntityRelation{}, nil
+}
+
+func (f *fakeStore) PreviewEntityMerge(_ context.Context, _ domain.EntityMergePreviewInput) (domain.EntityMergePreview, error) {
+	return domain.EntityMergePreview{TextHits: []domain.TextImpactHit{}}, nil
+}
+
+func (f *fakeStore) ExecuteEntityMerge(_ context.Context, _ domain.EntityMergeExecuteInput) (domain.EntityMergeResult, error) {
+	return domain.EntityMergeResult{}, nil
+}
+
+func (f *fakeStore) PreviewBookRename(_ context.Context, _ domain.BookRenamePreviewInput) (domain.BookRenamePreview, error) {
+	return domain.BookRenamePreview{Hits: []domain.TextImpactHit{}}, nil
+}
+
+func (f *fakeStore) ExecuteBookRename(_ context.Context, _ domain.BookRenameExecuteInput) (domain.BookRenameResult, error) {
+	return domain.BookRenameResult{}, nil
+}
+
+func (f *fakeStore) ListSafetySnapshots(_ context.Context, _ int64) ([]domain.SafetySnapshot, error) {
+	return []domain.SafetySnapshot{}, nil
+}
+
+func (f *fakeStore) RestoreSafetySnapshot(_ context.Context, _ int64) (string, error) {
+	return "", nil
+}
+
 func (f *fakeStore) UpsertEntityRelation(_ context.Context, in domain.UpsertEntityRelationInput) (domain.EntityRelation, error) {
 	return domain.EntityRelation{
 		ID: f.allocID(), BookID: in.BookID, SourceEntityID: in.SourceEntityID,

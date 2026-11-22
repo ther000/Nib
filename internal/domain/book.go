@@ -166,6 +166,8 @@ type Chapter struct {
 	Content          string        `json:"content"`
 	WordCount        int           `json:"wordCount"`
 	LastBriefingJSON string        `json:"lastBriefingJson"`
+	StoryTimeLabel   string        `json:"storyTimeLabel"`
+	StoryDay         *int          `json:"storyDay,omitempty"`
 	CreatedAt        string        `json:"createdAt"`
 	UpdatedAt        string        `json:"updatedAt"`
 }
@@ -200,16 +202,19 @@ func (in CreateChapterInput) Validate() error {
 	return nil
 }
 
-// UpdateChapterMetaInput 是更新章节大纲元信息（标题/情绪/钩子/状态）的入参。
+// UpdateChapterMetaInput 是更新章节大纲元信息（标题/情绪/钩子/状态/故事内时间）的入参。
 type UpdateChapterMetaInput struct {
-	ID             int64         `json:"id"`
-	Title          string        `json:"title"`
-	Status         ChapterStatus `json:"status"`
-	EmotionTag     EmotionTag    `json:"emotionTag"`
-	HookType       HookType      `json:"hookType"`
-	HookNote       string        `json:"hookNote"`
-	OutlineSummary string        `json:"outlineSummary"`
-	CausalSummary  string        `json:"causalSummary"`
+	ID                  int64         `json:"id"`
+	Title               string        `json:"title"`
+	Status              ChapterStatus `json:"status"`
+	EmotionTag          EmotionTag    `json:"emotionTag"`
+	HookType            HookType      `json:"hookType"`
+	HookNote            string        `json:"hookNote"`
+	OutlineSummary      string        `json:"outlineSummary"`
+	CausalSummary       string        `json:"causalSummary"`
+	StoryTimeLabel      string        `json:"storyTimeLabel,omitempty"`
+	StoryDay            *int          `json:"storyDay,omitempty"`
+	UpdateStoryTimeline bool          `json:"updateStoryTimeline,omitempty"`
 }
 
 func (in UpdateChapterMetaInput) Validate() error {

@@ -800,3 +800,59 @@ func TestCompilePhase3StyleDNASceneMatchingAndTrimming(t *testing.T) {
 		t.Fatalf("expected P7 shrunk to 1 sample excerpt, got:\n%s", tightP7.Content)
 	}
 }
+
+type m2TimelineFixture struct {
+	*fakeMemoryDataSource
+	deadlines      []domain.StoryDeadline
+	timedRelations []domain.EntityRelation
+}
+
+func (f *m2TimelineFixture) ListStoryDeadlines(_ context.Context, _ int64, _ domain.StoryDeadlineStatus) ([]domain.StoryDeadline, error) {
+	return f.deadlines, nil
+}
+
+func (f *m2TimelineFixture) ListEntityRelationsAt(_ context.Context, _ int64, chapterSeq int, _ bool) ([]domain.EntityRelation, error) {
+	var out []domain.EntityRelation
+	for _, r := range f.timedRelations {
+		if r.EffectiveChapterSeq <= chapterSeq && (r.EndedChapterSeq == nil || *r.EndedChapterSeq > chapterSeq) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+func TestCompileM2TimelineDeadlinesAndTimedRelations(t *testing.T) {
+	p2 := newPhase2Fixture()
+	day10 := 10
+	p2.chapter.StoryTimeLabel = "天元三年秋·入宗第十日"
+	p2.chapter.StoryDay = &day10
+
+	seq50 := 50
+	fix := &m2TimelineFixture{
+		fakeMemoryDataSource: p2,
+		deadlines: []domain.StoryDeadline{
+			{ID: 1, BookID: 1, Title: "幽冥秘境开启", StartChapterSeq: 1, TargetDay: 15, Status: domain.StoryDeadlineActive, Note: "须备齐破阵符"},
+			{ID: 2, BookID: 1, Title: "未来卷期限", StartChapterSeq: 99, TargetDay: 120, Status: domain.StoryDeadlineActive},
+		},
+		timedRelations: []domain.EntityRelation{
+			{ID: 1, BookID: 1, SourceEntityID: 101, SourceName: "林渊", TargetEntityID: 102, TargetName: "王煞", RelationType: "同门对立", EffectiveChapterSeq: 1, EndedChapterSeq: &seq50},
+			{ID: 2, BookID: 1, SourceEntityID: 101, SourceName: "林渊", TargetEntityID: 102, TargetName: "王煞", RelationType: "生死血仇", EffectiveChapterSeq: 50},
+		},
+	}
+
+	comp := New(fix)
+	brief, err := comp.Compile(context.Background(), 100, domain.BriefingOptions{})
+	if err != nil {
+		t.Fatalf("Compile M2 failed: %v", err)
+	}
+
+	if !strings.Contains(brief.UserPrompt, "天元三年秋·入宗第十日") || !strings.Contains(brief.UserPrompt, "还剩 5 天") {
+		t.Fatalf("expected story timeline & countdown in UserPrompt:\n%s", brief.UserPrompt)
+	}
+	if strings.Contains(brief.UserPrompt, "未来卷期限") {
+		t.Fatalf("future deadline leaked into chapter briefing:\n%s", brief.UserPrompt)
+	}
+	if !strings.Contains(brief.UserPrompt, "同门对立") || strings.Contains(brief.UserPrompt, "生死血仇") {
+		t.Fatalf("expected only pre-chapter relation, got spoiler:\n%s", brief.UserPrompt)
+	}
+}

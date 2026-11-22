@@ -32,14 +32,8 @@ func TestPhase3ToPhase4UpgradeBackupAndBatchCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertVolume failed: %v", err)
 	}
-	ch1, err := st3.CreateChapter(ctx, domain.CreateChapterInput{BookID: book.ID, VolumeID: vol.ID, Title: "起风"})
-	if err != nil {
-		t.Fatalf("CreateChapter 1 failed: %v", err)
-	}
-	ch2, err := st3.CreateChapter(ctx, domain.CreateChapterInput{BookID: book.ID, VolumeID: vol.ID, Title: "破阵"})
-	if err != nil {
-		t.Fatalf("CreateChapter 2 failed: %v", err)
-	}
+	ch1 := createLegacyChapter(t, st3, book.ID, vol.ID, 1, "起风", "", domain.ChapterStatusPlanned)
+	ch2 := createLegacyChapter(t, st3, book.ID, vol.ID, 2, "破阵", "", domain.ChapterStatusPlanned)
 	if err := st3.Close(); err != nil {
 		t.Fatalf("Close st3 failed: %v", err)
 	}

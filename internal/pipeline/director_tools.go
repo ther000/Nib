@@ -15,6 +15,7 @@ type directorToolSpec struct {
 	Description string
 	PromptHint  string
 	Parameters  map[string]any
+	ReadOnly    bool
 }
 
 func schemaObj(props map[string]any, required ...string) map[string]any {
@@ -47,6 +48,7 @@ var directorToolSpecs = []directorToolSpec{
 		Description: "重新获取全书最新概览",
 		PromptHint:  `{} — 重新获取全书最新概览`,
 		Parameters:  schemaObj(map[string]any{}),
+		ReadOnly:    true,
 	},
 	{
 		Name:        "list_chapters_range",
@@ -57,6 +59,7 @@ var directorToolSpecs = []directorToolSpec{
 			"start_seq": schemaInt("起始章号"),
 			"end_seq":   schemaInt("结束章号"),
 		}),
+		ReadOnly: true,
 	},
 	{
 		Name:        "read_chapter",
@@ -67,6 +70,7 @@ var directorToolSpecs = []directorToolSpec{
 			"chapter_id":  schemaInt("章节ID"),
 			"chapter_seq": schemaInt("全局章号"),
 		}),
+		ReadOnly: true,
 	},
 	{
 		Name:        "get_entity_detail",
@@ -76,6 +80,7 @@ var directorToolSpecs = []directorToolSpec{
 		Parameters: schemaObj(map[string]any{
 			"name": schemaStr("实体名称或关键词"),
 		}, "name"),
+		ReadOnly: true,
 	},
 	{
 		Name:        "search_memory",
@@ -85,6 +90,7 @@ var directorToolSpecs = []directorToolSpec{
 		Parameters: schemaObj(map[string]any{
 			"query": schemaStr("检索关键词"),
 		}, "query"),
+		ReadOnly: true,
 	},
 	{
 		Name:        "update_book",
@@ -283,6 +289,15 @@ func directorToolLabel(name string) string {
 		}
 	}
 	return name
+}
+
+func isDirectorMutatingTool(name string) bool {
+	for _, spec := range directorToolSpecs {
+		if spec.Name == name {
+			return !spec.ReadOnly
+		}
+	}
+	return false
 }
 
 func directorToolDefinitions() []llm.ToolDefinition {
