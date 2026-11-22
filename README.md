@@ -43,6 +43,7 @@
 | [03-core-engines.md](./docs/03-core-engines.md) | 状态账本时间旅行、上下文编译器配额、节奏流水线状态机、去 AI 味规则与手术润色 |
 | [04-ui-ux-design.md](./docs/04-ui-ux-design.md) | 静谧深色/暖纸 Design Tokens、三大工作区线框图、快捷键与异常态交互 |
 | [05-roadmap-and-verification.md](./docs/05-roadmap-and-verification.md) | Phase 1–4 交付矩阵、Phase 1 施工清单、自证测试矩阵与风险回滚 |
+| [06-v2-longform-roadmap.md](./docs/06-v2-longform-roadmap.md) | V2 百万字长篇连载增强规划（M1–M4）：写作台三合一参照与敏感词、时间线与安全撤销、关系图谱与全书双层体检 |
 
 ## 开发与验证命令速查
 
