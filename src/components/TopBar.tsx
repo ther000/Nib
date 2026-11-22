@@ -49,6 +49,7 @@ export function TopBar() {
     toggleDirector,
     notesOpen,
     toggleNotes,
+    setFocusMode,
     toggleFocusMode,
     openCommandPalette,
   } = useApp();
@@ -82,7 +83,7 @@ export function TopBar() {
 
   return (
     <header
-      className="nib-drag-region relative z-30 flex shrink-0 items-center justify-between border-b border-border-subtle bg-surface select-none"
+      className="nib-drag-region relative z-30 grid shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b border-border-subtle bg-surface select-none"
       style={{
         height: "var(--mygo-titlebar-height, var(--topbar-height))",
         paddingLeft: "calc(12px + var(--mygo-titlebar-inset-left, 0px))",
@@ -90,7 +91,7 @@ export function TopBar() {
       }}
     >
       {/* Left: Brand or Home + Book switcher */}
-      <div ref={menuRef} className="relative flex min-w-0 items-center gap-1">
+      <div ref={menuRef} className="relative flex min-w-0 items-center justify-self-start gap-1">
         {inWorkspace && activeBook ? (
           <>
             <button
@@ -199,7 +200,7 @@ export function TopBar() {
       {inWorkspace ? (
         <nav
           aria-label="工作区切换"
-          className="nib-no-drag flex items-center gap-0.5 rounded-lg border border-border-subtle bg-canvas/70 p-0.5"
+          className="nib-no-drag flex shrink-0 items-center justify-self-center gap-0.5 whitespace-nowrap rounded-lg border border-border-subtle bg-canvas/70 p-0.5"
         >
           {WORKSPACE_TABS.map((tab) => {
             const active = activeTab === tab.id;
@@ -221,11 +222,11 @@ export function TopBar() {
           })}
         </nav>
       ) : (
-        <div className="flex-1" />
+        <div aria-hidden="true" />
       )}
 
       {/* Right: Workspace utilities + System controls */}
-      <div className="flex items-center gap-1">
+      <div className="flex shrink-0 items-center justify-self-end gap-1">
         {inWorkspace && activeBook && (() => {
           const isAutopilotWaiting =
             autopilotState?.bookId === activeBook.id &&
@@ -248,7 +249,7 @@ export function TopBar() {
                 }`}
               >
                 <ShieldCheck className="h-3.5 w-3.5" />
-                <span className="hidden md:inline">体检</span>
+                <span className="hidden lg:inline">体检</span>
               </button>
               <button
                 type="button"
@@ -316,13 +317,22 @@ export function TopBar() {
         >
           <Command className="h-3.5 w-3.5" />
         </button>
-        {inWorkspace && activeBook && activeTab === "studio" && activeChapter && (
+        {inWorkspace && activeBook && (
           <button
             type="button"
-            onClick={toggleFocusMode}
-            title="专注写作模式 (F11 / Ctrl+Shift+Z)"
+            disabled={!activeChapter}
+            onClick={() => {
+              if (!activeChapter) return;
+              if (activeTab !== "studio") {
+                setActiveTab("studio");
+                setFocusMode(true);
+              } else {
+                toggleFocusMode();
+              }
+            }}
+            title={activeChapter ? "专注写作模式 (F11 / Ctrl+Shift+Z)" : "请先选择或新建章节"}
             aria-label="专注写作模式"
-            className="flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-elevated hover:text-ink-primary disabled:cursor-not-allowed disabled:opacity-35"
           >
             <Maximize2 className="h-3.5 w-3.5" />
           </button>

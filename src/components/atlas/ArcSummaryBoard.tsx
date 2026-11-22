@@ -165,7 +165,7 @@ export function ArcSummaryBoard({ latestChapterSeq }: { latestChapterSeq: number
   };
 
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-5">
+    <div className="nib-scroll-stable flex-1 overflow-y-auto px-6 py-5">
       <div className="mx-auto flex w-full max-w-[1160px] flex-col gap-5">
         {/* Toolbar */}
         <div className="flex flex-wrap items-center justify-between gap-3">

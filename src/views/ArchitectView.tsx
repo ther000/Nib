@@ -880,7 +880,7 @@ export function ArchitectView() {
             )}
           </div>
         ) : (
-          <div className="flex-1 overflow-y-auto px-8 py-5">
+          <div className="nib-scroll-stable flex-1 overflow-y-auto px-8 py-5">
             <div className="mx-auto flex w-full max-w-[880px] flex-col gap-4">
               {(() => {
                 const dirtyCount = chapters.filter((c) => c.status === "upstream_dirty").length;

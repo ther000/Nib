@@ -380,7 +380,7 @@ export function StyleRulesBoard() {
   }, [rules, catFilter]);
 
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-5">
+    <div className="nib-scroll-stable flex-1 overflow-y-auto px-6 py-5">
       <div className="mx-auto flex w-full max-w-[1160px] flex-col gap-6 pb-10">
         {/* 1. 文风设定 */}
         <section className="rounded-xl border border-border-subtle bg-surface p-5">

@@ -205,6 +205,10 @@
   font-variant-numeric: tabular-nums;
 }
 
+.nib-scroll-stable {
+  scrollbar-gutter: stable;
+}
+
 /* Integrated custom titlebar drag region (MyGo TitleBarHidden) */
 .nib-drag-region {
   --app-region: drag;

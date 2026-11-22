@@ -2156,7 +2156,7 @@ export function StudioView() {
 
         <div
           ref={canvasScrollRef}
-          className={`flex-1 overflow-y-auto px-8 pb-28 ${focusMode ? "pt-14" : "pt-6"}`}
+          className={`nib-scroll-stable flex-1 overflow-y-auto px-8 pb-28 ${focusMode ? "pt-14" : "pt-6"}`}
         >
           <div className="mx-auto w-full max-w-[var(--prose-max-width)]">
             {/* Calm Single Utility Row */}

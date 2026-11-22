@@ -793,7 +793,7 @@ export function AtlasView() {
           </section>
 
           {/* Main Content */}
-          <div className="flex-1 overflow-y-auto px-6 py-5">
+          <div className="nib-scroll-stable flex-1 overflow-y-auto px-6 py-5">
             <div className="mx-auto flex w-full max-w-[1160px] flex-col gap-4">
               {/* Filter Toolbar */}
               <div className="flex flex-wrap items-center justify-between gap-3">

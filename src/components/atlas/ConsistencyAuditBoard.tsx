@@ -374,7 +374,7 @@ export function ConsistencyAuditBoard() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-5">
+    <div className="nib-scroll-stable flex-1 overflow-y-auto px-6 py-5">
       <div className="mx-auto flex w-full max-w-[1160px] flex-col gap-4">
         {/* Top Mode Switcher */}
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-subtle bg-surface px-4 py-2.5">
