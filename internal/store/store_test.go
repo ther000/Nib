@@ -864,3 +864,36 @@ func TestChapterLifecycleInsertMoveDeleteAndBookReplace(t *testing.T) {
 		t.Fatalf("expected snapshot before ReplaceBookText overwrite, got %+v", vers)
 	}
 }
+
+func TestResequenceUpdatesEntityStateEventChapterSeq(t *testing.T) {
+	ctx := context.Background()
+	st := openMemoryStore(t)
+
+	book, _ := st.CreateBook(ctx, domain.CreateBookInput{Title: "时间轴重排同步", Genre: domain.GenreXuanhuan})
+	v1, _ := st.UpsertVolume(ctx, domain.UpsertVolumeInput{BookID: book.ID, Seq: 1, Title: "第一卷"})
+	c1, _ := st.CreateChapter(ctx, domain.CreateChapterInput{BookID: book.ID, VolumeID: v1.ID, Title: "一"})
+	c2, _ := st.CreateChapter(ctx, domain.CreateChapterInput{BookID: book.ID, VolumeID: v1.ID, Title: "二"})
+	hero, _ := st.UpsertEntity(ctx, domain.UpsertEntityInput{
+		BookID: book.ID, Kind: domain.EntityKindCharacter, Name: "林渊", Attributes: map[string]string{"境界": "一层"},
+	})
+
+	// 在第 2 章写入一个已提交的状态变化（chapter_seq = 2）
+	if _, err := st.db.ExecContext(ctx, `
+		INSERT INTO entity_state_events (book_id, entity_id, chapter_id, chapter_seq, attr_key, prev_value, new_value, change_severity, reason, status)
+		VALUES (?, ?, ?, ?, '境界', '一层', '二层', 'normal', '突破', 'committed')
+	`, book.ID, hero.ID, c2.ID, c2.GlobalSeq); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+
+	// 删除第 1 章后，原第 2 章变为第 1 章，entity_state_events.chapter_seq 必须同步变为 1
+	if err := st.DeleteChapter(ctx, c1.ID); err != nil {
+		t.Fatalf("DeleteChapter: %v", err)
+	}
+	snaps, err := st.SnapshotAt(ctx, book.ID, 1, false)
+	if err != nil {
+		t.Fatalf("SnapshotAt: %v", err)
+	}
+	if len(snaps) == 0 || snaps[0].EffectiveAttributes["境界"] != "二层" {
+		t.Fatalf("expected event chapter_seq synced to 1 after resequence, got %+v", snaps)
+	}
+}

@@ -950,3 +950,99 @@ func TestStreamReasoningDeltaAcrossProtocols(t *testing.T) {
 		}
 	})
 }
+
+func TestMultiToolTurnMergesAndAnthropicCachedPromptTokens(t *testing.T) {
+	t.Run("anthropic merges consecutive tool messages and preserves cached prompt tokens", func(t *testing.T) {
+		var captured struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content any    `json:"content"`
+			} `json:"messages"`
+		}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":50,\"cache_read_input_tokens\":200,\"output_tokens\":0}}}\n\n"))
+			_, _ = w.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"done\"}}\n\n"))
+			_, _ = w.Write([]byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":10,\"output_tokens\":25}}\n\n"))
+			_, _ = w.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+		}))
+		defer srv.Close()
+
+		client := NewClient(WithHTTPClient(srv.Client()), WithSleep(zeroSleep))
+		usage, err := client.Stream(context.Background(), domain.Provider{
+			Protocol: domain.ProtocolAnthropic,
+			BaseURL:  srv.URL,
+			APIKey:   "sk-ant",
+			Enabled:  true,
+		}, ChatRequest{
+			Model: "claude-sonnet-4-20250514",
+			Messages: []ChatMessage{
+				{Role: "user", Content: "查两件事"},
+				{Role: "assistant", ToolCalls: []ToolCall{{ID: "t1", Name: "fn1", Arguments: "{}"}, {ID: "t2", Name: "fn2", Arguments: "{}"}}},
+				{Role: "tool", ToolCallID: "t1", ToolName: "fn1", Content: "res1"},
+				{Role: "tool", ToolCallID: "t2", ToolName: "fn2", Content: "res2"},
+			},
+		}, nil)
+		if err != nil {
+			t.Fatalf("Stream error: %v", err)
+		}
+		// 预期消息数：user -> assistant -> 单个合并后的 user(含2个 tool_result)
+		if len(captured.Messages) != 3 || captured.Messages[2].Role != "user" {
+			t.Fatalf("expected 3 alternating messages with merged tool user turn, got %+v", captured.Messages)
+		}
+		blocks, ok := captured.Messages[2].Content.([]any)
+		if !ok || len(blocks) != 2 {
+			t.Fatalf("expected 2 merged tool_result blocks, got %#v", captured.Messages[2].Content)
+		}
+		if usage.PromptTokens != 260 || usage.CompletionTokens != 25 || usage.TotalTokens != 285 {
+			t.Fatalf("expected PromptTokens=260 preserved across message_delta, got %+v", usage)
+		}
+	})
+
+	t.Run("gemini merges consecutive tool messages and supports /v1 suffix", func(t *testing.T) {
+		var gotPath string
+		var captured struct {
+			Contents []struct {
+				Role  string `json:"role"`
+				Parts []any  `json:"parts"`
+			} `json:"contents"`
+		}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}\n\n"))
+		}))
+		defer srv.Close()
+
+		client := NewClient(WithHTTPClient(srv.Client()), WithSleep(zeroSleep))
+		_, err := client.Stream(context.Background(), domain.Provider{
+			Protocol: domain.ProtocolGemini,
+			BaseURL:  srv.URL + "/v1",
+			APIKey:   "AIza-test",
+			Enabled:  true,
+		}, ChatRequest{
+			Model: "gemini-2.5-flash",
+			Messages: []ChatMessage{
+				{Role: "user", Content: "go"},
+				{Role: "assistant", ToolCalls: []ToolCall{{ID: "g1", Name: "fn1", Arguments: "{}"}, {ID: "g2", Name: "fn2", Arguments: "{}"}}},
+				{Role: "tool", ToolCallID: "g1", ToolName: "fn1", Content: "a"},
+				{Role: "tool", ToolCallID: "g2", ToolName: "fn2", Content: "b"},
+			},
+		}, nil)
+		if err != nil {
+			t.Fatalf("Stream error: %v", err)
+		}
+		if !strings.HasPrefix(gotPath, "/v1beta/models/") {
+			t.Fatalf("expected /v1beta/models path, got %q", gotPath)
+		}
+		if len(captured.Contents) != 3 || len(captured.Contents[2].Parts) != 2 {
+			t.Fatalf("expected merged 2 functionResponse parts in single user turn, got %+v", captured.Contents)
+		}
+	})
+}

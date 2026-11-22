@@ -46,11 +46,15 @@ func main() {
 	)
 
 	var shutdownOnce sync.Once
+	var closerMu sync.Mutex
 	var batchCloser func()
 	runShutdown := func() {
 		shutdownOnce.Do(func() {
-			if batchCloser != nil {
-				batchCloser()
+			closerMu.Lock()
+			bc := batchCloser
+			closerMu.Unlock()
+			if bc != nil {
+				bc()
 			}
 			if err := rt.Close(); err != nil {
 				log.Printf("nib: close runtime failed: %v", err)
@@ -68,7 +72,9 @@ func main() {
 			if initErr != nil {
 				log.Printf("nib: init runtime (%s) failed: %v", dbPath, initErr)
 			} else {
+				closerMu.Lock()
 				batchCloser = closer
+				closerMu.Unlock()
 			}
 		}
 

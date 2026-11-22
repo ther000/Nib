@@ -157,8 +157,18 @@ export function StudioView() {
   const receivedDeltaRef = useRef(false);
   const canvasScrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const activeChapterRef = useRef(activeChapter);
+  const titleRef = useRef(title);
+  const contentRef = useRef(content);
+  const dirtyRef = useRef(dirty);
+  const generatingRef = useRef(generating);
 
   activeChapterIdRef.current = activeChapterId;
+  activeChapterRef.current = activeChapter;
+  titleRef.current = title;
+  contentRef.current = content;
+  dirtyRef.current = dirty;
+  generatingRef.current = generating;
 
   // Drawer state
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("briefing");
@@ -256,6 +266,30 @@ export function StudioView() {
     setPendingDelta(null);
     setChapterAudit(null);
     setActiveParagraphIndex(null);
+    return () => {
+      // 切章前若存在未落盘修改，立即后台保存，避免静默丢稿
+      if (activeChapter && dirtyRef.current && !generatingRef.current) {
+        const snapId = activeChapter.id;
+        const snapTitle = titleRef.current.trim() || activeChapter.title;
+        const snapContent = contentRef.current;
+        void LibraryService.saveChapterDraft({
+          chapterId: snapId,
+          title: snapTitle,
+          content: snapContent,
+          backupSource: "manual_backup",
+        })
+          .then((saved) => {
+            updateChapterInCache(saved);
+          })
+          .catch((err) => {
+            notify({
+              tone: "danger",
+              message: "切章自动保存草稿失败",
+              detail: formatErrorMessage(err),
+            });
+          });
+      }
+    };
   }, [activeChapter?.id]);
 
   // Keep synced if chapter updated externally while not editing or streaming
@@ -315,11 +349,28 @@ export function StudioView() {
     proseMaxWidth,
   ]);
 
-  // Abort active generation if unmounting StudioView
+  // Abort active generation & flush dirty draft if unmounting StudioView
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (activeChapterRef.current && dirtyRef.current && !generatingRef.current) {
+        const snapChap = activeChapterRef.current;
+        const snapTitle = titleRef.current.trim() || snapChap.title;
+        const snapContent = contentRef.current;
+        void LibraryService.saveChapterDraft({
+          chapterId: snapChap.id,
+          title: snapTitle,
+          content: snapContent,
+          backupSource: "manual_backup",
+        })
+          .then((saved) => {
+            updateChapterInCache(saved);
+          })
+          .catch(() => {
+            // ignore unmount background flush error
+          });
+      }
       streamRunIdRef.current += 1;
       if (stopFallbackTimerRef.current !== null) {
         window.clearTimeout(stopFallbackTimerRef.current);
@@ -743,16 +794,26 @@ export function StudioView() {
   // Save draft (silent=true for background AutoSave)
   const handleSave = useCallback(async (silent = false): Promise<boolean> => {
     if (!activeChapter || generating) return false;
+    const snapChapterId = activeChapter.id;
+    const snapTitle = title.trim() || activeChapter.title;
+    const snapContent = content;
     setSaving(true);
     try {
       const saved = await LibraryService.saveChapterDraft({
-        chapterId: activeChapter.id,
-        title: title.trim() || activeChapter.title,
-        content,
+        chapterId: snapChapterId,
+        title: snapTitle,
+        content: snapContent,
         backupSource: "manual_backup",
       });
       updateChapterInCache(saved);
-      setDirty(false);
+      // 仅当保存期间未发生新编辑或切章时才清除 dirty 标记，避免丢失并发输入的修改
+      if (
+        activeChapterRef.current?.id === snapChapterId &&
+        (titleRef.current.trim() || activeChapterRef.current.title) === snapTitle &&
+        contentRef.current === snapContent
+      ) {
+        setDirty(false);
+      }
       if (silent) {
         const now = new Date();
         setLastAutoSavedAt(
@@ -1553,9 +1614,16 @@ export function StudioView() {
   );
 
   const selectedVersionDiff = useMemo(() => {
-    if (!selectedVersion || versionViewMode !== "diff") return null;
+    if (
+      !studioDrawerOpen ||
+      drawerTab !== "versions" ||
+      !selectedVersion ||
+      versionViewMode !== "diff"
+    ) {
+      return null;
+    }
     return diffParagraphs(selectedVersion.content, content);
-  }, [selectedVersion, versionViewMode, content]);
+  }, [studioDrawerOpen, drawerTab, selectedVersion, versionViewMode, content]);
 
   const handleInsertHistoricalParagraph = useCallback(
     (para: string) => {

@@ -98,13 +98,21 @@ func buildAnthropicRequest(ctx context.Context, provider domain.Provider, req Ch
 			continue
 		}
 		if role == "tool" && m.ToolCallID != "" {
+			block := map[string]any{
+				"type":        "tool_result",
+				"tool_use_id": m.ToolCallID,
+				"content":     m.Content,
+			}
+			// Anthropic 要求严格交替的 user/assistant 轮次：连续多条 tool 响应合并到同一个 user 消息的 content 块数组中。
+			if n := len(msgs); n > 0 && msgs[n-1].Role == "user" {
+				if prevBlocks, ok := msgs[n-1].Content.([]map[string]any); ok {
+					msgs[n-1].Content = append(prevBlocks, block)
+					continue
+				}
+			}
 			msgs = append(msgs, anthropicMessage{
-				Role: "user",
-				Content: []map[string]any{{
-					"type":        "tool_result",
-					"tool_use_id": m.ToolCallID,
-					"content":     m.Content,
-				}},
+				Role:    "user",
+				Content: []map[string]any{block},
 			})
 			continue
 		}
@@ -271,7 +279,7 @@ func parseAnthropicStream(
 				seenValidEvent = true
 			}
 			if payload.Usage != nil {
-				if payload.Usage.InputTokens > 0 {
+				if usage.PromptTokens == 0 && payload.Usage.InputTokens > 0 {
 					usage.PromptTokens = payload.Usage.InputTokens
 				}
 				if payload.Usage.OutputTokens > 0 {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"nib/internal/domain"
@@ -292,5 +293,80 @@ func TestAutoBackupAndRestoreDataFromFile(t *testing.T) {
 	restored, err := st.GetBook(ctx, book.ID)
 	if err != nil || restored.Title != "自动备份测试" {
 		t.Fatalf("restored book mismatch: %+v err=%v", restored, err)
+	}
+	// 验证 staging 目录已清理，不残留 .nib-restore-stage-* 或 .bak.* 文件
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if len(e.Name()) > 18 && e.Name()[:18] == ".nib-restore-stage" {
+			t.Fatalf("leftover restore staging artifact: %s", e.Name())
+		}
+	}
+}
+
+func TestRestoreChapterPreservesExistingEntityLinksAndPreventsDoubleRestore(t *testing.T) {
+	ctx := context.Background()
+	st := openMemoryStore(t)
+
+	book, _ := st.CreateBook(ctx, domain.CreateBookInput{Title: "节拍关联恢复", Genre: domain.GenreXuanhuan})
+	vol, _ := st.UpsertVolume(ctx, domain.UpsertVolumeInput{BookID: book.ID, Seq: 1, Title: "第一卷"})
+	hero, _ := st.UpsertEntity(ctx, domain.UpsertEntityInput{BookID: book.ID, Kind: domain.EntityKindCharacter, Name: "林渊"})
+	sword, _ := st.UpsertEntity(ctx, domain.UpsertEntityInput{BookID: book.ID, Kind: domain.EntityKindItem, Name: "玄铁剑"})
+	chap, _ := st.CreateChapter(ctx, domain.CreateChapterInput{BookID: book.ID, VolumeID: vol.ID, Title: "试剑"})
+	_, err := st.ReplaceBeats(ctx, chap.ID, []domain.Beat{{
+		ChapterID:   chap.ID,
+		Seq:         1,
+		Stage:       domain.BeatStageSetup,
+		Summary:     "林渊持剑入场",
+		POVEntityID: &hero.ID,
+		EntityIDs:   []int64{hero.ID, sword.ID},
+		TargetWords: 500,
+	}})
+	if err != nil {
+		t.Fatalf("ReplaceBeats: %v", err)
+	}
+
+	if err := st.DeleteChapter(ctx, chap.ID); err != nil {
+		t.Fatalf("DeleteChapter: %v", err)
+	}
+	trash, err := st.ListTrashItems(ctx)
+	if err != nil || len(trash) != 1 {
+		t.Fatalf("expected 1 trash item, got %+v err=%v", trash, err)
+	}
+
+	// 并发两次 RestoreTrashItem，只能有一次成功
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	successes := 0
+	var restoredChapID int64
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, rErr := st.RestoreTrashItem(ctx, trash[0].ID)
+			if rErr == nil {
+				mu.Lock()
+				successes++
+				restoredChapID = res.ItemID
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if successes != 1 {
+		t.Fatalf("expected exactly 1 concurrent restore success, got %d", successes)
+	}
+
+	beats, err := st.ListBeats(ctx, restoredChapID)
+	if err != nil || len(beats) != 1 {
+		t.Fatalf("ListBeats after restore: %+v err=%v", beats, err)
+	}
+	if beats[0].POVEntityID == nil || *beats[0].POVEntityID != hero.ID {
+		t.Fatalf("expected POVEntityID=%d preserved, got %v", hero.ID, beats[0].POVEntityID)
+	}
+	if len(beats[0].EntityIDs) != 2 || beats[0].EntityIDs[0] != hero.ID || beats[0].EntityIDs[1] != sword.ID {
+		t.Fatalf("expected EntityIDs=[%d,%d] preserved, got %+v", hero.ID, sword.ID, beats[0].EntityIDs)
 	}
 }

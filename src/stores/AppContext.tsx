@@ -217,6 +217,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const saveHandlerRef = useRef<(() => void | Promise<void>) | null>(null);
   const generateHandlerRef = useRef<(() => void) | null>(null);
+  const chapterReqIdRef = useRef(0);
+  const bookReqIdRef = useRef(0);
+  const activeBookIdRef = useRef<number | null>(activeBookId);
+  activeBookIdRef.current = activeBookId;
 
   const updatePrefs = useCallback((updater: (prev: NibPreferences) => NibPreferences) => {
     setPrefs((prev) => {
@@ -272,6 +276,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const loadChapterDetail = useCallback(
     async (chapterId: number | null): Promise<Chapter | null> => {
+      const reqId = ++chapterReqIdRef.current;
       if (!chapterId) {
         setActiveChapterId(null);
         setActiveChapter(null);
@@ -282,11 +287,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updatePrefs((p) => ({ ...p, lastChapterId: chapterId }));
       try {
         const chap = await LibraryService.getChapter(chapterId);
+        if (chapterReqIdRef.current !== reqId) {
+          return null;
+        }
         setActiveChapter(chap);
         setChapters((prev) => prev.map((c) => (c.id === chap.id ? chap : c)));
         return chap;
       } catch (err) {
-        notify({ tone: "danger", message: "读取章节失败", detail: formatErrorMessage(err) });
+        if (chapterReqIdRef.current === reqId) {
+          notify({ tone: "danger", message: "读取章节失败", detail: formatErrorMessage(err) });
+        }
         return null;
       }
     },
@@ -342,6 +352,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const refreshBookData = useCallback(
     async (targetBookId?: number | null, preferChapterId?: number | null) => {
+      const reqId = ++bookReqIdRef.current;
       const bid = targetBookId ?? activeBookId;
       if (!bid) {
         setVolumes([]);
@@ -360,6 +371,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           AtlasService.listEntities(bid, {}),
           safeListForeshadowings(bid),
         ]);
+        if (bookReqIdRef.current !== reqId) return;
         setVolumes(vols);
         setChapters(chaps);
         setEntities(ents);
@@ -380,9 +392,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setActiveChapter(null);
         }
       } catch (err) {
-        notify({ tone: "danger", message: "加载书籍内容失败", detail: formatErrorMessage(err) });
+        if (bookReqIdRef.current === reqId) {
+          notify({ tone: "danger", message: "加载书籍内容失败", detail: formatErrorMessage(err) });
+        }
       } finally {
-        setBookLoading(false);
+        if (bookReqIdRef.current === reqId) {
+          setBookLoading(false);
+        }
       }
     },
     [activeBookId, activeChapterId, loadChapterDetail, notify]
@@ -730,6 +746,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, [activeBookId]);
 
+  const refreshBookDataRef = useRef(refreshBookData);
+  refreshBookDataRef.current = refreshBookData;
+
   useEffect(() => {
     if (!isMyGo()) return;
     let lastCompleted = -1;
@@ -737,7 +756,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let unsub: (() => void) | null = null;
     try {
       unsub = events.autopilotProgress.on((prog) => {
-        if (activeBookId && prog.bookId !== activeBookId) return;
+        const curBookId = activeBookIdRef.current;
+        if (curBookId && prog.bookId !== curBookId) return;
         setAutopilotState(prog);
         const progressed = prog.completedChapters !== lastCompleted;
         const finished =
@@ -748,7 +768,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         lastCompleted = prog.completedChapters;
         lastStatus = prog.status;
         if (progressed || finished) {
-          void refreshBookData(prog.bookId);
+          void refreshBookDataRef.current(prog.bookId);
           bumpMemoryRevision();
         }
       });
@@ -758,7 +778,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => {
       unsub?.();
     };
-  }, [activeBookId, refreshBookData, bumpMemoryRevision]);
+  }, [bumpMemoryRevision]);
 
   const value = useMemo<AppContextValue>(
     () => ({

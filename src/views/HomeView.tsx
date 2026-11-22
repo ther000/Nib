@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   ArrowRight,
   BarChart3,
@@ -164,11 +164,16 @@ export function HomeView() {
     return books[0] ?? null;
   }, [books, activeBook]);
 
+  const statsBookInitializedRef = useRef(false);
+
   useEffect(() => {
-    // 首次加载或书单变化时，默认展示最近写作书籍的码字进度。
-    if (statsBookId === 0 && featuredBook) {
-      setStatsBookId(featuredBook.id);
-      return;
+    // 首次加载有书籍时，默认展示最近写作书籍的码字进度；之后允许用户手动切到「全部作品」(0)。
+    if (!statsBookInitializedRef.current && featuredBook) {
+      statsBookInitializedRef.current = true;
+      if (statsBookId === 0) {
+        setStatsBookId(featuredBook.id);
+        return;
+      }
     }
     void loadWritingStats(statsBookId);
   }, [statsBookId, featuredBook, loadWritingStats]);

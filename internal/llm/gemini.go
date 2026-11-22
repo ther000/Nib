@@ -76,9 +76,12 @@ func buildGeminiRequest(ctx context.Context, provider domain.Provider, req ChatR
 	escapedModel := url.PathEscape(model)
 
 	var endpoint string
-	if strings.HasSuffix(base, "/v1beta") {
+	switch {
+	case strings.HasSuffix(base, "/v1beta"):
 		endpoint = fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse", base, escapedModel)
-	} else {
+	case strings.HasSuffix(base, "/v1"):
+		endpoint = fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse", strings.TrimSuffix(base, "/v1")+"/v1beta", escapedModel)
+	default:
 		endpoint = fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?alt=sse", base, escapedModel)
 	}
 
@@ -99,15 +102,20 @@ func buildGeminiRequest(ctx context.Context, provider domain.Provider, req ChatR
 			if fnName == "" {
 				fnName = "tool"
 			}
-			contents = append(contents, geminiContent{
-				Role: "user",
-				Parts: []geminiPart{{
-					FunctionResponse: &geminiFunctionResponse{
-						Name:     fnName,
-						Response: map[string]any{"result": m.Content},
-					},
-				}},
-			})
+			part := geminiPart{
+				FunctionResponse: &geminiFunctionResponse{
+					Name:     fnName,
+					Response: map[string]any{"result": m.Content},
+				},
+			}
+			if n := len(contents); n > 0 && contents[n-1].Role == "user" && len(contents[n-1].Parts) > 0 && contents[n-1].Parts[0].FunctionResponse != nil {
+				contents[n-1].Parts = append(contents[n-1].Parts, part)
+			} else {
+				contents = append(contents, geminiContent{
+					Role:  "user",
+					Parts: []geminiPart{part},
+				})
+			}
 		case "assistant", "model":
 			parts := make([]geminiPart, 0, len(m.ToolCalls)+1)
 			if strings.TrimSpace(m.Content) != "" {
@@ -173,6 +181,7 @@ func parseGeminiStream(
 	var finishReason string
 	var seenValidEvent bool
 	var seenDelta bool
+	var callSeq int
 	errDone := errStreamCompleted
 
 	err := readSSE(body, func(ev sseEvent) error {
@@ -206,15 +215,16 @@ func parseGeminiStream(
 				seenValidEvent = true
 			}
 			var fnCalls []ToolCall
-			for idx, part := range cand.Content.Parts {
+			for _, part := range cand.Content.Parts {
 				if part.FunctionCall != nil && strings.TrimSpace(part.FunctionCall.Name) != "" {
 					seenValidEvent = true
+					callSeq++
 					argsBytes, _ := json.Marshal(part.FunctionCall.Args)
 					if len(argsBytes) == 0 || string(argsBytes) == "null" {
 						argsBytes = []byte("{}")
 					}
 					fnCalls = append(fnCalls, ToolCall{
-						ID:        fmt.Sprintf("gemini_call_%d", idx+1),
+						ID:        fmt.Sprintf("gemini_call_%d", callSeq),
 						Name:      strings.TrimSpace(part.FunctionCall.Name),
 						Arguments: string(argsBytes),
 					})

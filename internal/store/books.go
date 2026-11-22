@@ -296,9 +296,16 @@ func (s *Store) UpsertVolume(ctx context.Context, in domain.UpsertVolumeInput) (
 	return result, nil
 }
 
-// DeleteVolume 按 ID 删除卷（级联删除卷内章节、节拍与版本）。
+// DeleteVolume 按 ID 删除卷（级联删除卷内章节、节拍与版本，并重排全书章节序号）。
 func (s *Store) DeleteVolume(ctx context.Context, id int64) error {
 	return s.withWriteTx(ctx, func(tx *sql.Tx) error {
+		var bookID int64
+		if err := tx.QueryRowContext(ctx, `SELECT book_id FROM volumes WHERE id = ?`, id).Scan(&bookID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("volume %d: %w", id, domain.ErrNotFound)
+			}
+			return mapSQLiteError(err)
+		}
 		if err := snapshotVolumeTrashTx(ctx, tx, id); err != nil {
 			return err
 		}
@@ -313,7 +320,7 @@ func (s *Store) DeleteVolume(ctx context.Context, id int64) error {
 		if affected == 0 {
 			return fmt.Errorf("volume %d: %w", id, domain.ErrNotFound)
 		}
-		return nil
+		return resequenceBookChaptersTx(ctx, tx, bookID)
 	})
 }
 

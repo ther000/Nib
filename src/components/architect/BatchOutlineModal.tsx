@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from "react";
-import { Channel } from "mygo-runtime";
+import { useEffect, useState } from "react";
 import { Loader2, Sparkles, Square, X } from "lucide-react";
 import {
   LibraryService,
@@ -8,6 +7,7 @@ import {
   type Volume,
 } from "../../mygo";
 import { formatErrorMessage } from "../../lib/constants";
+import { useMygoChannel } from "../../hooks/useMygoStream";
 
 interface BatchOutlineModalProps {
   open: boolean;
@@ -39,27 +39,8 @@ export function BatchOutlineModal({
   const [streamPreview, setStreamPreview] = useState("");
   const [stageMsg, setStageMsg] = useState("");
 
-  const abortRef = useRef<AbortController | null>(null);
-  const channelRef = useRef<Channel<OutlineChunk> | null>(null);
-  const fallbackTimerRef = useRef<number | null>(null);
-  const userStoppedRef = useRef(false);
-  const mountedRef = useRef(true);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      if (fallbackTimerRef.current !== null) {
-        window.clearTimeout(fallbackTimerRef.current);
-      }
-      try {
-        channelRef.current?.close();
-      } catch {
-        // ignore
-      }
-      abortRef.current?.abort();
-    };
-  }, []);
+  const { open: openStream, stop: stopStream, release: releaseStream, isCurrent, wasStopped } =
+    useMygoChannel<OutlineChunk>();
 
   useEffect(() => {
     if (!open) return;
@@ -82,19 +63,8 @@ export function BatchOutlineModal({
   if (!open || !volume) return null;
 
   const stopGeneration = () => {
-    userStoppedRef.current = true;
     setStageMsg("正在取消生成…");
-    try {
-      channelRef.current?.close();
-    } catch {
-      // ignore
-    }
-    if (fallbackTimerRef.current !== null) {
-      window.clearTimeout(fallbackTimerRef.current);
-    }
-    fallbackTimerRef.current = window.setTimeout(() => {
-      abortRef.current?.abort();
-    }, 3000);
+    stopStream();
   };
 
   const handleGenerate = async () => {
@@ -102,16 +72,13 @@ export function BatchOutlineModal({
     const parsedStart = Math.max(1, Number.parseInt(startSeq, 10) || 1);
     const parsedCount = Math.min(10, Math.max(1, Number.parseInt(count, 10) || 5));
 
-    const ac = new AbortController();
-    abortRef.current = ac;
-    userStoppedRef.current = false;
     setRunning(true);
     setStreamPreview("");
     setStageMsg(`正在调用 outline 路由生成 ${parsedCount} 章纲与节拍…`);
 
     let buf = "";
-    const ch = new Channel<OutlineChunk>((chunk) => {
-      if (!mountedRef.current) return;
+    const { channel: ch, runId } = openStream((chunk) => {
+      if (!isCurrent(runId)) return;
       if (chunk.kind === "delta" && chunk.delta) {
         buf += chunk.delta;
         setStreamPreview(buf);
@@ -121,12 +88,9 @@ export function BatchOutlineModal({
         setStageMsg(formatErrorMessage(chunk.error));
       }
     });
-    channelRef.current = ch;
 
     try {
-      const created = await LibraryService.batchGenerateOutlines.with({
-        signal: ac.signal,
-      })(
+      const created = await LibraryService.batchGenerateOutlines(
         {
           bookId,
           volumeId: volume.id,
@@ -136,7 +100,7 @@ export function BatchOutlineModal({
         },
         ch
       );
-      if (!mountedRef.current) return;
+      if (!isCurrent(runId)) return;
       await onGenerated(created);
       onNotify({
         tone: "ok",
@@ -145,11 +109,10 @@ export function BatchOutlineModal({
       });
       onClose();
     } catch (err) {
-      if (userStoppedRef.current || ac.signal.aborted) {
-        if (mountedRef.current) {
-          onNotify({ tone: "info", message: "已取消批量章纲生成" });
-        }
-      } else if (mountedRef.current) {
+      if (!isCurrent(runId)) return;
+      if (wasStopped()) {
+        onNotify({ tone: "info", message: "已取消批量章纲生成" });
+      } else {
         onNotify({
           tone: "danger",
           message: "批量生成章纲失败",
@@ -157,18 +120,8 @@ export function BatchOutlineModal({
         });
       }
     } finally {
-      if (fallbackTimerRef.current !== null) {
-        window.clearTimeout(fallbackTimerRef.current);
-        fallbackTimerRef.current = null;
-      }
-      try {
-        if (!ch.closed) ch.close();
-      } catch {
-        // ignore
-      }
-      if (channelRef.current === ch) channelRef.current = null;
-      if (abortRef.current === ac) abortRef.current = null;
-      if (mountedRef.current) {
+      releaseStream(ch);
+      if (isCurrent(runId)) {
         setRunning(false);
         setStageMsg("");
       }

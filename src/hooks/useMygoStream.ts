@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Channel } from "mygo-runtime";
 
 /**
@@ -50,6 +50,9 @@ export function useMygoChannel<T>() {
     }
   }, []);
 
+  const isCurrent = useCallback((runId: number) => runIdRef.current === runId, []);
+  const wasStopped = useCallback(() => stoppedRef.current, []);
+
   useEffect(() => {
     return () => {
       runIdRef.current += 1;
@@ -57,11 +60,14 @@ export function useMygoChannel<T>() {
     };
   }, [stop]);
 
-  return {
-    open,
-    stop,
-    release,
-    isCurrent: (runId: number) => runIdRef.current === runId,
-    wasStopped: () => stoppedRef.current,
-  };
+  return useMemo(
+    () => ({
+      open,
+      stop,
+      release,
+      isCurrent,
+      wasStopped,
+    }),
+    [open, stop, release, isCurrent, wasStopped]
+  );
 }

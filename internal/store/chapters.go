@@ -817,6 +817,15 @@ func resequenceBookChaptersTx(ctx context.Context, tx *sql.Tx, bookID int64) err
 			return mapSQLiteError(err)
 		}
 	}
+	// 同步更新事件溯源状态账本中的 chapter_seq，避免重排后 SnapshotAt 时间轴漂移。
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE entity_state_events
+		SET chapter_seq = (SELECT global_seq FROM chapters WHERE chapters.id = entity_state_events.chapter_id)
+		WHERE book_id = ?
+		  AND EXISTS (SELECT 1 FROM chapters WHERE chapters.id = entity_state_events.chapter_id)
+	`, bookID); err != nil {
+		return mapSQLiteError(err)
+	}
 	return nil
 }
 

@@ -121,17 +121,6 @@ func (r *Runner) StartAutopilot(ctx context.Context, req domain.AutopilotRequest
 		return domain.AutopilotState{}, err
 	}
 
-	r.autopilotMu.Lock()
-	if existing, ok := r.autopilots[req.BookID]; ok {
-		existing.mu.Lock()
-		isRunning := existing.active
-		existing.mu.Unlock()
-		if isRunning {
-			r.autopilotMu.Unlock()
-			return domain.AutopilotState{}, fmt.Errorf("%w: 该书已有运行中的托管任务", domain.ErrConflict)
-		}
-	}
-
 	runCtx, cancel := context.WithCancel(context.Background())
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	sess := &autopilotSession{
@@ -162,16 +151,45 @@ func (r *Runner) StartAutopilot(ctx context.Context, req domain.AutopilotRequest
 			UpdatedAt: now,
 		},
 	}
-	if rs, ok := r.store.(AutopilotRunStore); ok {
-		if runID, cErr := rs.CreateAutopilotRun(context.Background(), sess.state); cErr == nil && runID > 0 {
-			sess.state.RunID = runID
+
+	r.batchMu.Lock()
+	if r.closed {
+		r.batchMu.Unlock()
+		cancel()
+		return domain.AutopilotState{}, errors.New("pipeline runner is closed")
+	}
+	r.autopilotMu.Lock()
+	if existing, ok := r.autopilots[req.BookID]; ok {
+		existing.mu.Lock()
+		isRunning := existing.active
+		existing.mu.Unlock()
+		if isRunning {
+			r.autopilotMu.Unlock()
+			r.batchMu.Unlock()
+			cancel()
+			return domain.AutopilotState{}, fmt.Errorf("%w: 该书已有运行中的托管任务", domain.ErrConflict)
 		}
 	}
 	r.autopilots[req.BookID] = sess
 	r.batchWG.Add(1)
 	r.autopilotMu.Unlock()
+	r.batchMu.Unlock()
 
+	// 在锁外创建持久化记录，避免 SQLite I/O 阻塞 GetAutopilotState / StopAutopilot 等锁操作。
+	if rs, ok := r.store.(AutopilotRunStore); ok {
+		dbCtx, cancelDB := context.WithTimeout(ctx, r.saveTimeout)
+		runID, cErr := rs.CreateAutopilotRun(dbCtx, sess.state)
+		cancelDB()
+		if cErr == nil && runID > 0 {
+			sess.mu.Lock()
+			sess.state.RunID = runID
+			sess.mu.Unlock()
+		}
+	}
+
+	sess.mu.Lock()
 	initial := cloneAutopilotState(sess.state)
+	sess.mu.Unlock()
 	r.emitAutopilotProgress(initial)
 
 	go func() {
@@ -304,6 +322,9 @@ func (r *Runner) runAutopilotLoop(ctx context.Context, sess *autopilotSession, r
 		case <-ctx.Done():
 			return domain.AutopilotDecisionStop
 		case act := <-sess.gateCh:
+			if ctx.Err() != nil {
+				return domain.AutopilotDecisionStop
+			}
 			return act
 		}
 	}
@@ -530,11 +551,43 @@ func (r *Runner) runAutopilotLoop(ctx context.Context, sess *autopilotSession, r
 							addLog(chap.GlobalSeq, domain.AutopilotStepExtracting, "warn", "记忆抽取跳过："+extErr.Error())
 						}
 					} else if req.AutoCommitMemory && extraStore != nil {
-						addLog(chap.GlobalSeq, domain.AutopilotStepCommitting, "info", fmt.Sprintf("第 %d 章自动同步设定与伏笔…", chap.GlobalSeq))
-						if applyRes, appErr := extraStore.ApplyDeltaDecisions(ctx, buildAutoAcceptDeltaInput(delta)); appErr == nil {
-							addLog(chap.GlobalSeq, domain.AutopilotStepCommitting, "ok", fmt.Sprintf("第 %d 章已同步记忆（%d 条状态变化，%d 条伏笔更新）", chap.GlobalSeq, applyRes.CommittedEvents, applyRes.UpdatedForeshadowings))
-						} else {
-							addLog(chap.GlobalSeq, domain.AutopilotStepCommitting, "warn", "自动同步记忆失败（保留在待审列表）："+appErr.Error())
+						shouldCommit := true
+						if delta.HighRiskFlags > 0 {
+							act := waitGate(domain.AutopilotGate{
+								Reason:     "high_risk_memory",
+								Title:      fmt.Sprintf("第 %d 章检测到 %d 条高风险记忆变更", chap.GlobalSeq, delta.HighRiskFlags),
+								Detail:     "AI 抽取到疑似高风险设定/数值改动（如境界大幅跳跃或大额资金变动）。是否确认立即写入长期记忆？",
+								ChapterID:  chap.ID,
+								ChapterSeq: chap.GlobalSeq,
+								Options: []domain.AutopilotGateOption{
+									{Action: domain.AutopilotDecisionContinue, Label: "确认并同步记忆", Description: "将本次记忆变更（含高风险项）提交到长期记忆并继续"},
+									{Action: domain.AutopilotDecisionSkipChapter, Label: "暂不提交，继续写下一章", Description: "保留变更在待审台由人工复核，流水线继续推进后续章节"},
+									{Action: domain.AutopilotDecisionStop, Label: "暂停托管去核对", Description: "保留当前章在待审台并中止自动托管"},
+								},
+							})
+							switch act {
+							case domain.AutopilotDecisionStop:
+								addLog(chap.GlobalSeq, domain.AutopilotStepCommitting, "warn", "作者选择暂停托管以核对高风险记忆变更（已保留在待审列表）")
+								update(func(s *domain.AutopilotState) {
+									s.Status = domain.AutopilotStatusStopped
+									s.Gate = nil
+									s.Message = "已暂停托管：请前往审改台核对高风险记忆变更"
+								})
+								return
+							case domain.AutopilotDecisionSkipChapter:
+								shouldCommit = false
+								addLog(chap.GlobalSeq, domain.AutopilotStepCommitting, "warn", fmt.Sprintf("第 %d 章高风险记忆变更已留待人工审改，继续下一章", chap.GlobalSeq))
+							default:
+								shouldCommit = true
+							}
+						}
+						if shouldCommit {
+							addLog(chap.GlobalSeq, domain.AutopilotStepCommitting, "info", fmt.Sprintf("第 %d 章自动同步设定与伏笔…", chap.GlobalSeq))
+							if applyRes, appErr := extraStore.ApplyDeltaDecisions(ctx, buildAutoAcceptDeltaInput(delta)); appErr == nil {
+								addLog(chap.GlobalSeq, domain.AutopilotStepCommitting, "ok", fmt.Sprintf("第 %d 章已同步记忆（%d 条状态变化，%d 条伏笔更新）", chap.GlobalSeq, applyRes.CommittedEvents, applyRes.UpdatedForeshadowings))
+							} else {
+								addLog(chap.GlobalSeq, domain.AutopilotStepCommitting, "warn", "自动同步记忆失败（保留在待审列表）："+appErr.Error())
+							}
 						}
 					} else {
 						addLog(chap.GlobalSeq, domain.AutopilotStepExtracting, "ok", fmt.Sprintf("第 %d 章记忆变更已写入待审列表", chap.GlobalSeq))

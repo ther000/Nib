@@ -54,6 +54,7 @@ func (r *Runner) Close() {
 		return
 	}
 	r.batchMu.Lock()
+	r.closed = true
 	cancels := make([]context.CancelFunc, 0, len(r.batchCancels))
 	for _, h := range r.batchCancels {
 		if h.cancel != nil {
@@ -431,6 +432,10 @@ func (r *Runner) RetryBatchItem(ctx context.Context, itemID int64) (domain.Batch
 
 func (r *Runner) launchBatchExecution(batchID int64, targetItemID int64) error {
 	r.batchMu.Lock()
+	if r.closed {
+		r.batchMu.Unlock()
+		return errors.New("pipeline runner is closed")
+	}
 	if _, exists := r.batchCancels[batchID]; exists {
 		r.batchMu.Unlock()
 		return fmt.Errorf("%w: 微批任务 #%d 仍在运行中", domain.ErrConflict, batchID)

@@ -121,3 +121,57 @@ func TestDirectorMultiStepToolExecution(t *testing.T) {
 		t.Fatalf("expected chapter persisted, got %+v (err=%v)", chaps, err)
 	}
 }
+
+func TestDirectorUpdateBookPreservesProfile(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "director-profile.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	prov, _ := st.UpsertProvider(ctx, domain.UpsertProviderInput{
+		Name: "DirProv", Protocol: domain.ProtocolOpenAICompat, BaseURL: "https://api.example.com/v1", APIKey: "sk-dir", Models: []string{"dir-model"}, Enabled: true,
+	})
+	_, _ = st.SaveModelRoute(ctx, domain.ModelRoute{
+		Stage: domain.StageOutline, ProviderID: &prov.ID, ModelName: "dir-model", Temperature: 0.4, MaxTokens: 4096,
+	})
+	book, err := st.CreateBook(ctx, domain.CreateBookInput{
+		Title:              "原始书名",
+		Genre:              domain.GenreXuanhuan,
+		Premise:            "原始简介",
+		TargetChapterWords: 2500,
+		POVMode:            "first_person",
+		PacingStyle:        "fast_cool",
+		WritingPrompt:      "禁止水字数，句句见血",
+		DailyWordGoal:      6000,
+	})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+
+	stub := &stubDirectorLLM{
+		replies: []string{
+			`{"thought":"修改简介","action":"tool","tool_name":"update_book","tool_args":{"premise":"新简介"}}`,
+			`{"thought":"完成","action":"final","reply":"已更新简介"}`,
+		},
+	}
+	runner := New(st, compiler.New(st), stub, nil)
+	if _, err := runner.RunDirectorChat(ctx, domain.DirectorChatRequest{
+		BookID:      book.ID,
+		Instruction: "把简介改成新简介",
+	}, nil); err != nil {
+		t.Fatalf("RunDirectorChat: %v", err)
+	}
+
+	after, err := st.GetBook(ctx, book.ID)
+	if err != nil {
+		t.Fatalf("GetBook: %v", err)
+	}
+	if after.Premise != "新简介" {
+		t.Fatalf("expected updated premise, got %q", after.Premise)
+	}
+	if after.POVMode != "first_person" || after.PacingStyle != "fast_cool" || after.WritingPrompt != "禁止水字数，句句见血" || after.DailyWordGoal != 6000 {
+		t.Fatalf("expected profile fields preserved, got %+v", after)
+	}
+}

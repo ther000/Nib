@@ -171,7 +171,30 @@ export function ArchitectView() {
     [chapters]
   );
 
-  // Sync metadata form when active chapter changes
+  // Sync metadata form when active chapter changes, flushing dirty meta/beats on switch or unmount
+  const metaDraftRef = useRef({
+    title: metaTitle,
+    emotion: metaEmotion,
+    hookType: metaHookType,
+    hookNote: metaHookNote,
+    outline: metaOutline,
+    causal: metaCausal,
+  });
+  metaDraftRef.current = {
+    title: metaTitle,
+    emotion: metaEmotion,
+    hookType: metaHookType,
+    hookNote: metaHookNote,
+    outline: metaOutline,
+    causal: metaCausal,
+  };
+  const metaDirtyRef = useRef(metaDirty);
+  metaDirtyRef.current = metaDirty;
+  const beatsDraftRef = useRef(beats);
+  beatsDraftRef.current = beats;
+  const beatsDirtyRef = useRef(beatsDirty);
+  beatsDirtyRef.current = beatsDirty;
+
   useEffect(() => {
     if (!activeChapter) {
       setMetaTitle("");
@@ -195,6 +218,50 @@ export function ArchitectView() {
     setConfirmFillBeats(false);
     setOpenEntityPickerKey(null);
   }, [activeChapter?.id, activeChapter?.updatedAt]);
+
+  useEffect(() => {
+    const chap = activeChapter;
+    return () => {
+      if (!chap) return;
+      if (metaDirtyRef.current) {
+        const d = metaDraftRef.current;
+        const trimmedTitle = d.title.trim() || chap.title;
+        void LibraryService.updateChapterMeta({
+          id: chap.id,
+          title: trimmedTitle,
+          status: chap.status,
+          emotionTag: d.emotion,
+          hookType: d.hookType,
+          hookNote: d.hookNote.trim(),
+          outlineSummary: d.outline.trim(),
+          causalSummary: d.causal.trim(),
+        })
+          .then((updated) => updateChapterInCache(updated))
+          .catch(() => {
+            // ignore background flush failure
+          });
+      }
+      if (beatsDirtyRef.current) {
+        const curBeats = beatsDraftRef.current;
+        if (curBeats.every((b) => b.summary.trim().length > 0)) {
+          const payload: Beat[] = curBeats.map((b, idx) => ({
+            id: b.id,
+            chapterId: chap.id,
+            seq: idx + 1,
+            stage: b.stage,
+            summary: b.summary.trim(),
+            conflictNote: b.conflictNote.trim(),
+            povEntityId: b.povEntityId && b.povEntityId > 0 ? b.povEntityId : undefined,
+            entityIds: b.entityIds,
+            targetWords: b.targetWords > 0 ? b.targetWords : 500,
+          }));
+          void LibraryService.replaceBeats(chap.id, payload).catch(() => {
+            // ignore background flush failure
+          });
+        }
+      }
+    };
+  }, [activeChapter?.id, updateChapterInCache]);
 
   // Fetch beats when active chapter ID changes
   useEffect(() => {

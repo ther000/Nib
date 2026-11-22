@@ -25,11 +25,11 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// initPragmas 按 AGENTS.md §3.2 规定顺序在每条连接初始化时执行。
+// initPragmas 按 AGENTS.md §3.2 规定顺序在每条连接初始化时执行（先设 busy_timeout 防止并发开连接即撞锁）。
 var initPragmas = []string{
+	"PRAGMA busy_timeout = 5000;",
 	"PRAGMA journal_mode = WAL;",
 	"PRAGMA foreign_keys = ON;",
-	"PRAGMA busy_timeout = 5000;",
 	"PRAGMA synchronous = NORMAL;",
 }
 
@@ -175,7 +175,7 @@ func (s *Store) Path() string {
 	return s.path
 }
 
-// BackupToFile 安全刷盘 WAL 后将本地 SQLite 数据库原子备份至目标路径。
+// BackupToFile 通过 SQLite VACUUM INTO 将当前一致性快照原子备份至目标路径（不受并发读连接阻塞）。
 func (s *Store) BackupToFile(ctx context.Context, targetPath string) error {
 	if s == nil || s.db == nil {
 		return errors.New("database not initialized")
@@ -189,10 +189,42 @@ func (s *Store) BackupToFile(ctx context.Context, targetPath string) error {
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if _, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE);`); err != nil {
-		return fmt.Errorf("checkpoint WAL before backup: %w", err)
+	return s.backupToFileLocked(ctx, cleanTarget)
+}
+
+func (s *Store) backupToFileLocked(ctx context.Context, cleanTarget string) error {
+	dir := filepath.Dir(cleanTarget)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create backup target dir: %w", err)
+		}
 	}
-	return copyFileAtomic(s.path, cleanTarget)
+	tmp, err := os.CreateTemp(dir, ".nib-db-bak-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	_ = os.Remove(tmpPath)
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := s.db.ExecContext(ctx, `VACUUM INTO `+quoteSQLiteStringLiteral(tmpPath)); err != nil {
+		return fmt.Errorf("vacuum backup into %q: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, cleanTarget); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
+func quoteSQLiteStringLiteral(val string) string {
+	return `'` + strings.ReplaceAll(val, `'`, `''`) + `'`
 }
 
 // CreateAutoBackup 在指定目录创建当日滚动备份；同日已存在则跳过，并只保留最近 keep 份。
@@ -265,21 +297,19 @@ func (s *Store) RestoreDataFromFile(ctx context.Context, backupPath string) (str
 		}
 	}
 
-	stageDir := filepath.Dir(s.path)
-	stageFile, err := os.CreateTemp(stageDir, ".nib-restore-stage-*.db")
+	stageParent := filepath.Dir(s.path)
+	stageDir, err := os.MkdirTemp(stageParent, ".nib-restore-stage-*")
 	if err != nil {
-		return "", fmt.Errorf("create restore staging file: %w", err)
+		return "", fmt.Errorf("create restore staging dir: %w", err)
 	}
-	stagePath := stageFile.Name()
-	_ = stageFile.Close()
-	_ = os.Remove(stagePath)
-	defer os.Remove(stagePath)
+	defer os.RemoveAll(stageDir)
+	stagePath := filepath.Join(stageDir, "stage.db")
 
 	if err := copyFileAtomic(source, stagePath); err != nil {
 		return "", fmt.Errorf("stage backup file: %w", err)
 	}
 
-	// 先把备份升级到当前最新 schema，旧备份也能安全恢复。
+	// 先把备份升级到当前最新 schema，旧备份也能安全恢复（附属 .bak/-wal/-shm 均随 stageDir 一并清理）。
 	staged, err := Open(stagePath)
 	if err != nil {
 		return "", fmt.Errorf("validate backup database: %w", err)
@@ -296,13 +326,13 @@ func (s *Store) RestoreDataFromFile(ctx context.Context, backupPath string) (str
 		return "", err
 	}
 
-	preRestorePath := fmt.Sprintf("%s.pre-restore-%s.db", s.path, time.Now().Format("20060102-150405"))
-	if err := s.BackupToFile(ctx, preRestorePath); err != nil {
-		return "", fmt.Errorf("backup current database before restore: %w", err)
-	}
-
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+
+	preRestorePath := fmt.Sprintf("%s.pre-restore-%s.db", s.path, time.Now().Format("20060102-150405"))
+	if err := s.backupToFileLocked(ctx, preRestorePath); err != nil {
+		return "", fmt.Errorf("backup current database before restore: %w", err)
+	}
 
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -310,45 +340,110 @@ func (s *Store) RestoreDataFromFile(ctx context.Context, backupPath string) (str
 	}
 	defer conn.Close()
 
+	cleanCtx := context.WithoutCancel(ctx)
 	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
 		return "", err
 	}
-	defer func() { _, _ = conn.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`) }()
+	defer func() { _, _ = conn.ExecContext(cleanCtx, `PRAGMA foreign_keys = ON`) }()
 
 	if _, err := conn.ExecContext(ctx, `ATTACH DATABASE ? AS restore`, stagePath); err != nil {
 		return "", fmt.Errorf("attach restore database: %w", err)
 	}
-	defer func() { _, _ = conn.ExecContext(context.Background(), `DETACH DATABASE restore`) }()
+	defer func() { _, _ = conn.ExecContext(cleanCtx, `DETACH DATABASE restore`) }()
 
 	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
 		return "", err
 	}
+	inTx := true
+	defer func() {
+		if inTx {
+			_, _ = conn.ExecContext(cleanCtx, `ROLLBACK`)
+		}
+	}()
 	if _, err := conn.ExecContext(ctx, `PRAGMA defer_foreign_keys = ON`); err != nil {
-		_, _ = conn.ExecContext(ctx, `ROLLBACK`)
 		return "", err
 	}
 
 	names, err := tableNamesForRestore(ctx, conn)
 	if err != nil {
-		_, _ = conn.ExecContext(ctx, `ROLLBACK`)
 		return "", err
 	}
 	for _, name := range names {
 		quoted := quoteSQLiteIdentifier(name)
+		cols, colErr := commonTableColumns(ctx, conn, name)
+		if colErr != nil {
+			return "", colErr
+		}
+		if len(cols) == 0 {
+			continue
+		}
+		quotedCols := make([]string, len(cols))
+		for i, c := range cols {
+			quotedCols[i] = quoteSQLiteIdentifier(c)
+		}
+		colList := strings.Join(quotedCols, ", ")
 		if _, err := conn.ExecContext(ctx, `DELETE FROM main.`+quoted); err != nil {
-			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
 			return "", fmt.Errorf("clear table %s: %w", name, err)
 		}
-		if _, err := conn.ExecContext(ctx, `INSERT INTO main.`+quoted+` SELECT * FROM restore.`+quoted); err != nil {
-			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+		if _, err := conn.ExecContext(ctx, `INSERT INTO main.`+quoted+` (`+colList+`) SELECT `+colList+` FROM restore.`+quoted); err != nil {
 			return "", fmt.Errorf("copy table %s: %w", name, err)
 		}
 	}
+	if _, err := conn.ExecContext(ctx, `INSERT INTO main.chapters_fts(chapters_fts) VALUES ('rebuild')`); err != nil {
+		return "", fmt.Errorf("rebuild chapters_fts: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `INSERT INTO main.entities_fts(entities_fts) VALUES ('rebuild')`); err != nil {
+		return "", fmt.Errorf("rebuild entities_fts: %w", err)
+	}
 	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
-		_, _ = conn.ExecContext(ctx, `ROLLBACK`)
 		return "", err
 	}
+	inTx = false
 	return preRestorePath, nil
+}
+
+func commonTableColumns(ctx context.Context, conn *sql.Conn, tableName string) ([]string, error) {
+	readCols := func(schema string) ([]string, map[string]bool, error) {
+		rows, err := conn.QueryContext(ctx, fmt.Sprintf(`PRAGMA %s.table_info(%s)`, schema, quoteSQLiteIdentifier(tableName)))
+		if err != nil {
+			return nil, nil, err
+		}
+		defer rows.Close()
+		var list []string
+		set := make(map[string]bool)
+		for rows.Next() {
+			var (
+				cid       int
+				name      string
+				colType   string
+				notNull   int
+				dfltValue sql.NullString
+				pk        int
+			)
+			if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err != nil {
+				return nil, nil, err
+			}
+			list = append(list, name)
+			set[name] = true
+		}
+		return list, set, rows.Err()
+	}
+
+	mainCols, _, err := readCols("main")
+	if err != nil {
+		return nil, err
+	}
+	_, restoreSet, err := readCols("restore")
+	if err != nil {
+		return nil, err
+	}
+	common := make([]string, 0, len(mainCols))
+	for _, col := range mainCols {
+		if restoreSet[col] {
+			common = append(common, col)
+		}
+	}
+	return common, nil
 }
 
 func tableNamesForRestore(ctx context.Context, conn *sql.Conn) ([]string, error) {
@@ -483,17 +578,14 @@ func (s *Store) runMigrations(ctx context.Context, migs []migration, isMemory bo
 		return nil
 	}
 
-	// 升级非空磁盘数据库到更高版本前，先刷盘 WAL 并创建 .bak.<ver> 备份（保留升级前版本号），出错则中止迁移。
+	// 升级非空磁盘数据库到更高版本前，先创建一致性 .bak.<ver> 备份（保留升级前版本号），出错则中止迁移。
 	if !isMemory && (currentVer > 0 || preExistingNonEmpty) {
-		if _, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE);`); err != nil {
-			return fmt.Errorf("checkpoint WAL before backup: %w", err)
-		}
 		backupVer := currentVer
 		if backupVer <= 0 {
 			backupVer = pending[len(pending)-1].Version
 		}
 		backupPath := fmt.Sprintf("%s.bak.%d", s.path, backupVer)
-		if err := copyFileAtomic(s.path, backupPath); err != nil {
+		if err := s.backupToFileLocked(ctx, backupPath); err != nil {
 			return fmt.Errorf("backup db to %q before migration v%d: %w", backupPath, pending[len(pending)-1].Version, err)
 		}
 	}

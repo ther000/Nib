@@ -2202,11 +2202,13 @@ export function SettingsModal() {
                       </button>
                       <button
                         type="button"
-                        onClick={() =>
+                        onClick={() => {
+                          const targetBookId = activeBook.id;
+                          closeSettings();
                           window.dispatchEvent(
-                            new CustomEvent("nib:reverse-extract", { detail: { bookId: activeBook.id } })
-                          )
-                        }
+                            new CustomEvent("nib:reverse-extract", { detail: { bookId: targetBookId } })
+                          );
+                        }}
                         className="rounded-md border border-accent/40 bg-accent-soft px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:border-accent"
                       >
                         AI 反推旧稿设定

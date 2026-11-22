@@ -126,6 +126,7 @@ type Runner struct {
 	saveTimeout       time.Duration
 
 	batchMu       sync.Mutex
+	closed        bool
 	batchCancels  map[int64]activeBatchHandle
 	batchTokenSeq uint64
 	batchWG       sync.WaitGroup

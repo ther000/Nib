@@ -723,6 +723,10 @@ func (r *Runner) executeDirectorCoreTool(
 			GoldenFinger:       cur.GoldenFinger,
 			TargetChapterWords: cur.TargetChapterWords,
 			ExportDir:          cur.ExportDir,
+			POVMode:            cur.POVMode,
+			PacingStyle:        cur.PacingStyle,
+			WritingPrompt:      cur.WritingPrompt,
+			DailyWordGoal:      cur.DailyWordGoal,
 		}
 		if strings.TrimSpace(args.Title) != "" {
 			in.Title = strings.TrimSpace(args.Title)
@@ -821,29 +825,77 @@ func (r *Runner) executeDirectorCoreTool(
 
 	case "upsert_foreshadowing":
 		var args struct {
-			ID               int64  `json:"id"`
-			Title            string `json:"title"`
-			Description      string `json:"description"`
-			PlantedSeq       int    `json:"planted_seq"`
-			TargetResolveSeq int    `json:"target_resolve_seq"`
-			Status           string `json:"status"`
+			ID                int64   `json:"id"`
+			Title             string  `json:"title"`
+			Description       string  `json:"description"`
+			PlantedSeq        int     `json:"planted_seq"`
+			TargetResolveSeq  int     `json:"target_resolve_seq"`
+			Status            string  `json:"status"`
+			InvolvedEntityIDs []int64 `json:"involved_entity_ids"`
 		}
 		if err := json.Unmarshal(rawArgs, &args); err != nil {
 			return "", false, err
 		}
+		var existingFS *domain.Foreshadowing
+		if args.ID > 0 {
+			if fsList, lErr := ds.ListForeshadowings(ctx, bookID, ""); lErr == nil {
+				for i := range fsList {
+					if fsList[i].ID == args.ID {
+						existingFS = &fsList[i]
+						break
+					}
+				}
+			}
+		}
 		st := domain.ForeshadowingStatus(strings.ToLower(strings.TrimSpace(args.Status)))
 		if !st.Valid() {
-			st = domain.ForeshadowingPlanted
+			if existingFS != nil && existingFS.Status.Valid() {
+				st = existingFS.Status
+			} else {
+				st = domain.ForeshadowingPlanted
+			}
+		}
+		involvedIDs := args.InvolvedEntityIDs
+		if involvedIDs == nil {
+			if existingFS != nil && existingFS.InvolvedEntityIDs != nil {
+				involvedIDs = existingFS.InvolvedEntityIDs
+			} else {
+				involvedIDs = []int64{}
+			}
+		}
+		title := strings.TrimSpace(args.Title)
+		if title == "" && existingFS != nil {
+			title = existingFS.Title
+		}
+		desc := strings.TrimSpace(args.Description)
+		if desc == "" && existingFS != nil {
+			desc = existingFS.Description
+		}
+		plantedSeq := args.PlantedSeq
+		if plantedSeq == 0 && existingFS != nil {
+			plantedSeq = existingFS.PlantedChapterSeq
+		}
+		targetResolveSeq := args.TargetResolveSeq
+		if targetResolveSeq == 0 && existingFS != nil {
+			targetResolveSeq = existingFS.TargetResolveSeq
+		}
+		lastHintSeq := 0
+		resolvedSeq := 0
+		if existingFS != nil {
+			lastHintSeq = existingFS.LastHintSeq
+			resolvedSeq = existingFS.ResolvedChapterSeq
 		}
 		saved, err := ds.UpsertForeshadowing(ctx, domain.UpsertForeshadowingInput{
-			ID:                args.ID,
-			BookID:            bookID,
-			Title:             strings.TrimSpace(args.Title),
-			Description:       strings.TrimSpace(args.Description),
-			PlantedChapterSeq: args.PlantedSeq,
-			TargetResolveSeq:  args.TargetResolveSeq,
-			Status:            st,
-			InvolvedEntityIDs: []int64{},
+			ID:                 args.ID,
+			BookID:             bookID,
+			Title:              title,
+			Description:        desc,
+			PlantedChapterSeq:  plantedSeq,
+			LastHintSeq:        lastHintSeq,
+			TargetResolveSeq:   targetResolveSeq,
+			ResolvedChapterSeq: resolvedSeq,
+			Status:             st,
+			InvolvedEntityIDs:  involvedIDs,
 		})
 		if err != nil {
 			return "", false, err
@@ -1176,7 +1228,7 @@ func (r *Runner) executeDirectorCoreTool(
 		if args.AutoPolish != nil {
 			autoPolish = *args.AutoPolish
 		}
-		autoCommit := true
+		autoCommit := false
 		if args.AutoCommitMemory != nil {
 			autoCommit = *args.AutoCommitMemory
 		}

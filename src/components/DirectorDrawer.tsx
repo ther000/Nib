@@ -50,9 +50,17 @@ export function DirectorDrawer() {
   const [liveToolCalls, setLiveToolCalls] = useState<DirectorToolCall[]>([]);
   const [undoingVersionId, setUndoingVersionId] = useState<number | null>(null);
 
-  const stream = useMygoChannel<DirectorEvent>();
+  const {
+    open: openStream,
+    stop: stopStream,
+    release: releaseStream,
+    isCurrent: isCurrentRun,
+    wasStopped: wasStreamStopped,
+  } = useMygoChannel<DirectorEvent>();
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevBookIdRef = useRef<number | null>(null);
+  const activeBookIdRef = useRef<number | null>(activeBook?.id ?? null);
+  activeBookIdRef.current = activeBook?.id ?? null;
 
   const hasReadyModel = useMemo(() => {
     const enabledProviderIds = new Set(
@@ -67,18 +75,18 @@ export function DirectorDrawer() {
     );
   }, [providers, modelRoutes]);
 
-  // 切换书籍时取消旧流并从 SQLite 加载该书持久化的 AI 导演对话记录
+  // 切换书籍时取消旧流；仅在抽屉打开时从 SQLite 加载该书持久化的 AI 导演对话记录
   useEffect(() => {
     const bookId = activeBook?.id ?? null;
     if (bookId !== prevBookIdRef.current) {
       prevBookIdRef.current = bookId;
-      stream.stop();
+      stopStream();
       setMessages([]);
       setLiveStatus("");
       setLiveToolCalls([]);
       setRunning(false);
     }
-    if (!bookId) return;
+    if (!directorOpen || !bookId) return;
     let active = true;
     void DirectorService.listMessages(bookId)
       .then((list) => {
@@ -90,7 +98,7 @@ export function DirectorDrawer() {
     return () => {
       active = false;
     };
-  }, [activeBook?.id, directorOpen, stream]);
+  }, [activeBook?.id, directorOpen, stopStream]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -101,7 +109,7 @@ export function DirectorDrawer() {
   if (!directorOpen || !activeBook) return null;
 
   const handleStop = () => {
-    stream.stop();
+    stopStream();
   };
 
   const handleClearHistory = async () => {
@@ -160,7 +168,9 @@ export function DirectorDrawer() {
     setLiveStatus("正在分析你的指令…");
     setLiveToolCalls([]);
 
-    const { channel: ch } = stream.open((ev) => {
+    const targetBookId = activeBook.id;
+    const { channel: ch, runId } = openStream((ev) => {
+      if (!isCurrentRun(runId) || activeBookIdRef.current !== targetBookId) return;
       if (ev.kind === "started" || ev.kind === "thinking") {
         if (ev.message) setLiveStatus(ev.message);
       } else if (ev.kind === "tool_start" && ev.toolCall) {
@@ -178,13 +188,14 @@ export function DirectorDrawer() {
     try {
       const reply = await DirectorService.sendInstruction(
         {
-          bookId: activeBook.id,
+          bookId: targetBookId,
           activeChapterId: activeChapter?.id ?? 0,
           instruction: text,
           history: messages,
         },
         ch,
       );
+      if (!isCurrentRun(runId) || activeBookIdRef.current !== targetBookId) return;
 
       setMessages((prev) => [
         ...prev,
@@ -197,14 +208,15 @@ export function DirectorDrawer() {
       ]);
 
       if (reply.mutated) {
-        await refreshBookData(activeBook.id, activeChapter?.id ?? null);
-        if (activeChapter?.id) {
+        await refreshBookData(targetBookId, activeChapter?.id ?? null);
+        if (activeChapter?.id && activeBookIdRef.current === targetBookId) {
           await refreshActiveChapter(activeChapter.id);
         }
         bumpMemoryRevision();
       }
     } catch (err) {
-      if (!stream.wasStopped()) {
+      if (!isCurrentRun(runId) || activeBookIdRef.current !== targetBookId) return;
+      if (!wasStreamStopped()) {
         notify({
           tone: "danger",
           message: "AI 导演执行失败",
@@ -229,10 +241,12 @@ export function DirectorDrawer() {
         ]);
       }
     } finally {
-      stream.release(ch);
-      setRunning(false);
-      setLiveStatus("");
-      setLiveToolCalls([]);
+      releaseStream(ch);
+      if (isCurrentRun(runId) && activeBookIdRef.current === targetBookId) {
+        setRunning(false);
+        setLiveStatus("");
+        setLiveToolCalls([]);
+      }
     }
   };
 

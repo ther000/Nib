@@ -62,25 +62,26 @@ func (s *Store) RestoreTrashItem(ctx context.Context, trashID int64) (domain.Tra
 	}
 
 	var (
-		itemType string
-		title    string
-		raw      string
+		title  string
+		result domain.TrashRestoreResult
 	)
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT item_type, title, payload_json FROM trash_items WHERE id = ?
-	`, trashID).Scan(&itemType, &title, &raw); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return domain.TrashRestoreResult{}, fmt.Errorf("trash item %d: %w", trashID, domain.ErrNotFound)
-		}
-		return domain.TrashRestoreResult{}, mapSQLiteError(err)
-	}
-	var payload trashPayload
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		return domain.TrashRestoreResult{}, fmt.Errorf("decode trash payload: %w", err)
-	}
-
-	var result domain.TrashRestoreResult
 	err := s.withWriteTx(ctx, func(tx *sql.Tx) error {
+		var (
+			itemType string
+			raw      string
+		)
+		if err := tx.QueryRowContext(ctx, `
+			SELECT item_type, title, payload_json FROM trash_items WHERE id = ?
+		`, trashID).Scan(&itemType, &title, &raw); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("trash item %d: %w", trashID, domain.ErrNotFound)
+			}
+			return mapSQLiteError(err)
+		}
+		var payload trashPayload
+		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+			return fmt.Errorf("decode trash payload: %w", err)
+		}
 		var err error
 		switch domain.TrashItemType(itemType) {
 		case domain.TrashItemBook:
@@ -97,8 +98,16 @@ func (s *Store) RestoreTrashItem(ctx context.Context, trashID int64) (domain.Tra
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM trash_items WHERE id = ?`, trashID); err != nil {
+		delRes, err := tx.ExecContext(ctx, `DELETE FROM trash_items WHERE id = ?`, trashID)
+		if err != nil {
 			return mapSQLiteError(err)
+		}
+		affected, err := delRes.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return fmt.Errorf("trash item %d: %w", trashID, domain.ErrNotFound)
 		}
 		return nil
 	})
@@ -422,6 +431,26 @@ func restoreBookTx(ctx context.Context, tx *sql.Tx, payload trashPayload) (domai
 	}, nil
 }
 
+func loadExistingEntityIdentityMapTx(ctx context.Context, tx *sql.Tx, bookID int64) (map[int64]int64, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM entities WHERE book_id = ?`, bookID)
+	if err != nil {
+		return nil, mapSQLiteError(err)
+	}
+	defer rows.Close()
+	out := make(map[int64]int64)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = id
+	}
+	if err := rows.Err(); err != nil {
+		return nil, mapSQLiteError(err)
+	}
+	return out, nil
+}
+
 func restoreVolumeTx(ctx context.Context, tx *sql.Tx, payload trashPayload) (domain.TrashRestoreResult, error) {
 	if len(payload.Volumes) == 0 {
 		return domain.TrashRestoreResult{}, errors.New("回收站数据缺少分卷信息")
@@ -442,8 +471,14 @@ func restoreVolumeTx(ctx context.Context, tx *sql.Tx, payload trashPayload) (dom
 		return domain.TrashRestoreResult{}, err
 	}
 	volumeMap := map[int64]int64{volume.ID: newVolumeID}
-	entityMap := make(map[int64]int64)
+	entityMap, err := loadExistingEntityIdentityMapTx(ctx, tx, volume.BookID)
+	if err != nil {
+		return domain.TrashRestoreResult{}, err
+	}
 	if _, err := restoreChaptersTx(ctx, tx, volume.BookID, volumeMap, payload.Chapters, payload.Beats, payload.Versions, entityMap); err != nil {
+		return domain.TrashRestoreResult{}, err
+	}
+	if err := resequenceBookChaptersTx(ctx, tx, volume.BookID); err != nil {
 		return domain.TrashRestoreResult{}, err
 	}
 	return domain.TrashRestoreResult{
@@ -470,8 +505,15 @@ func restoreChapterTx(ctx context.Context, tx *sql.Tx, payload trashPayload) (do
 		}
 	}
 	volumeMap := map[int64]int64{chapter.VolumeID: volumeID}
-	chapterMap, err := restoreChaptersTx(ctx, tx, chapter.BookID, volumeMap, payload.Chapters, payload.Beats, payload.Versions, map[int64]int64{})
+	entityMap, err := loadExistingEntityIdentityMapTx(ctx, tx, chapter.BookID)
 	if err != nil {
+		return domain.TrashRestoreResult{}, err
+	}
+	chapterMap, err := restoreChaptersTx(ctx, tx, chapter.BookID, volumeMap, payload.Chapters, payload.Beats, payload.Versions, entityMap)
+	if err != nil {
+		return domain.TrashRestoreResult{}, err
+	}
+	if err := resequenceBookChaptersTx(ctx, tx, chapter.BookID); err != nil {
 		return domain.TrashRestoreResult{}, err
 	}
 	newID := chapterMap[chapter.ID]
