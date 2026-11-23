@@ -5,7 +5,6 @@ import {
   BookMarked,
   BookOpen,
   BookPlus,
-  CheckCircle2,
   Download,
   FileText,
   PenLine,
@@ -183,94 +182,6 @@ export function HomeView() {
     [openContextMenu, openBook, notify, requestDeleteBook]
   );
 
-  // Clean 2-step first-run onboarding when shelf is empty
-  if (books.length === 0) {
-    return (
-      <main className="nib-paper-sheet m-2 mt-0 flex flex-1 items-center justify-center overflow-y-auto px-6 py-12">
-        <div className="w-full max-w-[520px]">
-          <h1 className="text-2xl font-medium tracking-tight text-ink-primary">
-            开始你的第一部长篇
-          </h1>
-          <p className="mt-2 text-[13px] leading-relaxed text-ink-secondary">
-            先连好一个 AI 模型，再建书即可直接开始写第一章；也可以直接手动建书或导入旧稿。
-          </p>
-
-          <div className="mt-6 flex flex-col gap-3">
-            {/* Step 1: Connect Model */}
-            <div className="flex items-center justify-between gap-4 rounded-xl border border-border-subtle bg-surface px-5 py-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  {modelReady ? (
-                    <CheckCircle2 className="h-4 w-4 shrink-0 text-ok" />
-                  ) : (
-                    <span className="nib-mono flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-soft text-xs font-semibold text-accent">
-                      1
-                    </span>
-                  )}
-                  <span className="text-sm font-medium text-ink-primary">
-                    {modelReady ? "AI 模型已就绪" : "连接写作模型"}
-                  </span>
-                </div>
-                <p className="mt-1 pl-7 text-xs text-ink-secondary">{modelStatusHint}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => openSettings(hasEnabledModel && !hasDraftRoute ? "routes" : "providers")}
-                className={`shrink-0 rounded-lg px-3.5 py-1.5 text-xs font-medium transition-colors ${
-                  modelReady
-                    ? "border border-border-subtle bg-canvas text-ink-secondary hover:border-border-strong hover:text-ink-primary"
-                    : "bg-accent font-semibold text-canvas hover:opacity-90"
-                }`}
-              >
-                {modelReady ? "调整" : "去连接"}
-              </button>
-            </div>
-
-            {/* Step 2: Create First Book */}
-            <div className="flex items-center justify-between gap-4 rounded-xl border border-border-subtle bg-surface px-5 py-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="nib-mono flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-elevated text-xs font-semibold text-ink-secondary">
-                    2
-                  </span>
-                  <span className="text-sm font-medium text-ink-primary">创建第一本书</span>
-                </div>
-                <p className="mt-1 pl-7 text-xs text-ink-secondary">
-                  {modelReady
-                    ? "一句话生成书名、角色与前几章大纲，或手动开写"
-                    : "不连模型也可以直接手动建书并开始码字"}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => openCreateBook(modelReady ? "ai" : "manual")}
-                className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-opacity hover:opacity-90 ${
-                  modelReady
-                    ? "bg-accent text-canvas"
-                    : "border border-border-strong bg-elevated text-ink-primary hover:border-accent/50"
-                }`}
-              >
-                <BookPlus className="h-3.5 w-3.5" />
-                <span>新建书籍</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-5 flex items-center justify-between text-xs text-ink-muted">
-            <button
-              type="button"
-              onClick={() => openCreateBook("import")}
-              className="flex items-center gap-1.5 text-ink-secondary transition-colors hover:text-ink-primary"
-            >
-              <Upload className="h-3.5 w-3.5" />
-              <span>已有存稿？导入本地 TXT / Markdown</span>
-            </button>
-          </div>
-        </div>
-      </main>
-    );
-  }
-
   return (
     <main className="nib-paper-sheet m-2 mt-0 flex-1 overflow-y-auto px-9 py-9">
       <div className="mx-auto flex w-full max-w-[920px] flex-col gap-7">
@@ -319,6 +230,39 @@ export function HomeView() {
             </button>
           </div>
         </header>
+
+        {/* Empty Shelf Card */}
+        {books.length === 0 && (
+          <section className="flex flex-col items-center justify-center gap-4 rounded-2xl border border-dashed border-border-strong bg-surface/55 px-6 py-16 text-center">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-accent-soft text-accent">
+              <BookPlus className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-medium text-ink-primary">书架暂无作品</h2>
+              <p className="mt-1.5 text-xs text-ink-secondary">
+                AI 协同策划开书、新建空白作品，或导入本地 TXT / Markdown 旧稿。
+              </p>
+            </div>
+            <div className="mt-1 flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => openCreateBook("import")}
+                className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-elevated px-4 py-2 text-[13px] font-medium text-ink-primary transition-colors hover:border-accent/50"
+              >
+                <Upload className="h-3.5 w-3.5" />
+                <span>导入旧稿</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => openCreateBook("ai")}
+                className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-[13px] font-semibold text-canvas transition-opacity hover:opacity-90"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>新建书籍</span>
+              </button>
+            </div>
+          </section>
+        )}
 
         {/* Continue Writing Hero */}
         {featuredBook && (
@@ -464,6 +408,7 @@ export function HomeView() {
         )}
 
         {/* Writing Output Section */}
+        {books.length > 0 && (
         <section className="flex flex-col gap-3.5 border-t border-border-subtle pt-6">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
@@ -612,6 +557,7 @@ export function HomeView() {
             </div>
           </div>
         </section>
+        )}
       </div>
 
       <ConfirmDialog
