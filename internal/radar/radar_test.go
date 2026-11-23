@@ -28,7 +28,11 @@ func TestParseQidianMobileHTML(t *testing.T) {
 }
 
 func TestParseFanqieRankHTML(t *testing.T) {
-	sample := `<!doctype html><html><body><script>window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:DNMrHsV173Pd4pgy;src:url(https://example.com/font.woff2) format(\"woff2\");}"},"rank":{"book_list":[{"bookId":"7077516958534470656","bookName":"凡骨","author":"壹更大师","abstract":"一介凡骨斩妖除魔","wordNumber":"8323357","read_count":"563206","creationStatus":"0","currentPos":1}]}};</script></body></html>`
+	// 贴近番茄线上真实 IIFE 包装结构（尾随换行、}、)() 与 </script>）
+	sample := `<!doctype html><html><body><script>(function(){
+		window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:DNMrHsV173Pd4pgy;src:url(https://example.com/font.woff2) format(\"woff2\");}"},"rank":{"book_list":[{"bookId":"7077516958534470656","bookName":"凡骨","author":"壹更大师","abstract":"一介凡骨斩妖除魔；含引号\"与花括号{}测试","wordNumber":"8323357","read_count":"563206","creationStatus":"0","currentPos":1}]}};
+	})()
+	</script></body></html>`
 
 	items, fontCSS, fontFamily, err := ParseFanqieRankHTML(sample, "仙侠")
 	if err != nil {

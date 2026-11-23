@@ -26,7 +26,6 @@ const (
 
 var (
 	reQidianPageContext = regexp.MustCompile(`<script[^>]+id=["']vite-plugin-ssr_pageContext["'][^>]*>(\{[\s\S]*?\})</script>`)
-	reFanqieInitState   = regexp.MustCompile(`window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\});\s*(?:</script>|\(function)`)
 	reFontFamily        = regexp.MustCompile(`font-family\s*:\s*["']?([A-Za-z0-9_-]+)["']?`)
 )
 
@@ -368,23 +367,26 @@ func ParseFanqieRankHTML(html string, fallbackCategory string) ([]domain.RadarIt
 }
 
 func extractFanqieInitialState(html string) (string, error) {
-	if m := reFanqieInitState.FindStringSubmatch(html); len(m) >= 2 {
-		return m[1], nil
-	}
-	const marker = "window.__INITIAL_STATE__="
+	const marker = "window.__INITIAL_STATE__"
 	idx := strings.Index(html, marker)
 	if idx < 0 {
 		return "", errors.New("番茄页面结构已变更，未找到榜单数据（可稍后重试或改用粘贴文本拆榜）")
 	}
 	rest := html[idx+len(marker):]
-	end := strings.Index(rest, ";</script>")
-	if end < 0 {
-		end = strings.Index(rest, ";(function")
-	}
-	if end <= 0 {
+	eqIdx := strings.IndexByte(rest, '=')
+	if eqIdx < 0 {
 		return "", errors.New("番茄榜单数据边界解析失败")
 	}
-	return strings.TrimSpace(rest[:end]), nil
+	rest = strings.TrimSpace(rest[eqIdx+1:])
+	if !strings.HasPrefix(rest, "{") {
+		return "", errors.New("番茄榜单数据边界解析失败")
+	}
+	dec := json.NewDecoder(strings.NewReader(rest))
+	var raw json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
+		return "", fmt.Errorf("番茄榜单数据边界解析失败: %w", err)
+	}
+	return string(raw), nil
 }
 
 func formatCNCount(raw string, unit string) string {
