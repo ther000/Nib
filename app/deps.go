@@ -242,6 +242,15 @@ type GenesisEngine interface {
 	ApplyBookGenesis(ctx context.Context, in domain.ApplyGenesisInput) (domain.ApplyGenesisResult, error)
 }
 
+// RadarAnalyzer 定义扫榜 AI 风向拆解接口（由 *pipeline.Runner 实现，零 MyGo 依赖）。
+type RadarAnalyzer interface {
+	AnalyzeRadarTrend(
+		ctx context.Context,
+		req domain.RadarAnalyzeRequest,
+		emit func(domain.RadarAnalyzeChunk) error,
+	) (domain.RadarAnalysis, error)
+}
+
 // AutopilotEngine 定义全自动托管写作流水线接口（由 internal/pipeline 实现，零 MyGo 依赖）。
 type AutopilotEngine interface {
 	StartAutopilot(ctx context.Context, req domain.AutopilotRequest) (domain.AutopilotState, error)
@@ -570,6 +579,21 @@ func (r *Runtime) batchEngine() (BatchEngine, error) {
 func (r *Runtime) trackBatchEngine(callCtx context.Context) (BatchEngine, context.Context, context.CancelFunc, func(), error) {
 	return trackDep(r, callCtx, func(d *RuntimeDeps) (BatchEngine, bool) {
 		return d.BatchEngine, d.BatchEngine != nil
+	})
+}
+
+func (r *Runtime) trackRadarAnalyzer(callCtx context.Context) (RadarAnalyzer, context.Context, context.CancelFunc, func(), error) {
+	return trackDep(r, callCtx, func(d *RuntimeDeps) (RadarAnalyzer, bool) {
+		if ra, ok := d.GenesisEngine.(RadarAnalyzer); ok {
+			return ra, true
+		}
+		if ra, ok := d.BatchEngine.(RadarAnalyzer); ok {
+			return ra, true
+		}
+		if ra, ok := d.Pipeline.(RadarAnalyzer); ok {
+			return ra, true
+		}
+		return nil, false
 	})
 }
 

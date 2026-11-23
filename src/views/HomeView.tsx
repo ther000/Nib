@@ -12,6 +12,7 @@ import {
   RefreshCw,
   SlidersHorizontal,
   Trash2,
+  TrendingUp,
   Upload,
 } from "lucide-react";
 import { LibraryService, type Book, type WritingStatsSummary } from "../mygo";
@@ -37,6 +38,7 @@ export function HomeView() {
     deleteBook,
     openSettings,
     openCreateBook,
+    openRadar,
     notify,
   } = useApp();
   const { openContextMenu } = useContextMenu();
@@ -209,6 +211,15 @@ export function HomeView() {
                 }`}
               />
               <span>{modelReady ? "模型就绪" : "连接模型"}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={openRadar}
+              className="flex items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 py-1.5 text-[13px] font-medium text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary"
+            >
+              <TrendingUp className="h-3.5 w-3.5" />
+              <span>扫榜</span>
             </button>
 
             <button

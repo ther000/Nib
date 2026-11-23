@@ -43,6 +43,7 @@ func main() {
 		app.NewBatchService(rt),
 		app.NewAutopilotService(rt),
 		app.NewDirectorService(rt),
+		app.NewRadarService(rt),
 	)
 
 	var shutdownOnce sync.Once

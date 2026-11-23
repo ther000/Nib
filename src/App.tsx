@@ -16,6 +16,9 @@ import { HomeView } from "./views/HomeView";
 const CreateBookView = lazy(() =>
   import("./views/CreateBookView").then((m) => ({ default: m.CreateBookView }))
 );
+const RadarView = lazy(() =>
+  import("./views/RadarView").then((m) => ({ default: m.RadarView }))
+);
 
 const ArchitectView = lazy(() =>
   import("./views/ArchitectView").then((m) => ({ default: m.ArchitectView }))
@@ -57,6 +60,7 @@ function NibShell() {
     triggerGenerate,
     settingsOpen,
     createBookOpen,
+    radarOpen,
     memorySearchOpen,
     toggleMemorySearch,
     toggleDirector,
@@ -209,6 +213,7 @@ function NibShell() {
     activeTab,
     settingsOpen,
     createBookOpen,
+    radarOpen,
     memorySearchOpen,
     setActiveTab,
     toggleStudioDrawer,
@@ -252,6 +257,10 @@ function NibShell() {
       ) : createBookOpen ? (
         <Suspense fallback={<ViewFallback />}>
           <CreateBookView />
+        </Suspense>
+      ) : radarOpen ? (
+        <Suspense fallback={<ViewFallback />}>
+          <RadarView />
         </Suspense>
       ) : !inWorkspace ? (
         <HomeView />

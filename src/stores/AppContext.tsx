@@ -51,6 +51,11 @@ export type SettingsTab = "providers" | "routes" | "workspace" | "usage";
 export type AppViewMode = "home" | "workspace";
 export type DirectorTab = "chat" | "autopilot";
 export type CreateBookMode = "ai" | "manual" | "import";
+export interface CreateBookPrefill {
+  idea?: string;
+  genre?: string;
+  styleTags?: string[];
+}
 
 interface AppContextValue {
   // Preferences
@@ -99,8 +104,13 @@ interface AppContextValue {
   closeSettings: () => void;
   createBookOpen: boolean;
   createBookInitialMode: CreateBookMode;
-  openCreateBook: (mode?: CreateBookMode) => void;
+  createBookPrefill: CreateBookPrefill | null;
+  clearCreateBookPrefill: () => void;
+  openCreateBook: (mode?: CreateBookMode, prefill?: CreateBookPrefill) => void;
   closeCreateBook: () => void;
+  radarOpen: boolean;
+  openRadar: () => void;
+  closeRadar: () => void;
   memorySearchOpen: boolean;
   openMemorySearch: () => void;
   closeMemorySearch: () => void;
@@ -196,6 +206,8 @@ function AppProviderInner({ children }: { children: ReactNode }) {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("providers");
   const [createBookOpen, setCreateBookOpen] = useState(false);
   const [createBookInitialMode, setCreateBookInitialMode] = useState<CreateBookMode>("ai");
+  const [createBookPrefill, setCreateBookPrefill] = useState<CreateBookPrefill | null>(null);
+  const [radarOpen, setRadarOpen] = useState(false);
   const [memorySearchOpen, setMemorySearchOpen] = useState(false);
   const [directorOpen, setDirectorOpen] = useState(false);
   const [directorTab, setDirectorTab] = useState<DirectorTab>("chat");
@@ -377,6 +389,7 @@ function AppProviderInner({ children }: { children: ReactNode }) {
 
   const openHome = useCallback(() => {
     setCreateBookOpen(false);
+    setRadarOpen(false);
     setDirectorOpen(false);
     setNotesOpen(false);
     setViewMode("home");
@@ -385,6 +398,7 @@ function AppProviderInner({ children }: { children: ReactNode }) {
   const openBook = useCallback(
     async (bookId: number, tab?: WorkspaceTab) => {
       setCreateBookOpen(false);
+      setRadarOpen(false);
       if (tab) {
         setActiveTab(tab);
       }
@@ -693,13 +707,26 @@ function AppProviderInner({ children }: { children: ReactNode }) {
     setSettingsOpen(true);
   }, []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
-  const openCreateBook = useCallback((mode: CreateBookMode = "ai") => {
+  const clearCreateBookPrefill = useCallback(() => setCreateBookPrefill(null), []);
+  const openCreateBook = useCallback(
+    (mode: CreateBookMode = "ai", prefill?: CreateBookPrefill) => {
+      setCommandPaletteOpen(false);
+      setMemorySearchOpen(false);
+      setRadarOpen(false);
+      setCreateBookInitialMode(mode);
+      setCreateBookPrefill(prefill ?? null);
+      setCreateBookOpen(true);
+    },
+    []
+  );
+  const closeCreateBook = useCallback(() => setCreateBookOpen(false), []);
+  const openRadar = useCallback(() => {
     setCommandPaletteOpen(false);
     setMemorySearchOpen(false);
-    setCreateBookInitialMode(mode);
-    setCreateBookOpen(true);
+    setCreateBookOpen(false);
+    setRadarOpen(true);
   }, []);
-  const closeCreateBook = useCallback(() => setCreateBookOpen(false), []);
+  const closeRadar = useCallback(() => setRadarOpen(false), []);
   const openMemorySearch = useCallback(() => {
     setCommandPaletteOpen(false);
     setMemorySearchOpen(true);
@@ -826,8 +853,13 @@ function AppProviderInner({ children }: { children: ReactNode }) {
       closeSettings,
       createBookOpen,
       createBookInitialMode,
+      createBookPrefill,
+      clearCreateBookPrefill,
       openCreateBook,
       closeCreateBook,
+      radarOpen,
+      openRadar,
+      closeRadar,
       memorySearchOpen,
       openMemorySearch,
       closeMemorySearch,
@@ -920,8 +952,13 @@ function AppProviderInner({ children }: { children: ReactNode }) {
       closeSettings,
       createBookOpen,
       createBookInitialMode,
+      createBookPrefill,
+      clearCreateBookPrefill,
       openCreateBook,
       closeCreateBook,
+      radarOpen,
+      openRadar,
+      closeRadar,
       memorySearchOpen,
       openMemorySearch,
       closeMemorySearch,

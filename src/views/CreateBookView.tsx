@@ -41,6 +41,8 @@ import { BlueprintStep } from "../components/genesis/BlueprintStep";
 export function CreateBookView() {
   const {
     createBookInitialMode,
+    createBookPrefill,
+    clearCreateBookPrefill,
     closeCreateBook,
     genrePresets,
     providers,
@@ -104,6 +106,17 @@ export function CreateBookView() {
   useEffect(() => {
     setMode(createBookInitialMode);
   }, [createBookInitialMode]);
+
+  useEffect(() => {
+    if (!createBookPrefill) return;
+    if (createBookPrefill.idea) setIdea(createBookPrefill.idea);
+    if (createBookPrefill.genre) setGenre(createBookPrefill.genre);
+    if (createBookPrefill.styleTags && createBookPrefill.styleTags.length > 0) {
+      setStyleTags(createBookPrefill.styleTags.slice(0, 5));
+    }
+    setAiStep(1);
+    clearCreateBookPrefill();
+  }, [createBookPrefill, clearCreateBookPrefill]);
 
   useEffect(() => {
     return () => {

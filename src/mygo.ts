@@ -1104,6 +1104,73 @@ export interface ProviderTestResult {
   message: string;
 }
 
+export interface RadarAnalysis {
+  summary: string;
+  hotElements: string[];
+  hookPatterns: string[];
+  angles: RadarIdeaAngle[];
+}
+
+export interface RadarAnalyzeChunk {
+  kind: GenChunkKind;
+  delta?: string;
+  analysis?: RadarAnalysis;
+  usage?: TokenUsage;
+  error?: string;
+}
+
+export interface RadarAnalyzeRequest {
+  platform?: RadarPlatform;
+  boardLabel?: string;
+  items?: RadarItem[];
+  rawText?: string;
+  focus?: string;
+}
+
+export interface RadarBoard {
+  platform: RadarPlatform;
+  boardKey: string;
+  boardLabel: string;
+  sourceUrl: string;
+  fetchedAt: string;
+  cached: boolean;
+  fontProtected: boolean;
+  fontCss?: string;
+  fontFamily?: string;
+  items: RadarItem[];
+}
+
+export interface RadarBoardSpec {
+  platform: RadarPlatform;
+  key: string;
+  label: string;
+  category?: string;
+}
+
+export interface RadarIdeaAngle {
+  title: string;
+  genre: GenreID;
+  styleTags: string[];
+  idea: string;
+  whyItWorks: string;
+}
+
+export interface RadarItem {
+  rank: number;
+  bookId: string;
+  title: string;
+  author: string;
+  category: string;
+  subCategory?: string;
+  wordCount?: string;
+  heatText?: string;
+  statusText?: string;
+  summary: string;
+  detailUrl: string;
+}
+
+export type RadarPlatform = string;
+
 export interface ReplaceBookTextInput {
   bookId: number;
   find: string;
@@ -1844,6 +1911,16 @@ export const DirectorService = {
   sendInstruction: bind<[DirectorChatRequest, Channel<DirectorEvent>], DirectorReply>("DirectorService.SendInstruction", (req: DirectorChatRequest, ch: Channel<DirectorEvent>) => [req, ch]),
   /** UndoDirectorTurn 通过安全撤销点 ID 将书库原子恢复到该轮 AI 导演执行写库工具之前的状态。 */
   undoDirectorTurn: bind<[number], string>("DirectorService.UndoDirectorTurn", (snapshotID: number) => [snapshotID]),
+} as const;
+
+/** RadarService 提供起点中文网与番茄小说网排行榜抓取、AI 拆榜分析桌面 RPC 绑定。 */
+export const RadarService = {
+  /** AnalyzeTrend 调用 AI 模型对勾选的上榜作品或粘贴文本进行流式拆榜分析，输出高频卖点与差异化开书切入点。 */
+  analyzeTrend: bind<[RadarAnalyzeRequest, Channel<RadarAnalyzeChunk>], RadarAnalysis>("RadarService.AnalyzeTrend", (req: RadarAnalyzeRequest, ch: Channel<RadarAnalyzeChunk>) => [req, ch]),
+  /** FetchBoard 抓取指定平台与榜单的最新排行数据（默认命中 5 分钟缓存，forceRefresh=true 强制刷新）。 */
+  fetchBoard: bind<[string, string, boolean], RadarBoard>("RadarService.FetchBoard", (platform: string, boardKey: string, forceRefresh: boolean) => [platform, boardKey, forceRefresh]),
+  /** ListBoards 返回全部内置支持抓取的榜单列表（起点中文网 + 番茄小说网）。 */
+  listBoards: bind<[], RadarBoardSpec[]>("RadarService.ListBoards", () => []),
 } as const;
 
 // ---- Events ----
