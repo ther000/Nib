@@ -47,6 +47,7 @@ export function RadarView() {
 
   const [boards, setBoards] = useState<RadarBoardSpec[]>([]);
   const [platform, setPlatform] = useState<RadarPlatform>("qidian");
+  const [fanqieGroup, setFanqieGroup] = useState<string>("全站总榜");
   const [boardKey, setBoardKey] = useState<string>("hotsales");
   const [boardData, setBoardData] = useState<RadarBoard | null>(null);
   const [loading, setLoading] = useState(false);
@@ -82,6 +83,22 @@ export function RadarView() {
     [boards, platform]
   );
 
+  const fanqieGroups = useMemo(() => {
+    const seen = new Set<string>();
+    const list: string[] = [];
+    for (const b of boards) {
+      if (b.platform !== "fanqie" || !b.category || seen.has(b.category)) continue;
+      seen.add(b.category);
+      list.push(b.category);
+    }
+    return list;
+  }, [boards]);
+
+  const visibleBoards = useMemo(() => {
+    if (platform !== "fanqie") return platformBoards;
+    return platformBoards.filter((b) => b.category === fanqieGroup);
+  }, [platform, platformBoards, fanqieGroup]);
+
   const fetchBoard = useCallback(
     async (plat: RadarPlatform, key: string, forceRefresh = false) => {
       setLoading(true);
@@ -105,8 +122,19 @@ export function RadarView() {
   const handleSwitchPlatform = (next: RadarPlatform) => {
     if (next === platform) return;
     setPlatform(next);
+    if (next === "fanqie") {
+      setFanqieGroup("全站总榜");
+      setBoardKey("top_all");
+      return;
+    }
     const first = boards.find((b) => b.platform === next);
-    setBoardKey(first?.key ?? (next === "qidian" ? "hotsales" : "1_2_258"));
+    setBoardKey(first?.key ?? "hotsales");
+  };
+
+  const handleSwitchFanqieGroup = (group: string) => {
+    setFanqieGroup(group);
+    const first = boards.find((b) => b.platform === "fanqie" && b.category === group);
+    if (first) setBoardKey(first.key);
   };
 
   const toggleSelectItem = (item: RadarItem) => {
@@ -271,25 +299,49 @@ export function RadarView() {
       </header>
 
       {/* Board Type Pills */}
-      <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border-subtle bg-surface/40 px-6 py-2.5">
-        {platformBoards.map((spec) => {
-          const active = spec.key === boardKey;
-          return (
-            <button
-              key={spec.key}
-              type="button"
-              disabled={loading}
-              onClick={() => setBoardKey(spec.key)}
-              className={`rounded-lg border px-2.5 py-1 text-xs transition-colors disabled:opacity-50 ${
-                active
-                  ? "border-accent bg-accent-soft font-medium text-accent"
-                  : "border-border-subtle bg-surface text-ink-secondary hover:border-border-strong hover:text-ink-primary"
-              }`}
-            >
-              {spec.label}
-            </button>
-          );
-        })}
+      <div className="flex shrink-0 flex-col gap-2 border-b border-border-subtle bg-surface/40 px-6 py-2.5">
+        {platform === "fanqie" && fanqieGroups.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {fanqieGroups.map((group) => {
+              const active = group === fanqieGroup;
+              return (
+                <button
+                  key={group}
+                  type="button"
+                  disabled={loading}
+                  onClick={() => handleSwitchFanqieGroup(group)}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                    active
+                      ? "bg-elevated text-ink-primary shadow-xs"
+                      : "text-ink-muted hover:text-ink-primary"
+                  }`}
+                >
+                  {group}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {visibleBoards.map((spec) => {
+            const active = spec.key === boardKey;
+            return (
+              <button
+                key={spec.key}
+                type="button"
+                disabled={loading}
+                onClick={() => setBoardKey(spec.key)}
+                className={`rounded-lg border px-2.5 py-1 text-xs transition-colors disabled:opacity-50 ${
+                  active
+                    ? "border-accent bg-accent-soft font-medium text-accent"
+                    : "border-border-subtle bg-surface text-ink-secondary hover:border-border-strong hover:text-ink-primary"
+                }`}
+              >
+                {spec.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Main Split Workspace */}
@@ -398,12 +450,18 @@ export function RadarView() {
                             </span>
                           )}
                           {item.wordCount && (
-                            <span className="nib-mono text-[11px] text-ink-muted">
+                            <span
+                              style={fanqieFontStyle}
+                              className="nib-mono text-[11px] text-ink-muted"
+                            >
                               {item.wordCount}
                             </span>
                           )}
                           {item.heatText && (
-                            <span className="nib-mono text-[11px] text-accent">
+                            <span
+                              style={fanqieFontStyle}
+                              className="nib-mono text-[11px] text-accent"
+                            >
                               {item.heatText}
                             </span>
                           )}

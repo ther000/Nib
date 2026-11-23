@@ -22,8 +22,28 @@ func TestListBoardsContainsQidianAndFanqie(t *testing.T) {
 			fanqieCount++
 		}
 	}
-	if qidianCount < 9 || fanqieCount < 10 {
+	if qidianCount < 9 || fanqieCount < 30 {
 		t.Fatalf("unexpected board counts: qidian=%d fanqie=%d", qidianCount, fanqieCount)
+	}
+}
+
+func TestParseQidianMajaxAndFanqieAPIs(t *testing.T) {
+	majaxRaw := `{"code":0,"msg":"success","data":{"total":1000,"pageNum":2,"records":[{"bid":"1012584111","bName":"神秘复苏","bAuth":"佛前献花","cat":"悬疑灵异","cnt":"450万字","desc":"我叫杨间"}]}}`
+	more, err := ParseQidianMajaxJSON(majaxRaw, 20)
+	if err != nil || len(more) != 1 || more[0].Rank != 21 || more[0].Title != "神秘复苏" {
+		t.Fatalf("ParseQidianMajaxJSON unexpected: %+v err=%v", more, err)
+	}
+
+	topRaw := `{"book_list":[{"book_id":"7276384138653862966","book_name":"我不是戏神","author":"三九音域","category":"都市高武","creation_status":0}]}`
+	topItems, err := ParseFanqieTopBookListJSON(topRaw)
+	if err != nil || len(topItems) != 1 || topItems[0].Title != "我不是戏神" || topItems[0].StatusText != "已完结" {
+		t.Fatalf("ParseFanqieTopBookListJSON unexpected: %+v err=%v", topItems, err)
+	}
+
+	libRaw := `{"code":0,"data":{"book_list":[{"book_id":"123","book_name":"书名A","author":"作者A","abstract":"简介A","word_count":"100万字","read_count":"20万人在读","creation_status":1}]}}`
+	libItems, err := ParseFanqieLibraryJSON(libRaw, "传统玄幻 · 新书", 30)
+	if err != nil || len(libItems) != 1 || libItems[0].Rank != 31 || libItems[0].Category != "传统玄幻" || libItems[0].StatusText != "连载中" {
+		t.Fatalf("ParseFanqieLibraryJSON unexpected: %+v err=%v", libItems, err)
 	}
 }
 
