@@ -6,13 +6,16 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { TopBar } from "./components/TopBar";
 import { AutopilotStatusBar } from "./components/AutopilotConsole";
 import { DirectorDrawer } from "./components/DirectorDrawer";
-import { CreateBookModal } from "./components/CreateBookModal";
 import { CommandPalette } from "./components/CommandPalette";
 import { MemorySearchModal } from "./components/MemorySearchModal";
 import { ToastHost } from "./components/ToastHost";
 import { ScratchNotesDrawer } from "./components/ScratchNotesDrawer";
 import { ReverseExtractModal } from "./components/ReverseExtractModal";
 import { HomeView } from "./views/HomeView";
+
+const CreateBookView = lazy(() =>
+  import("./views/CreateBookView").then((m) => ({ default: m.CreateBookView }))
+);
 
 const ArchitectView = lazy(() =>
   import("./views/ArchitectView").then((m) => ({ default: m.ArchitectView }))
@@ -246,6 +249,10 @@ function NibShell() {
             </div>
           </div>
         </main>
+      ) : createBookOpen ? (
+        <Suspense fallback={<ViewFallback />}>
+          <CreateBookView />
+        </Suspense>
       ) : !inWorkspace ? (
         <HomeView />
       ) : (
@@ -268,7 +275,6 @@ function NibShell() {
         </div>
       )}
 
-      <CreateBookModal />
       <ReverseExtractModal />
       <MemorySearchModal />
       <CommandPalette />

@@ -50,6 +50,7 @@ export type { ToastItem, ToastTone };
 export type SettingsTab = "providers" | "routes" | "workspace" | "usage";
 export type AppViewMode = "home" | "workspace";
 export type DirectorTab = "chat" | "autopilot";
+export type CreateBookMode = "ai" | "manual" | "import";
 
 interface AppContextValue {
   // Preferences
@@ -97,7 +98,8 @@ interface AppContextValue {
   openSettings: (tab?: SettingsTab) => void;
   closeSettings: () => void;
   createBookOpen: boolean;
-  openCreateBook: () => void;
+  createBookInitialMode: CreateBookMode;
+  openCreateBook: (mode?: CreateBookMode) => void;
   closeCreateBook: () => void;
   memorySearchOpen: boolean;
   openMemorySearch: () => void;
@@ -193,6 +195,7 @@ function AppProviderInner({ children }: { children: ReactNode }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("providers");
   const [createBookOpen, setCreateBookOpen] = useState(false);
+  const [createBookInitialMode, setCreateBookInitialMode] = useState<CreateBookMode>("ai");
   const [memorySearchOpen, setMemorySearchOpen] = useState(false);
   const [directorOpen, setDirectorOpen] = useState(false);
   const [directorTab, setDirectorTab] = useState<DirectorTab>("chat");
@@ -373,6 +376,7 @@ function AppProviderInner({ children }: { children: ReactNode }) {
   );
 
   const openHome = useCallback(() => {
+    setCreateBookOpen(false);
     setDirectorOpen(false);
     setNotesOpen(false);
     setViewMode("home");
@@ -380,6 +384,7 @@ function AppProviderInner({ children }: { children: ReactNode }) {
 
   const openBook = useCallback(
     async (bookId: number, tab?: WorkspaceTab) => {
+      setCreateBookOpen(false);
       if (tab) {
         setActiveTab(tab);
       }
@@ -686,9 +691,10 @@ function AppProviderInner({ children }: { children: ReactNode }) {
     setSettingsOpen(true);
   }, []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
-  const openCreateBook = useCallback(() => {
+  const openCreateBook = useCallback((mode: CreateBookMode = "ai") => {
     setCommandPaletteOpen(false);
     setMemorySearchOpen(false);
+    setCreateBookInitialMode(mode);
     setCreateBookOpen(true);
   }, []);
   const closeCreateBook = useCallback(() => setCreateBookOpen(false), []);
@@ -817,6 +823,7 @@ function AppProviderInner({ children }: { children: ReactNode }) {
       openSettings,
       closeSettings,
       createBookOpen,
+      createBookInitialMode,
       openCreateBook,
       closeCreateBook,
       memorySearchOpen,
@@ -910,6 +917,7 @@ function AppProviderInner({ children }: { children: ReactNode }) {
       openSettings,
       closeSettings,
       createBookOpen,
+      createBookInitialMode,
       openCreateBook,
       closeCreateBook,
       memorySearchOpen,

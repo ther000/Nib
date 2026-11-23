@@ -8,10 +8,11 @@ const (
 	MaxGenesisChapterCount     = 5
 )
 
-// BookGenesisRequest 是「AI 一句话开书」的生成入参。
+// BookGenesisRequest 是「AI 一句话开书（一步直出）」的生成入参。
 type BookGenesisRequest struct {
 	Idea               string  `json:"idea"`
 	Genre              GenreID `json:"genre"`
+	POVMode            string  `json:"povMode,omitempty"`
 	ChapterCount       int     `json:"chapterCount"`
 	TargetChapterWords int     `json:"targetChapterWords"`
 }
@@ -23,13 +24,105 @@ func (r BookGenesisRequest) Validate() error {
 	if r.Genre != "" && !r.Genre.Valid() {
 		return newValidationError("genre", "不支持的题材风格")
 	}
-	if r.ChapterCount != 0 && (r.ChapterCount < MinGenesisChapterCount || r.ChapterCount > MaxGenesisChapterCount) {
-		return newValidationError("chapterCount", "初始章纲数量需在 1 到 5 章之间")
+	if r.ChapterCount < 0 || r.ChapterCount > MaxGenesisChapterCount {
+		return newValidationError("chapterCount", "初始章纲数量需在 0 到 5 章之间")
 	}
 	if r.TargetChapterWords != 0 && (r.TargetChapterWords < MinTargetChapterWords || r.TargetChapterWords > MaxTargetChapterWords) {
 		return newValidationError("targetChapterWords", "每章目标字数需在 300 到 50000 之间")
 	}
 	return nil
+}
+
+// BookConcept 是两阶段开书第一步产出的「核心立意」草案（书名候选、简介、金手指与核心冲突）。
+type BookConcept struct {
+	Title           string   `json:"title"`
+	TitleCandidates []string `json:"titleCandidates"`
+	Genre           GenreID  `json:"genre"`
+	POVMode         string   `json:"povMode,omitempty"`
+	Premise         string   `json:"premise"`
+	GoldenFinger    string   `json:"goldenFinger"`
+	CoreConflict    string   `json:"coreConflict"`
+}
+
+func (c BookConcept) Validate() error {
+	if strings.TrimSpace(c.Title) == "" {
+		return newValidationError("title", "书名不能为空")
+	}
+	if c.Genre != "" && !c.Genre.Valid() {
+		return newValidationError("genre", "不支持的题材风格")
+	}
+	return nil
+}
+
+// BookConceptRequest 是两阶段开书第一步（生成/微调核心立意）的入参。
+type BookConceptRequest struct {
+	Idea           string       `json:"idea"`
+	Genre          GenreID      `json:"genre"`
+	POVMode        string       `json:"povMode,omitempty"`
+	Feedback       string       `json:"feedback,omitempty"`
+	CurrentConcept *BookConcept `json:"currentConcept,omitempty"`
+}
+
+func (r BookConceptRequest) Validate() error {
+	if strings.TrimSpace(r.Idea) == "" && r.CurrentConcept == nil {
+		return newValidationError("idea", "请输入故事灵感")
+	}
+	if r.Genre != "" && !r.Genre.Valid() {
+		return newValidationError("genre", "不支持的题材风格")
+	}
+	return nil
+}
+
+// ConceptChunk 是流式生成核心立意时的进度与结果分片。
+type ConceptChunk struct {
+	Kind    GenChunkKind `json:"kind"`
+	Delta   string       `json:"delta,omitempty"`
+	Concept *BookConcept `json:"concept,omitempty"`
+	Usage   *TokenUsage  `json:"usage,omitempty"`
+	Error   string       `json:"error,omitempty"`
+}
+
+// BookBlueprintRequest 是两阶段开书第二步（基于拍板立意生成设定、第一卷与初始章纲）的入参。
+// Section 支持 "" / "all"（全量）、"entities"（仅重生成设定）、"outlines"（仅重生成第一卷与章纲）。
+type BookBlueprintRequest struct {
+	Concept            BookConcept     `json:"concept"`
+	ChapterCount       int             `json:"chapterCount"`
+	TargetChapterWords int             `json:"targetChapterWords"`
+	Section            string          `json:"section,omitempty"`
+	ExistingEntities   []GenesisEntity `json:"existingEntities,omitempty"`
+}
+
+func (r BookBlueprintRequest) Validate() error {
+	if err := r.Concept.Validate(); err != nil {
+		return err
+	}
+	if r.ChapterCount < 0 || r.ChapterCount > MaxGenesisChapterCount {
+		return newValidationError("chapterCount", "初始章纲数量需在 0 到 5 章之间")
+	}
+	if r.TargetChapterWords != 0 && (r.TargetChapterWords < MinTargetChapterWords || r.TargetChapterWords > MaxTargetChapterWords) {
+		return newValidationError("targetChapterWords", "每章目标字数需在 300 到 50000 之间")
+	}
+	sec := strings.ToLower(strings.TrimSpace(r.Section))
+	if sec != "" && sec != "all" && sec != "entities" && sec != "outlines" {
+		return newValidationError("section", "不支持的蓝图生成范围")
+	}
+	return nil
+}
+
+// BookBlueprint 是两阶段开书第二步产出的蓝图草案（第一卷、初始设定与初始章纲）。
+type BookBlueprint struct {
+	FirstVolume     GenesisVolume             `json:"firstVolume"`
+	Entities        []GenesisEntity           `json:"entities"`
+	InitialOutlines []GeneratedChapterOutline `json:"initialOutlines"`
+}
+
+// BlueprintChunk 是流式生成开书蓝图时的进度与结果分片。
+type BlueprintChunk struct {
+	Kind      GenChunkKind   `json:"kind"`
+	Delta     string         `json:"delta,omitempty"`
+	Blueprint *BookBlueprint `json:"blueprint,omitempty"`
+	Usage     *TokenUsage    `json:"usage,omitempty"`
+	Error     string         `json:"error,omitempty"`
 }
 
 // GenesisEntity 表示开书企划中的初始设定（角色、势力、地点、道具或世界铁律）。
@@ -53,6 +146,7 @@ type GenesisVolume struct {
 type BookGenesisPlan struct {
 	Title              string                    `json:"title"`
 	Genre              GenreID                   `json:"genre"`
+	POVMode            string                    `json:"povMode,omitempty"`
 	Premise            string                    `json:"premise"`
 	GoldenFinger       string                    `json:"goldenFinger"`
 	TargetChapterWords int                       `json:"targetChapterWords"`

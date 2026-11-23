@@ -674,6 +674,42 @@ func (s *LibraryService) GenerateBookGenesis(
 	return eng.GenerateBookGenesis(genCtx, req, channelEmitter(genCtx, cancel, ch))
 }
 
+// GenerateBookConcept 两阶段开书第一步：流式生成或按反馈微调核心立意（候选书名、简介、金手指与核心冲突）。
+func (s *LibraryService) GenerateBookConcept(
+	ctx context.Context,
+	req domain.BookConceptRequest,
+	ch *mygo.Channel[domain.ConceptChunk],
+) (domain.BookConcept, error) {
+	if err := req.Validate(); err != nil {
+		return domain.BookConcept{}, err
+	}
+	eng, genCtx, cancel, release, err := s.rt.trackGenesisEngine(ctx)
+	if err != nil {
+		return domain.BookConcept{}, err
+	}
+	defer release()
+
+	return eng.GenerateBookConcept(genCtx, req, channelEmitter(genCtx, cancel, ch))
+}
+
+// GenerateBookBlueprint 两阶段开书第二步：基于拍板立意流式生成第一卷、初始设定与初始章纲（支持按区重生成）。
+func (s *LibraryService) GenerateBookBlueprint(
+	ctx context.Context,
+	req domain.BookBlueprintRequest,
+	ch *mygo.Channel[domain.BlueprintChunk],
+) (domain.BookBlueprint, error) {
+	if err := req.Validate(); err != nil {
+		return domain.BookBlueprint{}, err
+	}
+	eng, genCtx, cancel, release, err := s.rt.trackGenesisEngine(ctx)
+	if err != nil {
+		return domain.BookBlueprint{}, err
+	}
+	defer release()
+
+	return eng.GenerateBookBlueprint(genCtx, req, channelEmitter(genCtx, cancel, ch))
+}
+
 // ApplyBookGenesis 将作者确认后的开书企划一次性写入书库。
 func (s *LibraryService) ApplyBookGenesis(ctx context.Context, in domain.ApplyGenesisInput) (domain.ApplyGenesisResult, error) {
 	if err := in.Validate(); err != nil {

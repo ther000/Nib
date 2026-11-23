@@ -36,7 +36,6 @@ export function HomeView() {
     genrePresets,
     openBook,
     deleteBook,
-    refreshBooks,
     openSettings,
     openCreateBook,
     notify,
@@ -45,30 +44,6 @@ export function HomeView() {
 
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [importingBook, setImportingBook] = useState(false);
-
-  const handleImportBook = async () => {
-    if (importingBook) return;
-    setImportingBook(true);
-    try {
-      const res = await LibraryService.importBookFromFile("general");
-      if (!res) return;
-      await refreshBooks(res.book.id);
-      await openBook(res.book.id, "studio");
-      notify({
-        tone: "ok",
-        message: `已导入《${res.book.title}》（${res.chapterCount} 章，${formatNumber(res.totalWords)} 字）`,
-        actionLabel: "AI 反推设定",
-        onAction: () => {
-          window.dispatchEvent(new CustomEvent("nib:reverse-extract", { detail: { bookId: res.book.id } }));
-        },
-      });
-    } catch (err) {
-      notify({ tone: "danger", message: "导入旧稿失败", detail: formatErrorMessage(err) });
-    } finally {
-      setImportingBook(false);
-    }
-  };
 
   // Writing output stats state (only loaded when books exist)
   const [statsBookId, setStatsBookId] = useState<number>(0);
@@ -268,7 +243,7 @@ export function HomeView() {
               </div>
               <button
                 type="button"
-                onClick={openCreateBook}
+                onClick={() => openCreateBook(modelReady ? "ai" : "manual")}
                 className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-opacity hover:opacity-90 ${
                   modelReady
                     ? "bg-accent text-canvas"
@@ -284,12 +259,11 @@ export function HomeView() {
           <div className="mt-5 flex items-center justify-between text-xs text-ink-muted">
             <button
               type="button"
-              disabled={importingBook}
-              onClick={() => void handleImportBook()}
-              className="flex items-center gap-1.5 text-ink-secondary transition-colors hover:text-ink-primary disabled:opacity-40"
+              onClick={() => openCreateBook("import")}
+              className="flex items-center gap-1.5 text-ink-secondary transition-colors hover:text-ink-primary"
             >
               <Upload className="h-3.5 w-3.5" />
-              <span>{importingBook ? "正在导入…" : "已有存稿？导入本地 TXT / Markdown"}</span>
+              <span>已有存稿？导入本地 TXT / Markdown</span>
             </button>
           </div>
         </div>
@@ -328,17 +302,16 @@ export function HomeView() {
 
             <button
               type="button"
-              disabled={importingBook}
-              onClick={() => void handleImportBook()}
-              className="flex items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 py-1.5 text-[13px] font-medium text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary disabled:opacity-40"
+              onClick={() => openCreateBook("import")}
+              className="flex items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 py-1.5 text-[13px] font-medium text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary"
             >
               <Upload className="h-3.5 w-3.5" />
-              <span>{importingBook ? "导入中…" : "导入旧稿"}</span>
+              <span>导入旧稿</span>
             </button>
 
             <button
               type="button"
-              onClick={openCreateBook}
+              onClick={() => openCreateBook("ai")}
               className="flex items-center gap-1.5 rounded-lg bg-accent px-3.5 py-1.5 text-[13px] font-semibold text-canvas transition-opacity hover:opacity-90"
             >
               <Plus className="h-3.5 w-3.5" />

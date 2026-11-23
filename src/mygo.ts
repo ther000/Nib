@@ -233,6 +233,14 @@ export interface BeatTemplate {
   targetWords: number;
 }
 
+export interface BlueprintChunk {
+  kind: GenChunkKind;
+  delta?: string;
+  blueprint?: BookBlueprint;
+  usage?: TokenUsage;
+  error?: string;
+}
+
 export interface Book {
   id: number;
   title: string;
@@ -252,6 +260,38 @@ export interface Book {
   updatedAt: string;
 }
 
+export interface BookBlueprint {
+  firstVolume: GenesisVolume;
+  entities: GenesisEntity[];
+  initialOutlines: GeneratedChapterOutline[];
+}
+
+export interface BookBlueprintRequest {
+  concept: BookConcept;
+  chapterCount: number;
+  targetChapterWords: number;
+  section?: string;
+  existingEntities?: GenesisEntity[];
+}
+
+export interface BookConcept {
+  title: string;
+  titleCandidates: string[];
+  genre: GenreID;
+  povMode?: string;
+  premise: string;
+  goldenFinger: string;
+  coreConflict: string;
+}
+
+export interface BookConceptRequest {
+  idea: string;
+  genre: GenreID;
+  povMode?: string;
+  feedback?: string;
+  currentConcept?: BookConcept;
+}
+
 export interface BookConsistencyReport {
   id: number;
   bookId: number;
@@ -268,6 +308,7 @@ export interface BookConsistencyReport {
 export interface BookGenesisPlan {
   title: string;
   genre: GenreID;
+  povMode?: string;
   premise: string;
   goldenFinger: string;
   targetChapterWords: number;
@@ -279,6 +320,7 @@ export interface BookGenesisPlan {
 export interface BookGenesisRequest {
   idea: string;
   genre: GenreID;
+  povMode?: string;
   chapterCount: number;
   targetChapterWords: number;
 }
@@ -417,6 +459,14 @@ export interface ChapterVersion {
 export interface ClearDirtyChaptersResult {
   clearedCount: number;
   clearedChapterIds: number[];
+}
+
+export interface ConceptChunk {
+  kind: GenChunkKind;
+  delta?: string;
+  concept?: BookConcept;
+  usage?: TokenUsage;
+  error?: string;
 }
 
 export type ConsistencyAuditScopeType = string;
@@ -1510,6 +1560,10 @@ export const LibraryService = {
   exportChaptersTXT: bind<[number, number[]], string>("LibraryService.ExportChaptersTXT", (bookID: number, chapterIDs: number[]) => [bookID, chapterIDs]),
   /** FinalizeChapter 将章节状态置为 finalized，并在书籍配置了导出目录时触发单向 Markdown 同步。 */
   finalizeChapter: bind<[number], Chapter>("LibraryService.FinalizeChapter", (chapterID: number) => [chapterID]),
+  /** GenerateBookBlueprint 两阶段开书第二步：基于拍板立意流式生成第一卷、初始设定与初始章纲（支持按区重生成）。 */
+  generateBookBlueprint: bind<[BookBlueprintRequest, Channel<BlueprintChunk>], BookBlueprint>("LibraryService.GenerateBookBlueprint", (req: BookBlueprintRequest, ch: Channel<BlueprintChunk>) => [req, ch]),
+  /** GenerateBookConcept 两阶段开书第一步：流式生成或按反馈微调核心立意（候选书名、简介、金手指与核心冲突）。 */
+  generateBookConcept: bind<[BookConceptRequest, Channel<ConceptChunk>], BookConcept>("LibraryService.GenerateBookConcept", (req: BookConceptRequest, ch: Channel<ConceptChunk>) => [req, ch]),
   /** GenerateBookGenesis 根据一句话灵感流式生成完整开书企划（书名、简介、金手指、初始设定、第一卷与初始章纲）。 */
   generateBookGenesis: bind<[BookGenesisRequest, Channel<GenesisChunk>], BookGenesisPlan>("LibraryService.GenerateBookGenesis", (req: BookGenesisRequest, ch: Channel<GenesisChunk>) => [req, ch]),
   /** GetChapter 读取单章详情（含正文与最近作战简报）。 */

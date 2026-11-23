@@ -222,13 +222,23 @@ type ReverseExtractEngine interface {
 	ApplyReverseExtract(ctx context.Context, in domain.ApplyReverseExtractInput) (domain.ApplyReverseExtractResult, error)
 }
 
-// GenesisEngine 定义「AI 一句话开书」企划生成与一键落库接口（由 internal/pipeline 实现，零 MyGo 依赖）。
+// GenesisEngine 定义 AI 开书（一步直出与两阶段协同）企划生成与一键落库接口（由 internal/pipeline 实现，零 MyGo 依赖）。
 type GenesisEngine interface {
 	GenerateBookGenesis(
 		ctx context.Context,
 		req domain.BookGenesisRequest,
 		emit func(domain.GenesisChunk) error,
 	) (domain.BookGenesisPlan, error)
+	GenerateBookConcept(
+		ctx context.Context,
+		req domain.BookConceptRequest,
+		emit func(domain.ConceptChunk) error,
+	) (domain.BookConcept, error)
+	GenerateBookBlueprint(
+		ctx context.Context,
+		req domain.BookBlueprintRequest,
+		emit func(domain.BlueprintChunk) error,
+	) (domain.BookBlueprint, error)
 	ApplyBookGenesis(ctx context.Context, in domain.ApplyGenesisInput) (domain.ApplyGenesisResult, error)
 }
 
