@@ -239,7 +239,7 @@ func (p ModelPricing) Validate() error {
 	return nil
 }
 
-// DefaultModelRoutes 返回文档规定的 5 环节推荐默认参数。
+// DefaultModelRoutes 返回 7 环节推荐默认参数。
 func DefaultModelRoutes() []ModelRoute {
 	return []ModelRoute{
 		{Stage: StageOutline, Temperature: 0.65, MaxTokens: 4096},
@@ -247,5 +247,7 @@ func DefaultModelRoutes() []ModelRoute {
 		{Stage: StageCritic, Temperature: 0.20, MaxTokens: 2048},
 		{Stage: StagePolish, Temperature: 0.55, MaxTokens: 2048},
 		{Stage: StageExtract, Temperature: 0.10, MaxTokens: 2048},
+		{Stage: StageRadar, Temperature: 0.60, MaxTokens: 3072},
+		{Stage: StageReverseExtract, Temperature: 0.20, MaxTokens: 4096},
 	}
 }

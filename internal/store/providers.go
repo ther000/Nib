@@ -154,11 +154,13 @@ func (s *Store) ListModelRoutes(ctx context.Context) ([]domain.ModelRoute, error
 		SELECT stage, provider_id, model_name, fallback_provider_id, fallback_model_name, temperature, max_tokens, updated_at
 		FROM model_routes
 		ORDER BY CASE stage
-			WHEN 'outline' THEN 1
-			WHEN 'draft'   THEN 2
-			WHEN 'critic'  THEN 3
-			WHEN 'polish'  THEN 4
-			WHEN 'extract' THEN 5
+			WHEN 'outline'         THEN 1
+			WHEN 'draft'           THEN 2
+			WHEN 'critic'          THEN 3
+			WHEN 'polish'          THEN 4
+			WHEN 'extract'         THEN 5
+			WHEN 'radar'           THEN 6
+			WHEN 'reverse_extract' THEN 7
 			ELSE 99
 		END
 	`)

@@ -242,6 +242,8 @@ export const PIPELINE_STAGES: Array<{
   { stage: "critic", label: "审校检查", desc: "检查设定冲突、毒点与结尾悬念", defaultTemp: 0.2, defaultMaxTokens: 2048 },
   { stage: "polish", label: "局部润色", desc: "改写生硬段落，保持上下文连贯", defaultTemp: 0.55, defaultMaxTokens: 2048 },
   { stage: "extract", label: "设定提取", desc: "完章后自动整理人物变化与伏笔", defaultTemp: 0.1, defaultMaxTokens: 2048 },
+  { stage: "radar", label: "扫榜拆解", desc: "拆解平台热榜卖点、钩子公式与差异化切入点", defaultTemp: 0.6, defaultMaxTokens: 3072 },
+  { stage: "reverse_extract", label: "拆书反推", desc: "从导入的旧稿正文反推世界观、角色档案与大纲", defaultTemp: 0.2, defaultMaxTokens: 4096 },
 ];
 
 export const PROVIDER_PROTOCOLS: Array<{

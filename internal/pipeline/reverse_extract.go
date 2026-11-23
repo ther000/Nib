@@ -70,7 +70,7 @@ func (r *Runner) ReverseExtractBook(
 		return domain.ReverseExtractPreview{}, &domain.ValidationError{Field: "chapters", Message: "所选范围内没有可采样的章节"}
 	}
 
-	route, provider, err := r.resolveFirstAvailableStageRoute(ctx, domain.StageExtract, domain.StageOutline, domain.StageDraft)
+	route, provider, err := r.resolveFirstAvailableStageRoute(ctx, domain.StageReverseExtract, domain.StageExtract, domain.StageOutline, domain.StageDraft)
 	if err != nil {
 		return domain.ReverseExtractPreview{}, err
 	}
@@ -114,8 +114,8 @@ func (r *Runner) ReverseExtractBook(
 		_ = send(domain.ReverseExtractChunk{Kind: "error", Error: streamErr.Error()})
 		return domain.ReverseExtractPreview{}, streamErr
 	}
-	if domain.StageExtract.ValidUsageStage() {
-		r.recordTokenUsage(ctx, req.BookID, 0, domain.StageExtract, usedProv.Name, usedModel, finalUsage, time.Since(start).Milliseconds())
+	if domain.StageReverseExtract.ValidUsageStage() {
+		r.recordTokenUsage(ctx, req.BookID, 0, domain.StageReverseExtract, usedProv.Name, usedModel, finalUsage, time.Since(start).Milliseconds())
 	}
 
 	preview, parseErr := parseOrRepairStageJSON(
@@ -123,7 +123,7 @@ func (r *Runner) ReverseExtractBook(
 		r,
 		req.BookID,
 		0,
-		domain.StageExtract,
+		domain.StageReverseExtract,
 		usedProv,
 		route,
 		defaultReverseExtractMaxTokens,

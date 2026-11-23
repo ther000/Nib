@@ -59,7 +59,7 @@ export function RadarView() {
   } = useApp();
 
   const hasReadyModel = useMemo(
-    () => hasReadyModelRoute(providers, modelRoutes, ["outline", "draft"]),
+    () => hasReadyModelRoute(providers, modelRoutes, ["radar", "outline", "draft"]),
     [providers, modelRoutes]
   );
 

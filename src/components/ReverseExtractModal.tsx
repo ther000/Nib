@@ -55,7 +55,13 @@ export function ReverseExtractModal() {
   const [applying, setApplying] = useState(false);
 
   const hasReadyModel = useMemo(
-    () => hasReadyModelRoute(providers, modelRoutes, ["extract", "draft"]),
+    () =>
+      hasReadyModelRoute(providers, modelRoutes, [
+        "reverse_extract",
+        "extract",
+        "outline",
+        "draft",
+      ]),
     [providers, modelRoutes]
   );
 

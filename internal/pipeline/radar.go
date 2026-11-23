@@ -33,7 +33,7 @@ func (r *Runner) AnalyzeRadarTrend(
 		return emit(chunk)
 	}
 
-	route, provider, err := r.resolveFirstAvailableStageRoute(ctx, domain.StageOutline, domain.StageDraft)
+	route, provider, err := r.resolveFirstAvailableStageRoute(ctx, domain.StageRadar, domain.StageOutline, domain.StageDraft)
 	if err != nil {
 		return domain.RadarAnalysis{}, err
 	}
@@ -83,7 +83,7 @@ func (r *Runner) AnalyzeRadarTrend(
 		r,
 		0,
 		0,
-		domain.StageOutline,
+		domain.StageRadar,
 		usedProv,
 		route,
 		defaultRadarAnalyzeMaxTokens,

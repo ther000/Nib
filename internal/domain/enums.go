@@ -27,20 +27,22 @@ func AllProviderProtocols() []ProviderProtocol {
 	return []ProviderProtocol{ProtocolOpenAICompat, ProtocolAnthropic, ProtocolGemini}
 }
 
-// PipelineStage 定义 5 环节独立模型路由阶段（对应 model_routes.stage）。
+// PipelineStage 定义 7 环节独立模型路由阶段（对应 model_routes.stage）。
 type PipelineStage string
 
 const (
-	StageOutline PipelineStage = "outline"
-	StageDraft   PipelineStage = "draft"
-	StageCritic  PipelineStage = "critic"
-	StagePolish  PipelineStage = "polish"
-	StageExtract PipelineStage = "extract"
+	StageOutline        PipelineStage = "outline"
+	StageDraft          PipelineStage = "draft"
+	StageCritic         PipelineStage = "critic"
+	StagePolish         PipelineStage = "polish"
+	StageExtract        PipelineStage = "extract"
+	StageRadar          PipelineStage = "radar"
+	StageReverseExtract PipelineStage = "reverse_extract"
 )
 
 func (s PipelineStage) Valid() bool {
 	switch s {
-	case StageOutline, StageDraft, StageCritic, StagePolish, StageExtract:
+	case StageOutline, StageDraft, StageCritic, StagePolish, StageExtract, StageRadar, StageReverseExtract:
 		return true
 	default:
 		return false
@@ -48,7 +50,15 @@ func (s PipelineStage) Valid() bool {
 }
 
 func AllPipelineStages() []PipelineStage {
-	return []PipelineStage{StageOutline, StageDraft, StageCritic, StagePolish, StageExtract}
+	return []PipelineStage{
+		StageOutline,
+		StageDraft,
+		StageCritic,
+		StagePolish,
+		StageExtract,
+		StageRadar,
+		StageReverseExtract,
+	}
 }
 
 // GenreID 定义题材基底标识（对应 books.genre），内置 8 大题材基底并兼容作者自定义题材名。
