@@ -40,6 +40,8 @@ var qidianMajaxMap = map[string]string{
 	"yuepiao":   "yuepiaolist",
 	"readindex": "readIndexlist",
 	"rec":       "reclist",
+	"collect":   "collectlist",
+	"reward":    "rewardlist",
 	"newbook":   "newbooklist",
 	"sign":      "signlist",
 	"newauthor": "newauthorlist",
@@ -47,12 +49,33 @@ var qidianMajaxMap = map[string]string{
 	"update":    "updatelist",
 }
 
+// qidianCategoryNames 映射起点移动端官方 catId 到中文分类名。
+var qidianCategoryNames = map[int]string{
+	-1:    "全站",
+	21:    "玄幻",
+	22:    "仙侠",
+	4:     "都市",
+	5:     "历史",
+	9:     "科幻",
+	10:    "悬疑灵异",
+	7:     "游戏",
+	20109: "诸天无限",
+	12:    "轻小说",
+	1:     "奇幻",
+	2:     "武侠",
+	15:    "现实",
+	6:     "军事",
+	8:     "体育",
+}
+
 var builtinBoards = []domain.RadarBoardSpec{
-	// 起点中文网（移动端公开 SSR + majax 分页，9 个官方榜单，每榜 Top 60 明文）
+	// 起点中文网（移动端公开 SSR + majax 分页，11 个官方榜单 × 15 分类，每榜 Top 60 明文）
 	{Platform: domain.RadarPlatformQidian, Key: "hotsales", Label: "畅销榜"},
 	{Platform: domain.RadarPlatformQidian, Key: "yuepiao", Label: "月票榜"},
 	{Platform: domain.RadarPlatformQidian, Key: "readindex", Label: "阅读指数榜"},
 	{Platform: domain.RadarPlatformQidian, Key: "rec", Label: "推荐榜"},
+	{Platform: domain.RadarPlatformQidian, Key: "collect", Label: "收藏榜"},
+	{Platform: domain.RadarPlatformQidian, Key: "reward", Label: "打赏榜"},
 	{Platform: domain.RadarPlatformQidian, Key: "newbook", Label: "新书榜"},
 	{Platform: domain.RadarPlatformQidian, Key: "sign", Label: "签约榜"},
 	{Platform: domain.RadarPlatformQidian, Key: "newauthor", Label: "新人作者榜"},
@@ -152,6 +175,26 @@ func findBoardSpec(platform domain.RadarPlatform, key string) (domain.RadarBoard
 	return domain.RadarBoardSpec{}, false
 }
 
+// parseQidianBoardKey 解析起点 boardKey（支持 "hotsales" 或 "hotsales:21" 形式）。
+func parseQidianBoardKey(raw string) (baseKey string, catID int, catName string, ok bool) {
+	trimmed := strings.TrimSpace(raw)
+	baseKey = trimmed
+	catID = -1
+	if idx := strings.IndexByte(trimmed, ':'); idx > 0 {
+		baseKey = strings.TrimSpace(trimmed[:idx])
+		parsed, err := strconv.Atoi(strings.TrimSpace(trimmed[idx+1:]))
+		if err != nil {
+			return "", 0, "", false
+		}
+		catID = parsed
+	}
+	name, validCat := qidianCategoryNames[catID]
+	if !validCat {
+		return "", 0, "", false
+	}
+	return baseKey, catID, name, true
+}
+
 // FetchBoard 抓取指定平台与榜单的数据；默认命中 5 分钟缓存，forceRefresh=true 时强制回源。
 func (f *Fetcher) FetchBoard(
 	ctx context.Context,
@@ -162,12 +205,40 @@ func (f *Fetcher) FetchBoard(
 	if !platform.Valid() {
 		return domain.RadarBoard{}, fmt.Errorf("%w: 不支持的扫榜平台 %q", domain.ErrValidation, platform)
 	}
-	spec, ok := findBoardSpec(platform, strings.TrimSpace(boardKey))
-	if !ok {
-		return domain.RadarBoard{}, fmt.Errorf("%w: 不支持的榜单 %q", domain.ErrValidation, boardKey)
+
+	cleanKey := strings.TrimSpace(boardKey)
+	var (
+		spec       domain.RadarBoardSpec
+		qidianCat  = -1
+		qidianName = "全站"
+	)
+	if platform == domain.RadarPlatformQidian {
+		baseKey, catID, catLabel, ok := parseQidianBoardKey(cleanKey)
+		if !ok {
+			return domain.RadarBoard{}, fmt.Errorf("%w: 不支持的起点榜单或分类 %q", domain.ErrValidation, boardKey)
+		}
+		var found bool
+		spec, found = findBoardSpec(platform, baseKey)
+		if !found {
+			return domain.RadarBoard{}, fmt.Errorf("%w: 不支持的榜单 %q", domain.ErrValidation, boardKey)
+		}
+		qidianCat = catID
+		qidianName = catLabel
+		if catID != -1 {
+			cleanKey = fmt.Sprintf("%s:%d", baseKey, catID)
+		} else {
+			cleanKey = baseKey
+		}
+	} else {
+		var found bool
+		spec, found = findBoardSpec(platform, cleanKey)
+		if !found {
+			return domain.RadarBoard{}, fmt.Errorf("%w: 不支持的榜单 %q", domain.ErrValidation, boardKey)
+		}
+		cleanKey = spec.Key
 	}
 
-	cacheKey := string(platform) + ":" + spec.Key
+	cacheKey := string(platform) + ":" + cleanKey
 	if !forceRefresh {
 		f.mu.RLock()
 		if entry, hit := f.cache[cacheKey]; hit && f.now().Before(entry.expiresAt) {
@@ -185,7 +256,7 @@ func (f *Fetcher) FetchBoard(
 	)
 	switch platform {
 	case domain.RadarPlatformQidian:
-		board, err = f.fetchQidian(ctx, spec)
+		board, err = f.fetchQidian(ctx, spec, cleanKey, qidianCat, qidianName)
 	case domain.RadarPlatformFanqie:
 		board, err = f.fetchFanqie(ctx, spec)
 	}
@@ -234,7 +305,13 @@ func (f *Fetcher) httpGetWithClient(ctx context.Context, client *http.Client, ta
 	return string(body), nil
 }
 
-func (f *Fetcher) fetchQidian(ctx context.Context, spec domain.RadarBoardSpec) (domain.RadarBoard, error) {
+func (f *Fetcher) fetchQidian(
+	ctx context.Context,
+	spec domain.RadarBoardSpec,
+	effectiveKey string,
+	catID int,
+	catName string,
+) (domain.RadarBoard, error) {
 	jar, _ := cookiejar.New(nil)
 	sessClient := &http.Client{
 		Timeout:   f.httpClient.Timeout,
@@ -242,17 +319,29 @@ func (f *Fetcher) fetchQidian(ctx context.Context, spec domain.RadarBoardSpec) (
 		Jar:       jar,
 	}
 
-	sourceURL := "https://m.qidian.com/rank/" + spec.Key
+	// collect / reward 仅提供 majax 接口，使用 hotsales 首页拿到同会话 _csrfToken Cookie。
+	majaxOnly := spec.Key == "collect" || spec.Key == "reward"
+	ssrPath := spec.Key
+	if majaxOnly {
+		ssrPath = "hotsales"
+	}
+	sourceURL := "https://m.qidian.com/rank/" + ssrPath
 	html, err := f.httpGetWithClient(ctx, sessClient, sourceURL, mobileUserAgent, "")
 	if err != nil {
 		return domain.RadarBoard{}, err
 	}
-	items, err := ParseQidianMobileHTML(html)
-	if err != nil {
-		return domain.RadarBoard{}, err
+
+	var items []domain.RadarItem
+	startPage := 1
+	// 全站且存在 SSR 页时，直接复用第 1 页 SSR 省去一次请求；按分类或仅 majax 榜时从 page 1 走 majax。
+	if catID == -1 && !majaxOnly {
+		items, err = ParseQidianMobileHTML(html)
+		if err != nil {
+			return domain.RadarBoard{}, err
+		}
+		startPage = 2
 	}
 
-	// 通过同一会话拿到的 _csrfToken 拉取第 2~3 页（凑齐 Top 60），单页失败不影响已抓到的前序结果。
 	if ep, ok := qidianMajaxMap[spec.Key]; ok && jar != nil {
 		if parsedURL, uErr := url.Parse(sourceURL); uErr == nil {
 			csrf := ""
@@ -263,19 +352,28 @@ func (f *Fetcher) fetchQidian(ctx context.Context, spec domain.RadarBoardSpec) (
 				}
 			}
 			if csrf != "" {
-				seen := make(map[string]struct{}, len(items)*3)
+				seen := make(map[string]struct{}, qidianPagesToFetch*20)
 				for _, it := range items {
 					seen[it.BookID+"|"+it.Title] = struct{}{}
 				}
-				for page := 2; page <= qidianPagesToFetch; page++ {
-					pageURL := fmt.Sprintf("https://m.qidian.com/majax/rank/%s?_csrfToken=%s&pageNum=%d&catId=-1",
-						ep, url.QueryEscape(csrf), page)
+				for page := startPage; page <= qidianPagesToFetch; page++ {
+					pageURL := fmt.Sprintf("https://m.qidian.com/majax/rank/%s?_csrfToken=%s&pageNum=%d&catId=%d",
+						ep, url.QueryEscape(csrf), page, catID)
 					rawJSON, pErr := f.httpGetWithClient(ctx, sessClient, pageURL, mobileUserAgent, sourceURL)
 					if pErr != nil {
-						break
+						if len(items) > 0 {
+							break
+						}
+						return domain.RadarBoard{}, pErr
 					}
 					more, mErr := ParseQidianMajaxJSON(rawJSON, len(items))
 					if mErr != nil || len(more) == 0 {
+						if len(items) > 0 {
+							break
+						}
+						if mErr != nil {
+							return domain.RadarBoard{}, mErr
+						}
 						break
 					}
 					for _, it := range more {
@@ -292,10 +390,19 @@ func (f *Fetcher) fetchQidian(ctx context.Context, spec domain.RadarBoardSpec) (
 		}
 	}
 
+	if len(items) == 0 {
+		return domain.RadarBoard{}, errors.New("起点该分类榜单返回为空，请稍后重试")
+	}
+
+	boardLabel := spec.Label
+	if catID != -1 && catName != "" {
+		boardLabel = spec.Label + " · " + catName
+	}
+
 	return domain.RadarBoard{
 		Platform:      domain.RadarPlatformQidian,
-		BoardKey:      spec.Key,
-		BoardLabel:    spec.Label,
+		BoardKey:      effectiveKey,
+		BoardLabel:    boardLabel,
 		SourceURL:     sourceURL,
 		FontProtected: false,
 		Items:         items,

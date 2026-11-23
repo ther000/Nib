@@ -22,8 +22,14 @@ func TestListBoardsContainsQidianAndFanqie(t *testing.T) {
 			fanqieCount++
 		}
 	}
-	if qidianCount < 9 || fanqieCount < 30 {
+	if qidianCount < 11 || fanqieCount < 30 {
 		t.Fatalf("unexpected board counts: qidian=%d fanqie=%d", qidianCount, fanqieCount)
+	}
+	if base, cat, name, ok := parseQidianBoardKey("collect:22"); !ok || base != "collect" || cat != 22 || name != "仙侠" {
+		t.Fatalf("parseQidianBoardKey failed: base=%q cat=%d name=%q ok=%v", base, cat, name, ok)
+	}
+	if _, _, _, ok := parseQidianBoardKey("hotsales:99999"); ok {
+		t.Fatalf("expected invalid catId to fail")
 	}
 }
 

@@ -29,6 +29,24 @@ import { formatErrorMessage } from "../lib/constants";
 
 const MAX_SELECTED_ITEMS = 8;
 
+const QIDIAN_CATEGORIES: { id: number; label: string }[] = [
+  { id: -1, label: "全站" },
+  { id: 21, label: "玄幻" },
+  { id: 22, label: "仙侠" },
+  { id: 4, label: "都市" },
+  { id: 5, label: "历史" },
+  { id: 9, label: "科幻" },
+  { id: 10, label: "悬疑灵异" },
+  { id: 7, label: "游戏" },
+  { id: 20109, label: "诸天无限" },
+  { id: 12, label: "轻小说" },
+  { id: 1, label: "奇幻" },
+  { id: 2, label: "武侠" },
+  { id: 15, label: "现实" },
+  { id: 6, label: "军事" },
+  { id: 8, label: "体育" },
+];
+
 export function RadarView() {
   const {
     closeRadar,
@@ -47,6 +65,7 @@ export function RadarView() {
 
   const [boards, setBoards] = useState<RadarBoardSpec[]>([]);
   const [platform, setPlatform] = useState<RadarPlatform>("qidian");
+  const [qidianCatId, setQidianCatId] = useState<number>(-1);
   const [fanqieGroup, setFanqieGroup] = useState<string>("全站总榜");
   const [boardKey, setBoardKey] = useState<string>("hotsales");
   const [boardData, setBoardData] = useState<RadarBoard | null>(null);
@@ -115,9 +134,14 @@ export function RadarView() {
     []
   );
 
+  const effectiveBoardKey =
+    platform === "qidian" && qidianCatId !== -1
+      ? `${boardKey}:${qidianCatId}`
+      : boardKey;
+
   useEffect(() => {
-    void fetchBoard(platform, boardKey, false);
-  }, [platform, boardKey, fetchBoard]);
+    void fetchBoard(platform, effectiveBoardKey, false);
+  }, [platform, effectiveBoardKey, fetchBoard]);
 
   const handleSwitchPlatform = (next: RadarPlatform) => {
     if (next === platform) return;
@@ -289,7 +313,7 @@ export function RadarView() {
           <button
             type="button"
             disabled={loading}
-            onClick={() => void fetchBoard(platform, boardKey, true)}
+            onClick={() => void fetchBoard(platform, effectiveBoardKey, true)}
             className="flex items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 py-1.5 text-xs font-medium text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary disabled:opacity-50"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin text-accent" : ""}`} />
@@ -342,6 +366,28 @@ export function RadarView() {
             );
           })}
         </div>
+        {platform === "qidian" && (
+          <div className="flex flex-wrap items-center gap-1">
+            {QIDIAN_CATEGORIES.map((cat) => {
+              const active = cat.id === qidianCatId;
+              return (
+                <button
+                  key={cat.id}
+                  type="button"
+                  disabled={loading}
+                  onClick={() => setQidianCatId(cat.id)}
+                  className={`rounded-md px-2 py-0.5 text-[11px] transition-colors disabled:opacity-50 ${
+                    active
+                      ? "bg-elevated font-medium text-ink-primary shadow-xs"
+                      : "text-ink-muted hover:text-ink-primary"
+                  }`}
+                >
+                  {cat.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Main Split Workspace */}
@@ -371,7 +417,7 @@ export function RadarView() {
               </p>
               <button
                 type="button"
-                onClick={() => void fetchBoard(platform, boardKey, true)}
+                onClick={() => void fetchBoard(platform, effectiveBoardKey, true)}
                 className="rounded-lg bg-accent px-4 py-1.5 text-xs font-semibold text-canvas hover:opacity-90"
               >
                 重试抓取
