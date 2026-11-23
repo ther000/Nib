@@ -12,6 +12,21 @@ import (
 	"nib/internal/domain"
 )
 
+func TestListBoardsContainsQidianAndFanqie(t *testing.T) {
+	boards := ListBoards()
+	qidianCount, fanqieCount := 0, 0
+	for _, b := range boards {
+		if b.Platform == domain.RadarPlatformQidian {
+			qidianCount++
+		} else if b.Platform == domain.RadarPlatformFanqie {
+			fanqieCount++
+		}
+	}
+	if qidianCount < 9 || fanqieCount < 10 {
+		t.Fatalf("unexpected board counts: qidian=%d fanqie=%d", qidianCount, fanqieCount)
+	}
+}
+
 func TestParseQidianMobileHTML(t *testing.T) {
 	sample := `<!DOCTYPE html><html><body><script id="vite-plugin-ssr_pageContext" type="application/json">{"pageContext":{"pageProps":{"pageData":{"records":[{"rankNum":1,"bid":"1040765595","bName":"夜无疆","bAuth":"辰东","cat":"玄幻","subCat":"东方玄幻","cnt":"432.36万字","desc":"那一天太阳落下再也没有升起"},{"rankNum":2,"bid":"1036010291","bName":"玄鉴仙族","bAuth":"季越人","cat":"仙侠","subCat":"幻想修仙","cnt":"350.1万字","desc":"陆江仙一觉醒来成为青池宗一面古镜"}]}}}}</script></body></html>`
 

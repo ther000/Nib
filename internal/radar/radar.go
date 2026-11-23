@@ -30,11 +30,16 @@ var (
 )
 
 var builtinBoards = []domain.RadarBoardSpec{
-	// 起点中文网（移动端公开 SSR，明文可读）
+	// 起点中文网（移动端公开 SSR，全部 9 个官方榜单明文可读）
 	{Platform: domain.RadarPlatformQidian, Key: "hotsales", Label: "畅销榜"},
 	{Platform: domain.RadarPlatformQidian, Key: "yuepiao", Label: "月票榜"},
 	{Platform: domain.RadarPlatformQidian, Key: "readindex", Label: "阅读指数榜"},
-	{Platform: domain.RadarPlatformQidian, Key: "newbook", Label: "签约新书榜"},
+	{Platform: domain.RadarPlatformQidian, Key: "rec", Label: "推荐榜"},
+	{Platform: domain.RadarPlatformQidian, Key: "newbook", Label: "新书榜"},
+	{Platform: domain.RadarPlatformQidian, Key: "sign", Label: "签约榜"},
+	{Platform: domain.RadarPlatformQidian, Key: "newauthor", Label: "新人作者榜"},
+	{Platform: domain.RadarPlatformQidian, Key: "newfans", Label: "书友周榜"},
+	{Platform: domain.RadarPlatformQidian, Key: "update", Label: "更新榜"},
 
 	// 番茄小说网（公开排行榜页，附原站 @font-face 供正常渲染浏览）
 	{Platform: domain.RadarPlatformFanqie, Key: "1_2_258", Label: "传统玄幻 · 阅读榜", Category: "玄幻"},
