@@ -351,7 +351,7 @@ func (r *Runner) GenerateChapter(
 		finalUsage = streamUsage
 	}
 	if hasUsage(finalUsage) {
-		r.recordTokenUsage(ctx, chap.BookID, chap.ID, domain.StageDraft, provider.Name, route.ModelName, finalUsage, time.Since(draftStart).Milliseconds())
+		r.recordTokenUsage(ctx, chap.BookID, chap.ID, domain.StageDraft, usedProv.Name, usedModel, finalUsage, time.Since(draftStart).Milliseconds())
 	}
 
 	generated := contentBuf.String()

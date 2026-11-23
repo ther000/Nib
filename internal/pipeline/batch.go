@@ -177,7 +177,7 @@ func (r *Runner) BatchGenerateOutlines(
 		startSeq = maxSeq + 1
 	}
 
-	route, provider, err := r.resolveStageRouteAndProvider(ctx, domain.StageOutline)
+	route, provider, err := r.resolveFirstAvailableStageRoute(ctx, domain.StageOutline, domain.StageDraft)
 	if err != nil {
 		return nil, err
 	}

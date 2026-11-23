@@ -46,6 +46,7 @@ export function RoutesPricingTab({
   const [savingStage, setSavingStage] = useState<string | null>(null);
   const [savingAll, setSavingAll] = useState(false);
   const [customModelStages, setCustomModelStages] = useState<Set<string>>(() => new Set());
+  const [customFallbackStages, setCustomFallbackStages] = useState<Set<string>>(() => new Set());
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showPricing, setShowPricing] = useState(false);
 
@@ -133,6 +134,28 @@ export function RoutesPricingTab({
     if (!Number.isFinite(draft.maxTokens) || draft.maxTokens < 256 || draft.maxTokens > 200000) {
       return "输出上限需在 256 到 200,000 之间";
     }
+    if (draft.providerId && draft.providerId > 0) {
+      const p = providerMap.get(draft.providerId);
+      if (p && !p.enabled) {
+        return `主模型服务「${p.name}」已停用，请先启用或更换服务`;
+      }
+    }
+    const fbModel = (draft.fallbackModelName ?? "").trim();
+    if (draft.fallbackProviderId && draft.fallbackProviderId > 0) {
+      const fbp = providerMap.get(draft.fallbackProviderId);
+      if (fbp && !fbp.enabled) {
+        return `备用模型服务「${fbp.name}」已停用，请先启用或更换服务`;
+      }
+      if (!fbModel) {
+        return "已选择备用服务，请同时指定备用模型";
+      }
+      if (
+        draft.providerId === draft.fallbackProviderId &&
+        draft.modelName.trim().toLowerCase() === fbModel.toLowerCase()
+      ) {
+        return "备用模型与主模型完全相同，无法起到故障切换作用，请更换备用模型";
+      }
+    }
     return null;
   };
 
@@ -212,6 +235,11 @@ export function RoutesPricingTab({
   const handleApplyToAll = async () => {
     if (!quickProviderId || !quickModelName.trim()) {
       notify({ tone: "warn", message: "请先选择模型服务与模型" });
+      return;
+    }
+    const qp = providerMap.get(quickProviderId);
+    if (qp && !qp.enabled) {
+      notify({ tone: "warn", message: `模型服务「${qp.name}」已停用，请先启用或更换服务` });
       return;
     }
     setApplyingAll(true);
@@ -323,7 +351,7 @@ export function RoutesPricingTab({
               <option value="">选择模型服务</option>
               {providers.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name}
+                  {p.enabled ? p.name : `${p.name}（已停用）`}
                 </option>
               ))}
             </select>
@@ -405,15 +433,64 @@ export function RoutesPricingTab({
           const modelSuggestions = selectedProv?.models ?? [];
           const isDirty = dirtyStages.has(stageDef.stage);
           const isSaving = savingStage === stageDef.stage;
+          const fbProv = route.fallbackProviderId
+            ? providerMap.get(route.fallbackProviderId)
+            : undefined;
+          const hasValidFallback = Boolean(
+            fbProv &&
+              fbProv.enabled &&
+              (route.fallbackModelName ?? "").trim() &&
+              !(
+                route.providerId === route.fallbackProviderId &&
+                route.modelName.trim().toLowerCase() ===
+                  (route.fallbackModelName ?? "").trim().toLowerCase()
+              )
+          );
+          const isPrimaryDisabled = Boolean(selectedProv && !selectedProv.enabled);
+          const isStageReady = Boolean(
+            selectedProv && selectedProv.enabled && route.modelName.trim()
+          );
+          const isDuplicateFallback = Boolean(
+            route.providerId &&
+              route.fallbackProviderId &&
+              route.providerId === route.fallbackProviderId &&
+              route.modelName.trim() &&
+              route.modelName.trim().toLowerCase() ===
+                (route.fallbackModelName ?? "").trim().toLowerCase()
+          );
 
           return (
             <div key={stageDef.stage} className="py-3.5">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="flex items-baseline gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                      isStageReady
+                        ? "bg-ok"
+                        : isPrimaryDisabled
+                          ? "bg-danger"
+                          : "bg-warn"
+                    }`}
+                  />
                   <span className="text-[13px] font-medium text-ink-primary">
                     {stageDef.label}
                   </span>
                   <span className="text-xs text-ink-muted">{stageDef.desc}</span>
+                  {isPrimaryDisabled && (
+                    <span className="rounded bg-danger-soft px-1.5 py-0.5 text-[11px] text-danger">
+                      服务已停用
+                    </span>
+                  )}
+                  {!isStageReady && !isPrimaryDisabled && (
+                    <span className="rounded bg-warn-soft px-1.5 py-0.5 text-[11px] text-warn">
+                      未配置
+                    </span>
+                  )}
+                  {hasValidFallback && (
+                    <span className="rounded border border-border-subtle bg-canvas px-1.5 py-0.5 text-[11px] text-ink-secondary">
+                      含备用
+                    </span>
+                  )}
                 </div>
 
                 {isDirty && (
@@ -457,7 +534,7 @@ export function RoutesPricingTab({
                     <option value="">未选择</option>
                     {providers.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.name}
+                        {p.enabled ? p.name : `${p.name}（已停用）`}
                       </option>
                     ))}
                   </select>
@@ -603,35 +680,69 @@ export function RoutesPricingTab({
                       <option value="">不设备用</option>
                       {providers.map((p) => (
                         <option key={p.id} value={p.id}>
-                          {p.name}
+                          {p.enabled ? p.name : `${p.name}（已停用）`}
                         </option>
                       ))}
                     </select>
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs text-ink-muted">备用模型</label>
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <label className="block text-xs text-ink-muted">备用模型</label>
+                      {fbProv && (fbProv.models?.length ?? 0) > 0 && customFallbackStages.has(stageDef.stage) && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCustomFallbackStages((prev) => {
+                              const next = new Set(prev);
+                              next.delete(stageDef.stage);
+                              return next;
+                            })
+                          }
+                          className="text-xs text-accent transition-opacity hover:opacity-80"
+                        >
+                          从列表选择
+                        </button>
+                      )}
+                    </div>
                     {(() => {
-                      const fbProv = route.fallbackProviderId
-                        ? providerMap.get(route.fallbackProviderId)
-                        : undefined;
                       const fbModels = fbProv?.models ?? [];
-                      if (fbModels.length > 0) {
+                      const fbModelVal = route.fallbackModelName ?? "";
+                      if (
+                        route.fallbackProviderId &&
+                        fbModels.length > 0 &&
+                        !customFallbackStages.has(stageDef.stage)
+                      ) {
                         return (
                           <select
-                            value={route.fallbackModelName ?? ""}
-                            onChange={(e) =>
+                            value={fbModelVal}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val === "__custom__") {
+                                setCustomFallbackStages((prev) => {
+                                  const next = new Set(prev);
+                                  next.add(stageDef.stage);
+                                  return next;
+                                });
+                                return;
+                              }
                               updateRouteField(stageDef.stage, {
-                                fallbackModelName: e.target.value,
-                              })
-                            }
+                                fallbackModelName: val,
+                              });
+                            }}
                             className="nib-mono w-full rounded-lg border border-border-subtle bg-canvas px-2.5 py-1.5 text-xs text-ink-primary focus:border-accent"
                           >
                             <option value="">选择备用模型</option>
+                            {fbModelVal && !fbModels.includes(fbModelVal) && (
+                              <option value={fbModelVal}>
+                                {fbModelVal}（当前值）
+                              </option>
+                            )}
                             {fbModels.map((m) => (
                               <option key={m} value={m}>
                                 {m}
                               </option>
                             ))}
+                            <option value="__custom__">手动输入其他模型…</option>
                           </select>
                         );
                       }
@@ -639,7 +750,7 @@ export function RoutesPricingTab({
                         <input
                           type="text"
                           disabled={!route.fallbackProviderId}
-                          value={route.fallbackModelName ?? ""}
+                          value={fbModelVal}
                           onChange={(e) =>
                             updateRouteField(stageDef.stage, {
                               fallbackModelName: e.target.value,
@@ -650,6 +761,11 @@ export function RoutesPricingTab({
                         />
                       );
                     })()}
+                    {isDuplicateFallback && (
+                      <div className="mt-1 text-[11px] text-warn">
+                        备用模型与主模型相同，无法生效
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

@@ -157,28 +157,60 @@ func (e *Extractor) ExtractChapterDelta(ctx context.Context, chapterID int64) (d
 }
 
 func (e *Extractor) resolveExtractRouteAndProvider(ctx context.Context) (domain.ModelRoute, domain.Provider, error) {
-	route, err := e.store.GetModelRoute(ctx, domain.StageExtract)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return domain.ModelRoute{}, domain.Provider{}, domain.ErrRouteNotConfigured
+	stages := []domain.PipelineStage{domain.StageExtract, domain.StageOutline, domain.StageDraft}
+	var lastErr error = domain.ErrRouteNotConfigured
+	for _, st := range stages {
+		route, err := e.store.GetModelRoute(ctx, st)
+		if err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				lastErr = domain.ErrRouteNotConfigured
+				continue
+			}
+			return domain.ModelRoute{}, domain.Provider{}, fmt.Errorf("load %s route: %w", st, err)
 		}
-		return domain.ModelRoute{}, domain.Provider{}, fmt.Errorf("load extract route: %w", err)
-	}
-	if route.ProviderID == nil || *route.ProviderID <= 0 || strings.TrimSpace(route.ModelName) == "" {
-		return domain.ModelRoute{}, domain.Provider{}, domain.ErrRouteNotConfigured
-	}
+		if route.ProviderID == nil || *route.ProviderID <= 0 || strings.TrimSpace(route.ModelName) == "" {
+			lastErr = domain.ErrRouteNotConfigured
+			continue
+		}
 
-	provider, err := e.store.GetProvider(ctx, *route.ProviderID)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return domain.ModelRoute{}, domain.Provider{}, domain.ErrProviderNotConfigured
+		provider, err := e.store.GetProvider(ctx, *route.ProviderID)
+		if err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				lastErr = domain.ErrProviderNotConfigured
+				continue
+			}
+			return domain.ModelRoute{}, domain.Provider{}, fmt.Errorf("load provider %d: %w", *route.ProviderID, err)
 		}
-		return domain.ModelRoute{}, domain.Provider{}, fmt.Errorf("load provider %d: %w", *route.ProviderID, err)
+		if !provider.Enabled || strings.TrimSpace(provider.BaseURL) == "" {
+			lastErr = domain.ErrProviderNotConfigured
+			continue
+		}
+		return route, provider, nil
 	}
-	if !provider.Enabled || strings.TrimSpace(provider.BaseURL) == "" {
-		return domain.ModelRoute{}, domain.Provider{}, domain.ErrProviderNotConfigured
+	return domain.ModelRoute{}, domain.Provider{}, lastErr
+}
+
+func (e *Extractor) resolveFallbackProviderAndModel(
+	ctx context.Context,
+	route domain.ModelRoute,
+	primaryProviderID int64,
+	primaryModel string,
+) (domain.Provider, string, bool) {
+	if route.FallbackProviderID == nil || *route.FallbackProviderID <= 0 {
+		return domain.Provider{}, "", false
 	}
-	return route, provider, nil
+	fbModel := strings.TrimSpace(route.FallbackModelName)
+	if fbModel == "" {
+		return domain.Provider{}, "", false
+	}
+	if *route.FallbackProviderID == primaryProviderID && strings.EqualFold(fbModel, strings.TrimSpace(primaryModel)) {
+		return domain.Provider{}, "", false
+	}
+	fbProv, err := e.store.GetProvider(ctx, *route.FallbackProviderID)
+	if err != nil || !fbProv.Enabled || strings.TrimSpace(fbProv.BaseURL) == "" {
+		return domain.Provider{}, "", false
+	}
+	return fbProv, fbModel, true
 }
 
 func (e *Extractor) collectLLMResponse(
@@ -203,10 +235,15 @@ func (e *Extractor) collectLLMResponse(
 	}
 
 	start := time.Now()
+	usedProv := provider
+	usedModel := route.ModelName
+
 	var buf strings.Builder
 	var lastUsage domain.TokenUsage
+	var emitted bool
 	usage, err := e.llm.Stream(ctx, provider, req, func(ev llm.StreamEvent) error {
 		if ev.Delta != "" {
+			emitted = true
 			buf.WriteString(ev.Delta)
 		}
 		if ev.Usage != nil {
@@ -216,6 +253,35 @@ func (e *Extractor) collectLLMResponse(
 	})
 	if usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0 {
 		lastUsage = usage
+	}
+
+	// 若主模型在未吐出有效内容前因非取消错误失败，且配置了有效备用模型，则自动切换备用模型重试一次。
+	if err != nil && !emitted && ctx.Err() == nil && !errors.Is(err, context.Canceled) && !errors.Is(err, domain.ErrGenerationCanceled) {
+		if fbProv, fbModel, ok := e.resolveFallbackProviderAndModel(ctx, route, provider.ID, req.Model); ok {
+			fbReq := req
+			fbReq.Model = fbModel
+			buf.Reset()
+			lastUsage = domain.TokenUsage{}
+			fbUsage, fbErr := e.llm.Stream(ctx, fbProv, fbReq, func(ev llm.StreamEvent) error {
+				if ev.Delta != "" {
+					buf.WriteString(ev.Delta)
+				}
+				if ev.Usage != nil {
+					lastUsage = *ev.Usage
+				}
+				return nil
+			})
+			if fbUsage.PromptTokens > 0 || fbUsage.CompletionTokens > 0 || fbUsage.TotalTokens > 0 {
+				lastUsage = fbUsage
+			}
+			if fbErr == nil {
+				usedProv = fbProv
+				usedModel = fbModel
+				err = nil
+			} else {
+				err = fmt.Errorf("主模型(%s)失败: %v；备用模型(%s)也失败: %w", req.Model, err, fbModel, fbErr)
+			}
+		}
 	}
 	if err != nil {
 		return "", err
@@ -233,8 +299,8 @@ func (e *Extractor) collectLLMResponse(
 			BookID:           bookID,
 			ChapterID:        chapterID,
 			Stage:            domain.StageExtract,
-			ProviderName:     provider.Name,
-			ModelName:        route.ModelName,
+			ProviderName:     usedProv.Name,
+			ModelName:        usedModel,
 			PromptTokens:     max(0, lastUsage.PromptTokens),
 			CompletionTokens: max(0, lastUsage.CompletionTokens),
 			LatencyMs:        latencyMs,

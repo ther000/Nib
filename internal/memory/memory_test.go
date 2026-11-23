@@ -621,3 +621,52 @@ func findSnapAttr(snaps []domain.EntitySnapshot, entityID int64, key string) str
 	}
 	return ""
 }
+
+type fallbackMockLLM struct {
+	calledModels []string
+}
+
+func (m *fallbackMockLLM) Stream(_ context.Context, _ domain.Provider, req llm.ChatRequest, onEvent func(llm.StreamEvent) error) (domain.TokenUsage, error) {
+	m.calledModels = append(m.calledModels, req.Model)
+	if req.Model == "primary-down" {
+		return domain.TokenUsage{}, errors.New("upstream 503")
+	}
+	payload := `{"causal_summary":"林渊收剑入鞘。","state_patches":[],"foreshadow_updates":[],"relation_updates":[]}`
+	if onEvent != nil {
+		_ = onEvent(llm.StreamEvent{Delta: payload})
+	}
+	return domain.TokenUsage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150}, nil
+}
+
+func TestExtractorFallbackToBackupModel(t *testing.T) {
+	st := newFakeMemoryStore(domain.Book{ID: 1, Title: "回退测试", Genre: domain.GenreXianxia})
+	fbProvID := int64(2)
+	st.providers[fbProvID] = domain.Provider{
+		ID:       fbProvID,
+		Name:     "BackupProvider",
+		Protocol: domain.ProtocolOpenAICompat,
+		BaseURL:  "https://backup.example.com/v1",
+		Enabled:  true,
+	}
+	r := st.routes[domain.StageExtract]
+	r.ModelName = "primary-down"
+	r.FallbackProviderID = &fbProvID
+	r.FallbackModelName = "backup-ok"
+	st.routes[domain.StageExtract] = r
+	st.chapters[100] = domain.Chapter{
+		ID: 100, BookID: 1, VolumeID: 1, GlobalSeq: 1, Title: "初章", Content: "林渊推开石门。",
+	}
+
+	mock := &fallbackMockLLM{}
+	ext := NewExtractor(st, mock)
+	delta, err := ext.ExtractChapterDelta(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("ExtractChapterDelta should succeed via fallback model: %v", err)
+	}
+	if delta.CausalSummary != "林渊收剑入鞘。" {
+		t.Fatalf("unexpected delta: %+v", delta)
+	}
+	if len(mock.calledModels) != 2 || mock.calledModels[0] != "primary-down" || mock.calledModels[1] != "backup-ok" {
+		t.Fatalf("expected primary then backup model call, got %+v", mock.calledModels)
+	}
+}

@@ -196,7 +196,7 @@ func (r *Runner) RunCriticAudit(ctx context.Context, chapterID int64) (domain.Ch
 		return domain.ChapterAudit{}, fmt.Errorf("load book %d: %w", chap.BookID, err)
 	}
 
-	route, provider, err := r.resolveStageRouteAndProvider(ctx, domain.StageCritic)
+	route, provider, err := r.resolveFirstAvailableStageRoute(ctx, domain.StageCritic, domain.StageOutline, domain.StageDraft)
 	if err != nil {
 		return domain.ChapterAudit{}, err
 	}
@@ -287,7 +287,7 @@ func (r *Runner) GenerateSurgicalDiffs(ctx context.Context, chapterID int64, tar
 		return domain.ChapterAudit{}, fmt.Errorf("load book %d: %w", chap.BookID, err)
 	}
 
-	route, provider, err := r.resolveStageRouteAndProvider(ctx, domain.StagePolish)
+	route, provider, err := r.resolveFirstAvailableStageRoute(ctx, domain.StagePolish, domain.StageDraft)
 	if err != nil {
 		return domain.ChapterAudit{}, err
 	}
