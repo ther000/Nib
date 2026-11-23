@@ -565,8 +565,10 @@ function AppProviderInner({ children }: { children: ReactNode }) {
   );
 
   const activeGenrePreset = useMemo(() => {
+    const fallback =
+      genrePresets.find((g) => g.id === "general") ?? genrePresets[0] ?? null;
     if (!activeBook) return genrePresets[0] ?? null;
-    return genrePresets.find((g) => g.id === activeBook.genre) ?? genrePresets[0] ?? null;
+    return genrePresets.find((g) => g.id === activeBook.genre) ?? fallback;
   }, [activeBook, genrePresets]);
 
   const setTheme = useCallback(

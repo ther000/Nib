@@ -651,8 +651,8 @@ func TestCompilePhase2SummaryPyramidTrimmingAndForeshadowBudget(t *testing.T) {
 	if !p5.Truncated {
 		t.Fatalf("expected P5 truncated under tight budget %d (est=%d)", tightBudget, p5.TokenEst)
 	}
-	if p5.TokenEst > 180 {
-		t.Fatalf("P5 TokenEst (%d) exceeded remaining cap (180)", p5.TokenEst)
+	if p5.TokenEst > p5.TokenBudget {
+		t.Fatalf("P5 TokenEst (%d) exceeded slot cap (%d)", p5.TokenEst, p5.TokenBudget)
 	}
 	if tight.TotalTokenEst > tightBudget {
 		t.Fatalf("TotalTokenEst (%d) exceeded tightBudget (%d)", tight.TotalTokenEst, tightBudget)

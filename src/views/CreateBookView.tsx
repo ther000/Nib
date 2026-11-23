@@ -27,10 +27,12 @@ import { useMygoChannel } from "../hooks/useMygoStream";
 import { hasAnyEnabledModel, hasReadyModelRoute } from "../lib/modelReady";
 import { formatErrorMessage, formatNumber } from "../lib/constants";
 import {
-  GenrePresetGrid,
+  formatStyleTags,
+  GenrePillPicker,
   IDEA_EXAMPLES,
   POV_OPTIONS,
   StepIndicator,
+  StyleTagPicker,
   type AIStep,
 } from "../components/genesis/GenesisShared";
 import { ConceptStep } from "../components/genesis/ConceptStep";
@@ -58,6 +60,7 @@ export function CreateBookView() {
 
   const [mode, setMode] = useState<CreateBookMode>(createBookInitialMode);
   const [genre, setGenre] = useState<string>(defaultGenre);
+  const [styleTags, setStyleTags] = useState<string[]>([]);
   const [povMode, setPovMode] = useState<string>("third_limited");
   const [targetWords, setTargetWords] = useState<string>("2500");
   const [exportDir, setExportDir] = useState<string>("");
@@ -174,6 +177,7 @@ export function CreateBookView() {
           idea: trimmedIdea,
           genre: genre as GenreID,
           povMode,
+          pacingStyle: formatStyleTags(styleTags),
           feedback: feedback.trim(),
           currentConcept: isRefine && concept ? concept : undefined,
         },
@@ -229,6 +233,7 @@ export function CreateBookView() {
           idea: trimmedIdea,
           genre: genre as GenreID,
           povMode,
+          pacingStyle: formatStyleTags(styleTags),
           chapterCount: chapterCount > 0 ? chapterCount : 3,
           targetChapterWords: words,
         },
@@ -240,6 +245,7 @@ export function CreateBookView() {
         titleCandidates: [plan.title],
         genre: plan.genre,
         povMode: plan.povMode || povMode,
+        pacingStyle: plan.pacingStyle || formatStyleTags(styleTags),
         premise: plan.premise,
         goldenFinger: plan.goldenFinger,
         coreConflict: "",
@@ -302,7 +308,12 @@ export function CreateBookView() {
 
       const generated = await LibraryService.generateBookBlueprint(
         {
-          concept: { ...concept, genre: genre as GenreID, povMode },
+          concept: {
+            ...concept,
+            genre: genre as GenreID,
+            povMode,
+            pacingStyle: concept.pacingStyle || formatStyleTags(styleTags),
+          },
           chapterCount: section === "outlines" && chapterCount === 0 ? 3 : chapterCount,
           targetChapterWords: words,
           section,
@@ -363,6 +374,7 @@ export function CreateBookView() {
         title: concept.title.trim(),
         genre: (concept.genre || genre) as GenreID,
         povMode: concept.povMode || povMode,
+        pacingStyle: concept.pacingStyle || formatStyleTags(styleTags),
         premise: concept.premise.trim(),
         goldenFinger: concept.goldenFinger.trim(),
         targetChapterWords: words,
@@ -412,6 +424,7 @@ export function CreateBookView() {
         title: trimmedTitle,
         genre: genre as GenreID,
         povMode,
+        pacingStyle: formatStyleTags(styleTags),
         premise: manualPremise.trim(),
         goldenFinger: manualGoldenFinger.trim(),
         targetChapterWords: words,
@@ -632,6 +645,7 @@ export function CreateBookView() {
                           onClick={() => {
                             setIdea(ex.text);
                             setGenre(ex.genre);
+                            setStyleTags(ex.tags);
                           }}
                           className="rounded-md border border-border-subtle bg-surface px-2.5 py-1 text-xs text-ink-secondary transition-colors hover:border-border-strong hover:text-ink-primary disabled:opacity-50"
                         >
@@ -641,17 +655,40 @@ export function CreateBookView() {
                     </div>
                   </section>
 
-                  {/* Genre */}
-                  <section className="flex flex-col gap-2.5">
+                  {/* Genre Base */}
+                  <section className="flex flex-col gap-2">
                     <label className="text-xs font-medium text-ink-secondary">
-                      题材风格
+                      题材基底
                     </label>
-                    <GenrePresetGrid
+                    <GenrePillPicker
                       presets={genrePresets}
                       selectedId={genre}
                       disabled={anyBusy}
-                      columns={4}
                       onSelect={setGenre}
+                    />
+                  </section>
+
+                  {/* Style Tags */}
+                  <section className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-medium text-ink-secondary">
+                        风格标签（选填）
+                      </label>
+                      {styleTags.length > 0 && (
+                        <button
+                          type="button"
+                          disabled={anyBusy}
+                          onClick={() => setStyleTags([])}
+                          className="text-xs text-ink-muted transition-colors hover:text-ink-primary"
+                        >
+                          清空
+                        </button>
+                      )}
+                    </div>
+                    <StyleTagPicker
+                      tags={styleTags}
+                      disabled={anyBusy}
+                      onChange={setStyleTags}
                     />
                   </section>
 
@@ -854,16 +891,26 @@ export function CreateBookView() {
                 />
               </section>
 
-              <section className="flex flex-col gap-2.5">
+              <section className="flex flex-col gap-2">
                 <label className="text-xs font-medium text-ink-secondary">
-                  题材风格
+                  题材基底
                 </label>
-                <GenrePresetGrid
+                <GenrePillPicker
                   presets={genrePresets}
                   selectedId={genre}
                   disabled={submitting}
-                  columns={4}
                   onSelect={setGenre}
+                />
+              </section>
+
+              <section className="flex flex-col gap-2">
+                <label className="text-xs font-medium text-ink-secondary">
+                  风格标签（选填）
+                </label>
+                <StyleTagPicker
+                  tags={styleTags}
+                  disabled={submitting}
+                  onChange={setStyleTags}
                 />
               </section>
 
@@ -996,15 +1043,14 @@ export function CreateBookView() {
 
           {mode === "import" && (
             <div className="flex flex-col gap-6">
-              <section className="flex flex-col gap-2.5">
+              <section className="flex flex-col gap-2">
                 <label className="text-xs font-medium text-ink-secondary">
-                  为旧稿选择对应题材风格
+                  为旧稿选择题材基底
                 </label>
-                <GenrePresetGrid
+                <GenrePillPicker
                   presets={genrePresets}
                   selectedId={genre}
                   disabled={importingBook}
-                  columns={4}
                   onSelect={setGenre}
                 />
               </section>

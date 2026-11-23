@@ -7,12 +7,16 @@ import (
 	"nib/internal/domain"
 )
 
-func TestListContainsAllFourMaleLeadGenres(t *testing.T) {
+func TestListContainsAllEightGenres(t *testing.T) {
 	presets := List()
 	wantOrder := []domain.GenreID{
 		domain.GenreXuanhuan,
 		domain.GenreXianxia,
 		domain.GenreUrban,
+		domain.GenreHistory,
+		domain.GenreSciFi,
+		domain.GenreMystery,
+		domain.GenreGame,
 		domain.GenreGeneral,
 	}
 	if len(presets) != len(wantOrder) {
@@ -70,6 +74,10 @@ func TestGenreFieldSpecsMatchProductSpec(t *testing.T) {
 		domain.GenreXuanhuan: {"realm", "physique", "martial_arts", "treasure", "affiliation", "injury"},
 		domain.GenreXianxia:  {"cultivation", "spirit_root", "magic_method", "natal_treasure", "lifespan", "status"},
 		domain.GenreUrban:    {"cash_flow", "public_identity", "hidden_card", "network", "cooldown"},
+		domain.GenreHistory:  {"official_rank", "faction_camp", "military_finance", "origin", "leverage"},
+		domain.GenreSciFi:    {"tier", "equipment", "faction", "resources", "condition"},
+		domain.GenreMystery:  {"identity", "motive", "clues", "anomaly", "status"},
+		domain.GenreGame:     {"class_seq", "points", "skills", "gear", "guild"},
 		domain.GenreGeneral:  {"power_tier", "core_ability", "assets", "relation", "status_flag"},
 	}
 
@@ -120,5 +128,13 @@ func TestPromptBlockIncludesCoreDirectives(t *testing.T) {
 		if !strings.Contains(block, "嘴角勾起") {
 			t.Fatalf("PromptBlock(%q) missing common anti-AI directive", id)
 		}
+	}
+
+	customBlock := PromptBlock("赛博修仙")
+	if !strings.Contains(customBlock, "【题材基底：赛博修仙】") {
+		t.Fatalf("custom PromptBlock missing custom name:\n%s", customBlock)
+	}
+	if DisplayName("赛博修仙") != "赛博修仙" || DisplayName(domain.GenreHistory) != "历史架空" {
+		t.Fatalf("unexpected DisplayName results")
 	}
 }

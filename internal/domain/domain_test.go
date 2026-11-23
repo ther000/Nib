@@ -175,8 +175,11 @@ func TestBookVolumeChapterBeatEntityValidation(t *testing.T) {
 	if !errors.Is((CreateBookInput{Title: "", Genre: GenreXianxia}).Validate(), ErrValidation) {
 		t.Fatalf("empty title should fail validation")
 	}
-	if !errors.Is((CreateBookInput{Title: "太初剑渊", Genre: "scifi"}).Validate(), ErrValidation) {
-		t.Fatalf("invalid genre should fail validation")
+	if !errors.Is((CreateBookInput{Title: "太初剑渊", Genre: ""}).Validate(), ErrValidation) {
+		t.Fatalf("empty genre should fail validation")
+	}
+	if err := (CreateBookInput{Title: "赛博修仙录", Genre: "赛博修仙"}).Validate(); err != nil {
+		t.Fatalf("custom genre should pass validation: %v", err)
 	}
 	if !errors.Is((CreateBookInput{Title: "太初剑渊", Genre: GenreUrban, TargetChapterWords: 100}).Validate(), ErrValidation) {
 		t.Fatalf("too small targetChapterWords should fail validation")

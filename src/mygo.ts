@@ -279,6 +279,7 @@ export interface BookConcept {
   titleCandidates: string[];
   genre: GenreID;
   povMode?: string;
+  pacingStyle?: string;
   premise: string;
   goldenFinger: string;
   coreConflict: string;
@@ -288,6 +289,7 @@ export interface BookConceptRequest {
   idea: string;
   genre: GenreID;
   povMode?: string;
+  pacingStyle?: string;
   feedback?: string;
   currentConcept?: BookConcept;
 }
@@ -309,6 +311,7 @@ export interface BookGenesisPlan {
   title: string;
   genre: GenreID;
   povMode?: string;
+  pacingStyle?: string;
   premise: string;
   goldenFinger: string;
   targetChapterWords: number;
@@ -321,6 +324,7 @@ export interface BookGenesisRequest {
   idea: string;
   genre: GenreID;
   povMode?: string;
+  pacingStyle?: string;
   chapterCount: number;
   targetChapterWords: number;
 }

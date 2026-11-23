@@ -54,6 +54,12 @@ export function ConceptStep({
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border-subtle bg-surface px-4 py-2.5 text-xs text-ink-secondary">
         <div className="flex flex-wrap items-center gap-3">
           <span>题材：{genreName}</span>
+          {concept.pacingStyle && (
+            <>
+              <span className="text-border-strong">·</span>
+              <span>风格：{concept.pacingStyle}</span>
+            </>
+          )}
           <span className="text-border-strong">·</span>
           <span>视角：{getPovLabel(concept.povMode ?? "")}</span>
           <span className="text-border-strong">·</span>

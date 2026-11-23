@@ -662,8 +662,8 @@ func TestNilRuntimeGuard(t *testing.T) {
 	studio := NewStudioService(emptyRT)
 
 	// 静态题材包列表无需数据库也应可用
-	if presets := lib.ListGenrePresets(); len(presets) != 4 {
-		t.Fatalf("ListGenrePresets len = %d, want 4", len(presets))
+	if presets := lib.ListGenrePresets(); len(presets) != len(domain.AllGenreIDs()) {
+		t.Fatalf("ListGenrePresets len = %d, want %d", len(presets), len(domain.AllGenreIDs()))
 	}
 
 	if _, err := lib.ListBooks(ctx); !errors.Is(err, ErrRuntimeNotReady) {

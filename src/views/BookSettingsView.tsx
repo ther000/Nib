@@ -12,6 +12,12 @@ import { useApp } from "../stores/AppContext";
 import { formatErrorMessage, formatNumber } from "../lib/constants";
 import { exportBookWithNotify } from "../lib/bookExport";
 import { ConfirmDialog, type ConfirmDialogState } from "../components/ui/ConfirmDialog";
+import {
+  formatStyleTags,
+  GenrePillPicker,
+  parseStyleTags,
+  StyleTagPicker,
+} from "../components/genesis/GenesisShared";
 
 const POV_OPTIONS = [
   { value: "third_limited", label: "第三人称限知" },
@@ -248,38 +254,30 @@ export function BookSettingsView() {
         <section className="flex flex-col gap-3.5 rounded-xl border border-border-subtle bg-surface p-5">
           <h2 className="text-sm font-medium text-ink-primary">作品信息</h2>
 
-          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-[1fr_200px]">
-            <div>
-              <label className="mb-1 block text-xs text-ink-secondary">书名</label>
-              <input
-                type="text"
-                value={title}
-                onChange={(e) => {
-                  setTitle(e.target.value);
-                  setDirty(true);
-                }}
-                placeholder="输入作品书名"
-                className="w-full rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
-              />
-            </div>
+          <div>
+            <label className="mb-1 block text-xs text-ink-secondary">书名</label>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                setDirty(true);
+              }}
+              placeholder="输入作品书名"
+              className="w-full rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
+            />
+          </div>
 
-            <div>
-              <label className="mb-1 block text-xs text-ink-secondary">题材预设</label>
-              <select
-                value={genre}
-                onChange={(e) => {
-                  setGenre(e.target.value);
-                  setDirty(true);
-                }}
-                className="w-full rounded-md border border-border-subtle bg-canvas px-2.5 py-2 text-xs text-ink-primary focus:border-accent focus:outline-none"
-              >
-                {genrePresets.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+          <div>
+            <label className="mb-1.5 block text-xs text-ink-secondary">题材基底</label>
+            <GenrePillPicker
+              presets={genrePresets}
+              selectedId={genre}
+              onSelect={(next) => {
+                setGenre(next);
+                setDirty(true);
+              }}
+            />
           </div>
 
           <div>
@@ -328,7 +326,20 @@ export function BookSettingsView() {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <label className="mb-1.5 block text-xs text-ink-secondary">
+              风格标签（选填）
+            </label>
+            <StyleTagPicker
+              tags={parseStyleTags(pacingStyle)}
+              onChange={(next) => {
+                setPacingStyle(formatStyleTags(next));
+                setDirty(true);
+              }}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
             <div>
               <label className="mb-1 block text-xs text-ink-secondary">叙事视角</label>
               <select
@@ -345,20 +356,6 @@ export function BookSettingsView() {
                   </option>
                 ))}
               </select>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-xs text-ink-secondary">节奏风格</label>
-              <input
-                type="text"
-                value={pacingStyle}
-                onChange={(e) => {
-                  setPacingStyle(e.target.value);
-                  setDirty(true);
-                }}
-                placeholder="如：番茄快节奏"
-                className="w-full rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs text-ink-primary placeholder:text-ink-muted focus:border-accent focus:outline-none"
-              />
             </div>
 
             <div>

@@ -71,7 +71,7 @@ func (r *Runner) GenerateBookGenesis(
 		return domain.BookGenesisPlan{}, domain.ErrGenerationCanceled
 	}
 
-	sysPrompt, userPrompt := buildBookGenesisPrompts(req.Idea, genreID, chapterCount, targetWords)
+	sysPrompt, userPrompt := buildBookGenesisPrompts(req.Idea, genreID, strings.TrimSpace(req.PacingStyle), chapterCount, targetWords)
 	maxTokens := route.MaxTokens
 	if maxTokens < defaultGenesisMaxTokens {
 		maxTokens = defaultGenesisMaxTokens
@@ -129,6 +129,7 @@ func (r *Runner) GenerateBookGenesis(
 		return domain.BookGenesisPlan{}, parseErr
 	}
 	plan.POVMode = strings.TrimSpace(req.POVMode)
+	plan.PacingStyle = strings.TrimSpace(req.PacingStyle)
 
 	planCopy := plan
 	_ = send(domain.GenesisChunk{
@@ -166,6 +167,7 @@ func (r *Runner) ApplyBookGenesis(ctx context.Context, in domain.ApplyGenesisInp
 		TargetChapterWords: targetWords,
 		ExportDir:          strings.TrimSpace(in.ExportDir),
 		POVMode:            strings.TrimSpace(plan.POVMode),
+		PacingStyle:        strings.TrimSpace(plan.PacingStyle),
 	})
 	if err != nil {
 		return domain.ApplyGenesisResult{}, fmt.Errorf("create book: %w", err)
@@ -347,13 +349,14 @@ func matchMentionedEntityIDs(text string, entities []domain.Entity) []int64 {
 	return ids
 }
 
-func buildBookGenesisPrompts(idea string, genreID domain.GenreID, chapterCount int, targetWords int) (string, string) {
+func buildBookGenesisPrompts(idea string, genreID domain.GenreID, pacingStyle string, chapterCount int, targetWords int) (string, string) {
 	preset := genres.GetOrDefault(genreID)
-	sys := `你是顶级中文网文策划总监，擅长根据作者的一句话灵感快速产出可直接开写的完整开书企划。
+	genreName := genres.DisplayName(genreID)
+	sys := `你是顶级中文长篇网文策划总监，擅长根据作者的一句话灵感快速产出可直接开写的完整开书企划。
 要求：
-1. 书名简短有记忆点，简介直击核心卖点与开局钩子，金手指规则明确（包含能力、触发条件与代价/限制）。
-2. 初始设定包含 4~6 个核心档案：至少包含主角、核心反派/压迫源、关键配角或势力、以及 1~2 条世界铁律（kind="rule", is_invariant=true）。
-3. 第一卷规划明确卷目标与卷末大高潮；初始章纲严格落实“开篇立人设与危机 -> 金手指初显 -> 首次小高潮反击”的黄金三章节奏。
+1. 书名简短有记忆点，简介直击核心卖点与开局钩子，金手指或核心依仗规则明确（包含能力、触发条件与代价/限制）。
+2. 初始设定包含 4~6 个核心档案：至少包含主角、核心对手/压迫源、关键配角或势力、以及 1~2 条世界铁律（kind="rule", is_invariant=true）。
+3. 第一卷规划明确卷目标与卷末大高潮；初始章纲严格落实开篇立人设与悬念节奏。
 4. 仅输出合法 JSON 对象，禁止输出任何 Markdown 解释文字。
 JSON 结构：
 {
@@ -367,7 +370,7 @@ JSON 结构：
       "aliases": ["别称"],
       "is_invariant": false,
       "summary": "40~100字核心设定",
-      "attributes": {"境界": "...", "性格": "..."}
+      "attributes": {"字段名": "..."}
     }
   ],
   "first_volume": {
@@ -396,7 +399,10 @@ JSON 结构：
 
 	var user strings.Builder
 	fmt.Fprintf(&user, "【作者灵感】%s\n", strings.TrimSpace(idea))
-	fmt.Fprintf(&user, "【题材方向】%s（节奏周期：%s｜爽点侧重：%s）\n", preset.Name, preset.LoopCycleChapters, preset.PacingFocus)
+	fmt.Fprintf(&user, "【题材基底】%s（叙事参考：%s）\n", genreName, preset.PacingFocus)
+	if pacingStyle != "" {
+		fmt.Fprintf(&user, "【风格标签】%s（请严格按以上风格调性与节奏构思）\n", pacingStyle)
+	}
 	fmt.Fprintf(&user, "【开书规格】每章目标约 %d 字，请一并规划前 %d 章的章纲与每章 3~5 张节拍卡。\n", targetWords, chapterCount)
 	return sys, user.String()
 }
@@ -555,6 +561,10 @@ func (r *Runner) GenerateBookConcept(
 	if povMode == "" && req.CurrentConcept != nil {
 		povMode = strings.TrimSpace(req.CurrentConcept.POVMode)
 	}
+	pacingStyle := strings.TrimSpace(req.PacingStyle)
+	if pacingStyle == "" && req.CurrentConcept != nil {
+		pacingStyle = strings.TrimSpace(req.CurrentConcept.PacingStyle)
+	}
 
 	send := func(chunk domain.ConceptChunk) error {
 		if emit == nil {
@@ -572,7 +582,7 @@ func (r *Runner) GenerateBookConcept(
 		return domain.BookConcept{}, domain.ErrGenerationCanceled
 	}
 
-	sysPrompt, userPrompt := buildBookConceptPrompts(req, genreID, povMode)
+	sysPrompt, userPrompt := buildBookConceptPrompts(req, genreID, povMode, pacingStyle)
 	maxTokens := route.MaxTokens
 	if maxTokens < defaultConceptMaxTokens {
 		maxTokens = defaultConceptMaxTokens
@@ -620,7 +630,7 @@ func (r *Runner) GenerateBookConcept(
 		`开书立意 JSON（需包含 title, title_candidates, premise, golden_finger, core_conflict）`,
 		buf.String(),
 		func(raw string) (domain.BookConcept, error) {
-			return parseBookConceptPayload(raw, genreID, povMode)
+			return parseBookConceptPayload(raw, genreID, povMode, pacingStyle)
 		},
 	)
 	if parseErr != nil {
@@ -773,21 +783,22 @@ func povLabel(povMode string) string {
 	}
 }
 
-func buildBookConceptPrompts(req domain.BookConceptRequest, genreID domain.GenreID, povMode string) (string, string) {
+func buildBookConceptPrompts(req domain.BookConceptRequest, genreID domain.GenreID, povMode string, pacingStyle string) (string, string) {
 	preset := genres.GetOrDefault(genreID)
-	sys := `你是顶级中文网文策划总监，负责在开书第一阶段帮助作者快速定准「书名、核心立意、金手指与主线冲突」。
+	genreName := genres.DisplayName(genreID)
+	sys := `你是顶级中文长篇网文策划总监，负责在开书第一阶段帮助作者快速定准「书名、核心立意、金手指/核心依仗与主线冲突」。
 要求：
 1. 提供 3 个不同侧重、简短有记忆点的候选书名（不含书名号），并把最推荐的放在 title 中。
-2. premise（100~180字）直击主角开局处境、核心卖点与爽点钩子，拒绝套话空泛。
-3. golden_finger 必须写清三要素：具体能力、触发条件、代价或限制。
-4. core_conflict 用 1~2 句话点明主角初期要面对的生死/利益困局与破局方向。
+2. premise（100~180字）直击主角开局处境、核心卖点与开篇钩子，拒绝套话空泛。
+3. golden_finger 必须写清三要素：具体能力或依仗、触发条件、代价或限制。
+4. core_conflict 用 1~2 句话点明主角初期要面对的困局与破局方向。
 5. 仅输出合法 JSON 对象，禁止输出任何 Markdown 解释文字。
 JSON 结构：
 {
   "title": "主推荐书名",
   "title_candidates": ["主推荐书名", "备选书名二", "备选书名三"],
   "premise": "100~180字核心卖点与开局处境简介",
-  "golden_finger": "金手指能力、触发条件与核心限制",
+  "golden_finger": "核心设定/金手指能力、触发条件与限制",
   "core_conflict": "1~2句初期核心冲突与反转钩子"
 }`
 
@@ -795,7 +806,10 @@ JSON 结构：
 	if strings.TrimSpace(req.Idea) != "" {
 		fmt.Fprintf(&user, "【作者灵感】%s\n", strings.TrimSpace(req.Idea))
 	}
-	fmt.Fprintf(&user, "【题材方向】%s（节奏周期：%s｜爽点侧重：%s）\n", preset.Name, preset.LoopCycleChapters, preset.PacingFocus)
+	fmt.Fprintf(&user, "【题材基底】%s（叙事参考：%s）\n", genreName, preset.PacingFocus)
+	if pacingStyle != "" {
+		fmt.Fprintf(&user, "【风格标签】%s（请严格按以上风格调性与节奏定调）\n", pacingStyle)
+	}
 	fmt.Fprintf(&user, "【叙事视角】%s\n", povLabel(povMode))
 	if req.CurrentConcept != nil {
 		fmt.Fprintf(&user, "\n【当前已有立意草案】\n书名：%s\n简介：%s\n金手指：%s\n核心冲突：%s\n",
@@ -811,7 +825,7 @@ JSON 结构：
 	return sys, user.String()
 }
 
-func parseBookConceptPayload(raw string, genreID domain.GenreID, povMode string) (domain.BookConcept, error) {
+func parseBookConceptPayload(raw string, genreID domain.GenreID, povMode string, pacingStyle string) (domain.BookConcept, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return domain.BookConcept{}, errors.New("empty book concept response")
@@ -884,6 +898,7 @@ func parseBookConceptPayload(raw string, genreID domain.GenreID, povMode string)
 		TitleCandidates: candidates,
 		Genre:           genreID,
 		POVMode:         povMode,
+		PacingStyle:     pacingStyle,
 		Premise:         strings.TrimSpace(dto.Premise),
 		GoldenFinger:    goldenFinger,
 		CoreConflict:    coreConflict,
@@ -1010,8 +1025,11 @@ JSON 结构：
 	}
 
 	var user strings.Builder
-	fmt.Fprintf(&user, "【已拍板立意】\n书名：%s\n题材：%s（%s｜%s）\n视角：%s\n",
-		strings.TrimSpace(concept.Title), preset.Name, preset.LoopCycleChapters, preset.PacingFocus, povLabel(concept.POVMode))
+	fmt.Fprintf(&user, "【已拍板立意】\n书名：%s\n题材基底：%s（%s）\n视角：%s\n",
+		strings.TrimSpace(concept.Title), genres.DisplayName(genreID), preset.PacingFocus, povLabel(concept.POVMode))
+	if strings.TrimSpace(concept.PacingStyle) != "" {
+		fmt.Fprintf(&user, "风格标签：%s\n", strings.TrimSpace(concept.PacingStyle))
+	}
 	if strings.TrimSpace(concept.Premise) != "" {
 		fmt.Fprintf(&user, "简介：%s\n", strings.TrimSpace(concept.Premise))
 	}

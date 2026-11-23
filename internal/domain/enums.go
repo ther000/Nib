@@ -1,5 +1,10 @@
 package domain
 
+import (
+	"strings"
+	"unicode/utf8"
+)
+
 // ProviderProtocol 定义支持的 LLM API 协议类型（对应 providers.protocol）。
 type ProviderProtocol string
 
@@ -46,27 +51,39 @@ func AllPipelineStages() []PipelineStage {
 	return []PipelineStage{StageOutline, StageDraft, StageCritic, StagePolish, StageExtract}
 }
 
-// GenreID 定义内置男频题材包标识（对应 books.genre）。
+// GenreID 定义题材基底标识（对应 books.genre），内置 8 大题材基底并兼容作者自定义题材名。
 type GenreID string
 
 const (
 	GenreXuanhuan GenreID = "xuanhuan"
 	GenreXianxia  GenreID = "xianxia"
 	GenreUrban    GenreID = "urban"
+	GenreHistory  GenreID = "history"
+	GenreSciFi    GenreID = "scifi"
+	GenreMystery  GenreID = "mystery"
+	GenreGame     GenreID = "game"
 	GenreGeneral  GenreID = "general"
 )
 
 func (g GenreID) Valid() bool {
-	switch g {
-	case GenreXuanhuan, GenreXianxia, GenreUrban, GenreGeneral:
-		return true
-	default:
+	trimmed := strings.TrimSpace(string(g))
+	if trimmed == "" {
 		return false
 	}
+	return utf8.RuneCountInString(trimmed) <= 32
 }
 
 func AllGenreIDs() []GenreID {
-	return []GenreID{GenreXuanhuan, GenreXianxia, GenreUrban, GenreGeneral}
+	return []GenreID{
+		GenreXuanhuan,
+		GenreXianxia,
+		GenreUrban,
+		GenreHistory,
+		GenreSciFi,
+		GenreMystery,
+		GenreGame,
+		GenreGeneral,
+	}
 }
 
 // ChapterStatus 定义章节状态机（对应 chapters.status）。

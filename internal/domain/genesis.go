@@ -13,6 +13,7 @@ type BookGenesisRequest struct {
 	Idea               string  `json:"idea"`
 	Genre              GenreID `json:"genre"`
 	POVMode            string  `json:"povMode,omitempty"`
+	PacingStyle        string  `json:"pacingStyle,omitempty"`
 	ChapterCount       int     `json:"chapterCount"`
 	TargetChapterWords int     `json:"targetChapterWords"`
 }
@@ -39,6 +40,7 @@ type BookConcept struct {
 	TitleCandidates []string `json:"titleCandidates"`
 	Genre           GenreID  `json:"genre"`
 	POVMode         string   `json:"povMode,omitempty"`
+	PacingStyle     string   `json:"pacingStyle,omitempty"`
 	Premise         string   `json:"premise"`
 	GoldenFinger    string   `json:"goldenFinger"`
 	CoreConflict    string   `json:"coreConflict"`
@@ -59,6 +61,7 @@ type BookConceptRequest struct {
 	Idea           string       `json:"idea"`
 	Genre          GenreID      `json:"genre"`
 	POVMode        string       `json:"povMode,omitempty"`
+	PacingStyle    string       `json:"pacingStyle,omitempty"`
 	Feedback       string       `json:"feedback,omitempty"`
 	CurrentConcept *BookConcept `json:"currentConcept,omitempty"`
 }
@@ -147,6 +150,7 @@ type BookGenesisPlan struct {
 	Title              string                    `json:"title"`
 	Genre              GenreID                   `json:"genre"`
 	POVMode            string                    `json:"povMode,omitempty"`
+	PacingStyle        string                    `json:"pacingStyle,omitempty"`
 	Premise            string                    `json:"premise"`
 	GoldenFinger       string                    `json:"goldenFinger"`
 	TargetChapterWords int                       `json:"targetChapterWords"`

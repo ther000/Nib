@@ -591,6 +591,13 @@ func (s *Store) runMigrations(ctx context.Context, migs []migration, isMemory bo
 	}
 
 	for _, m := range pending {
+		disableFK := strings.Contains(m.SQL, "-- pragma:disable_foreign_keys")
+		if disableFK {
+			if err := s.runMigrationWithoutForeignKeys(ctx, m); err != nil {
+				return err
+			}
+			continue
+		}
 		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("begin migration %s: %w", m.Name, err)
@@ -612,6 +619,64 @@ func (s *Store) runMigrations(ctx context.Context, migs []migration, isMemory bo
 	}
 
 	return nil
+}
+
+// runMigrationWithoutForeignKeys 在独占连接上安全关闭外键检查（事务外）执行重建表迁移，完成后恢复外键并校验完整性。
+func (s *Store) runMigrationWithoutForeignKeys(ctx context.Context, m migration) error {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration conn for %s: %w", m.Name, err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	cleanCtx := context.WithoutCancel(ctx)
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return fmt.Errorf("disable foreign_keys for %s: %w", m.Name, err)
+	}
+	if _, err := conn.ExecContext(ctx, `PRAGMA legacy_alter_table = ON`); err != nil {
+		_, _ = conn.ExecContext(cleanCtx, `PRAGMA foreign_keys = ON`)
+		return fmt.Errorf("enable legacy_alter_table for %s: %w", m.Name, err)
+	}
+	defer func() {
+		_, _ = conn.ExecContext(cleanCtx, `PRAGMA legacy_alter_table = OFF`)
+		_, _ = conn.ExecContext(cleanCtx, `PRAGMA foreign_keys = ON`)
+	}()
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin migration %s: %w", m.Name, err)
+	}
+	if _, err := tx.ExecContext(ctx, m.SQL); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("execute migration %s: %w", m.Name, err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`,
+		m.Version, m.Name,
+	); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("record migration %s: %w", m.Name, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration %s: %w", m.Name, err)
+	}
+
+	if _, err := conn.ExecContext(ctx, `PRAGMA legacy_alter_table = OFF`); err != nil {
+		return fmt.Errorf("restore legacy_alter_table after %s: %w", m.Name, err)
+	}
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
+		return fmt.Errorf("restore foreign_keys after %s: %w", m.Name, err)
+	}
+
+	rows, err := conn.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return fmt.Errorf("foreign_key_check after %s: %w", m.Name, err)
+	}
+	defer func() { _ = rows.Close() }()
+	if rows.Next() {
+		return fmt.Errorf("foreign_key_check failed after migration %s", m.Name)
+	}
+	return rows.Err()
 }
 
 func (s *Store) seedDefaultModelRoutes(ctx context.Context) error {

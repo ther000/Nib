@@ -11,7 +11,7 @@ import (
 func buildP0Content(book domain.Book, vol domain.Volume, invariants []domain.Entity) string {
 	var b strings.Builder
 	b.WriteString("【写作引擎系统指令】\n")
-	b.WriteString("你是专业中文男频长篇网文写作引擎。请严格遵循题材规则、世界铁律与本章节拍卡直接输出章节正文。\n")
+	b.WriteString("你是专业中文长篇网文写作引擎。请严格遵循题材基底、风格标签、世界铁律与本章节拍卡直接输出章节正文。\n")
 	b.WriteString("输出约束：\n")
 	b.WriteString("- 只输出纯净小说正文，不要输出“好的”“以下是正文”等客套话、不要输出 Markdown 标题或节拍复述。\n")
 	b.WriteString("- 严禁违背世界铁律与已出场实体设定，人物对话、资源消耗与招式结果保持强因果自洽。\n")

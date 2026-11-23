@@ -186,6 +186,11 @@ export function BlueprintStep({
             <span className="rounded-md bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent">
               {genreName}
             </span>
+            {concept.pacingStyle && (
+              <span className="rounded-md border border-border-subtle bg-canvas px-2 py-0.5 text-xs text-ink-secondary">
+                {concept.pacingStyle}
+              </span>
+            )}
             <span className="text-xs text-ink-secondary">
               {getPovLabel(concept.povMode ?? "")}
             </span>

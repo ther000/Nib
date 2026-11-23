@@ -924,3 +924,92 @@ func TestDeleteBookCleansBookDeaiRules(t *testing.T) {
 		t.Fatalf("expected 0 orphan deai_rules after DeleteBook, got %d", cnt)
 	}
 }
+
+func TestFlexibleGenreMigrationPreservesDataAndAllowsCustomGenre(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "upgrade_v15.db")
+
+	// 1. 先停在 v14 模拟已有书库的真实用户，写入书/卷/章/实体
+	allMigs, err := loadEmbeddedMigrations()
+	if err != nil {
+		t.Fatalf("loadEmbeddedMigrations: %v", err)
+	}
+	if len(allMigs) < 15 {
+		t.Fatalf("expected at least 15 migrations, got %d", len(allMigs))
+	}
+	old, err := openWithMigrations(dbPath, allMigs[:14])
+	if err != nil {
+		t.Fatalf("open v14: %v", err)
+	}
+	legacyBook, err := old.CreateBook(ctx, domain.CreateBookInput{
+		Title:       "旧库玄幻",
+		Genre:       domain.GenreXuanhuan,
+		PacingStyle: "快节奏、热血",
+	})
+	if err != nil {
+		t.Fatalf("create legacy book: %v", err)
+	}
+	vol, err := old.UpsertVolume(ctx, domain.UpsertVolumeInput{BookID: legacyBook.ID, Seq: 1, Title: "第一卷"})
+	if err != nil {
+		t.Fatalf("create legacy volume: %v", err)
+	}
+	if _, err := old.CreateChapter(ctx, domain.CreateChapterInput{
+		BookID:   legacyBook.ID,
+		VolumeID: vol.ID,
+		Title:    "初章",
+	}); err != nil {
+		t.Fatalf("create legacy chapter: %v", err)
+	}
+	if _, err := old.UpsertEntity(ctx, domain.UpsertEntityInput{
+		BookID:  legacyBook.ID,
+		Kind:    domain.EntityKindCharacter,
+		Name:    "林渊",
+		Summary: "主角",
+	}); err != nil {
+		t.Fatalf("create legacy entity: %v", err)
+	}
+	_ = old.Close()
+
+	// 2. 升级到最新版（含 v15 重建 books 表），校验所有子表数据完整且外键已恢复开启
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open upgraded db: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	var fk int
+	if err := st.db.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&fk); err != nil || fk != 1 {
+		t.Fatalf("expected foreign_keys=1 after upgrade, got %d (err=%v)", fk, err)
+	}
+
+	gotBook, err := st.GetBook(ctx, legacyBook.ID)
+	if err != nil || gotBook.Title != "旧库玄幻" || gotBook.PacingStyle != "快节奏、热血" {
+		t.Fatalf("legacy book damaged after v15: %+v, err=%v", gotBook, err)
+	}
+	chaps, err := st.ListBookChapters(ctx, legacyBook.ID)
+	if err != nil || len(chaps) != 1 {
+		t.Fatalf("expected 1 legacy chapter preserved, got %d (err=%v)", len(chaps), err)
+	}
+	ents, err := st.ListEntities(ctx, legacyBook.ID, domain.EntityFilter{})
+	if err != nil || len(ents) != 1 {
+		t.Fatalf("expected 1 legacy entity preserved, got %d (err=%v)", len(ents), err)
+	}
+
+	// 3. 验证新内置题材与自定义题材名均可落库
+	histBook, err := st.CreateBook(ctx, domain.CreateBookInput{
+		Title:       "大明新政",
+		Genre:       domain.GenreHistory,
+		PacingStyle: "权谋智斗、慢热布局",
+	})
+	if err != nil || histBook.Genre != domain.GenreHistory {
+		t.Fatalf("create history book failed: %+v, err=%v", histBook, err)
+	}
+	customBook, err := st.CreateBook(ctx, domain.CreateBookInput{
+		Title:       "赛博修仙指南",
+		Genre:       domain.GenreID("赛博修仙"),
+		PacingStyle: "轻松日常、种田基建",
+	})
+	if err != nil || customBook.Genre != domain.GenreID("赛博修仙") {
+		t.Fatalf("create custom genre book failed: %+v, err=%v", customBook, err)
+	}
+}
